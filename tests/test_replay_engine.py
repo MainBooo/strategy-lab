@@ -242,3 +242,115 @@ def test_insufficient_funds_rejected():
     engine.step(sid)
     with pytest.raises(engine.ReplayError):
         engine.place_order(sid, "buy", 100)  # 100 shares * 100 = 10000 > 500 balance
+
+
+def test_partial_sell_leaves_remainder_open_with_prorated_entry_commission():
+    _seed([
+        {"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10},  # buy 10 here
+        {"open": 100, "high": 100, "low": 100, "close": 110, "volume": 10},  # sell 4 here
+    ])
+    state = _new_session(commission_rate=0.001, lot_size=1)
+    sid = state["session"]["id"]
+    engine.step(sid)
+    after_buy = engine.place_order(sid, "buy", 10)
+    entry_commission = after_buy["session"]["position_entry_commission"]
+    assert entry_commission == pytest.approx(100 * 10 * 0.001)
+
+    engine.step(sid)
+    after_sell = engine.place_order(sid, "sell", 4)  # partial: close 4 of 10 shares
+    session = after_sell["session"]
+    assert session["position_side"] == "long"  # position stays open
+    assert session["position_qty_shares"] == 6
+    assert session["position_avg_price"] == pytest.approx(100)  # avg entry price unchanged on a reduce
+
+    commission_exit = 110 * 4 * 0.001
+    entry_commission_allocated = entry_commission * (4 / 10)
+    expected_realized = (110 - 100) * 4 - commission_exit - entry_commission_allocated
+    assert session["realized_pnl"] == pytest.approx(expected_realized)
+    assert session["position_entry_commission"] == pytest.approx(entry_commission - entry_commission_allocated)
+
+    trades = db.list_trades(sid)
+    assert trades[-1]["action"] == "reduce"
+    assert trades[-1]["qty_shares"] == 4
+
+    # Closing the remainder must not raise and must fully flatten the position.
+    engine.step(sid)
+    final = engine.place_order(sid, "close", 6)
+    assert final["session"]["position_side"] is None
+    assert final["session"]["position_qty_shares"] == 0
+
+
+def test_add_to_existing_long_position_computes_weighted_average_price():
+    _seed([
+        {"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10},  # buy 10 @ 100
+        {"open": 100, "high": 100, "low": 100, "close": 120, "volume": 10},  # buy 10 more @ 120
+    ])
+    state = _new_session(commission_rate=0, lot_size=1)
+    sid = state["session"]["id"]
+    engine.step(sid)
+    engine.place_order(sid, "buy", 10)
+    engine.step(sid)
+    after = engine.place_order(sid, "buy", 10)
+    session = after["session"]
+    assert session["position_qty_shares"] == 20
+    assert session["position_qty_lots"] == 20
+    assert session["position_avg_price"] == pytest.approx((100 * 10 + 120 * 10) / 20)  # 110
+
+    trades = db.list_trades(sid)
+    assert trades[-1]["action"] == "add"
+
+
+def test_add_to_existing_short_position_computes_weighted_average_price():
+    _seed([
+        {"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10},  # short 10 @ 100
+        {"open": 100, "high": 100, "low": 100, "close": 80, "volume": 10},   # short 10 more @ 80
+    ])
+    state = _new_session(commission_rate=0, lot_size=1)
+    sid = state["session"]["id"]
+    engine.step(sid)
+    engine.place_order(sid, "short", 10)
+    engine.step(sid)
+    after = engine.place_order(sid, "short", 10)
+    session = after["session"]
+    assert session["position_side"] == "short"
+    assert session["position_qty_shares"] == 20
+    assert session["position_avg_price"] == pytest.approx((100 * 10 + 80 * 10) / 20)  # 90
+
+
+def test_slippage_widens_fill_against_the_trader_on_both_sides():
+    _seed([
+        {"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10},
+        {"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10},
+    ])
+    state = _new_session(commission_rate=0, slippage_bps=100, lot_size=1)  # 100 bps = 1%
+    sid = state["session"]["id"]
+    engine.step(sid)
+    after_buy = engine.place_order(sid, "buy", 1)  # buy fills worse: price * 1.01
+    trades = db.list_trades(sid)
+    assert trades[-1]["fill_price"] == pytest.approx(101)
+    assert after_buy["session"]["position_avg_price"] == pytest.approx(101)
+
+    after_close = engine.place_order(sid, "close", 1)  # sell-to-close fills worse: price * 0.99
+    trades = db.list_trades(sid)
+    assert trades[-1]["fill_price"] == pytest.approx(99)
+    # Round trip at the same bar price still loses money purely to slippage.
+    assert after_close["session"]["realized_pnl"] == pytest.approx((99 - 101) * 1)
+
+
+def test_cannot_short_while_long_or_buy_while_short():
+    _seed([{"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10} for _ in range(2)])
+    state = _new_session()
+    sid = state["session"]["id"]
+    engine.step(sid)
+    engine.place_order(sid, "buy", 1)
+    with pytest.raises(engine.ReplayError):
+        engine.place_order(sid, "short", 1)
+
+
+def test_sell_without_long_position_rejected():
+    _seed([{"open": 100, "high": 100, "low": 100, "close": 100, "volume": 10}])
+    state = _new_session()
+    sid = state["session"]["id"]
+    engine.step(sid)
+    with pytest.raises(engine.ReplayError):
+        engine.place_order(sid, "sell", 1)
