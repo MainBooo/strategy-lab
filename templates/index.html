@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MOEX Strategy Lab V3</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='chart.css') }}">
 </head>
 <body>
 <main class="shell">
@@ -14,7 +15,7 @@
 </section>
 
 <nav class="tabs">
-  <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button>
+  <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button><button class="tab" data-tab="charts">Анализ графиков</button>
 </nav>
 
 <section id="tab-portfolio" class="tab-page">
@@ -171,19 +172,34 @@
       <div class="trade-viewer-panel" role="dialog" aria-modal="true" aria-label="Сделки запуска">
         <button class="close-btn" id="tradeViewerClose" aria-label="Закрыть">×</button>
         <div id="tradeViewerHead"></div>
-        <div class="catalog-toolbar">
-          <select id="tvFilterTicker"><option value="">Все тикеры</option></select>
-          <select id="tvFilterStrategy"><option value="">Все стратегии</option></select>
-          <select id="tvFilterProfitable"><option value="">Все сделки</option><option value="true">Прибыльные</option><option value="false">Убыточные</option></select>
-          <select id="tvFilterDirection"><option value="">Long/Short</option><option value="long">Long</option><option value="short">Short</option></select>
-          <select id="tvFilterExitReason"><option value="">Причина выхода</option><option value="take">Take</option><option value="stop">Stop</option><option value="end_of_period">Конец периода</option></select>
+        <nav class="tv-subtabs">
+          <button class="tv-subtab active" data-tv-view="trades">Сделки</button>
+          <button class="tv-subtab" data-tv-view="chart">График сделок</button>
+        </nav>
+        <div id="tvTradesView">
+          <div class="catalog-toolbar">
+            <select id="tvFilterTicker"><option value="">Все тикеры</option></select>
+            <select id="tvFilterStrategy"><option value="">Все стратегии</option></select>
+            <select id="tvFilterProfitable"><option value="">Все сделки</option><option value="true">Прибыльные</option><option value="false">Убыточные</option></select>
+            <select id="tvFilterDirection"><option value="">Long/Short</option><option value="long">Long</option><option value="short">Short</option></select>
+            <select id="tvFilterExitReason"><option value="">Причина выхода</option><option value="take">Take</option><option value="stop">Stop</option><option value="end_of_period">Конец периода</option></select>
+          </div>
+          <div id="tvTable"></div>
+          <div class="history-pagination" id="tvPagination"></div>
+          <div id="tradeDetail" class="trade-detail hidden"></div>
         </div>
-        <div id="tvTable"></div>
-        <div class="history-pagination" id="tvPagination"></div>
-        <div id="tradeDetail" class="trade-detail hidden"></div>
+        <div id="tvChartView" class="hidden"></div>
       </div>
     </div>
   </div>
+</section>
+
+<section id="tab-charts" class="tab-page hidden">
+  <header class="charts-page-head">
+    <div><h2>Анализ графиков <button class="star-btn" id="chartsFavoriteBtn" aria-label="В избранное" title="В избранное">☆</button></h2>
+      <p class="muted-note">Свободный технический анализ инструментов Московской биржи</p></div>
+  </header>
+  <div id="chartsRoot"></div>
 </section>
 </main>
 <script>
@@ -191,5 +207,14 @@ window.STRATEGIES={{ strategies|tojson }};
 window.SECURITY_PRESETS={{ security_presets|tojson }};
 window.PRESET_LABELS={{ preset_labels|tojson }};
 </script>
+<script src="{{ url_for('static',filename='vendor/lightweight-charts.standalone.production.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/theme.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/core.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/indicators.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/trades.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/drawings.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-engine/persistence.js') }}"></script>
 <script src="{{ url_for('static',filename='app.js') }}"></script>
+<script src="{{ url_for('static',filename='trade-chart.js') }}"></script>
+<script src="{{ url_for('static',filename='chart-analysis.js') }}"></script>
 </body></html>

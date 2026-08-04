@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
     take_profit REAL,
     exit_reason TEXT,
     signal_metadata_json TEXT,
+    signal_datetime TEXT,
     FOREIGN KEY(backtest_run_id) REFERENCES backtest_runs(id) ON DELETE CASCADE,
     FOREIGN KEY(backtest_result_id) REFERENCES backtest_results(id) ON DELETE CASCADE
 );
@@ -98,6 +99,20 @@ def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate_add_columns(conn)
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """Additive, idempotent migrations for tables created before a column existed.
+
+    SQLite's CREATE TABLE IF NOT EXISTS is a no-op on an already-existing
+    table, so new nullable columns need an explicit ALTER TABLE here. Safe
+    to run on every startup: ALTER TABLE ADD COLUMN is skipped once the
+    column is present, nothing is ever dropped or rewritten.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(backtest_trades)")}
+    if "signal_datetime" not in existing:
+        conn.execute("ALTER TABLE backtest_trades ADD COLUMN signal_datetime TEXT")
 
 
 def _connect() -> sqlite3.Connection:
@@ -154,14 +169,15 @@ def add_trades(run_id: str, result_id: int, ticker: str, strategy_id: str, trade
         return
     cols = ["backtest_run_id","backtest_result_id","ticker","strategy_id","direction","entry_datetime","entry_price",
             "exit_datetime","exit_price","quantity_lots","quantity_shares","gross_profit","commission","net_profit",
-            "return_percent","stop_loss","take_profit","exit_reason","signal_metadata_json"]
+            "return_percent","stop_loss","take_profit","exit_reason","signal_metadata_json","signal_datetime"]
     rows = []
     for t in trades:
         rows.append((run_id, result_id, ticker, strategy_id, t.get("direction"), t.get("entry_datetime"),
                       t.get("entry_price"), t.get("exit_datetime"), t.get("exit_price"), t.get("quantity_lots"),
                       t.get("quantity_shares"), t.get("gross_profit"), t.get("commission"), t.get("net_profit"),
                       t.get("return_percent"), t.get("stop_loss"), t.get("take_profit"), t.get("exit_reason"),
-                      json.dumps(t.get("signal_metadata") or {}, ensure_ascii=False, default=str)))
+                      json.dumps(t.get("signal_metadata") or {}, ensure_ascii=False, default=str),
+                      t.get("signal_datetime")))
     with _connect() as conn:
         conn.executemany(f"INSERT INTO backtest_trades ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", rows)
 

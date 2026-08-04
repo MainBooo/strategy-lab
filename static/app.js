@@ -47,6 +47,7 @@ function activateTab(name){
   localStorage.setItem("moexlab_active_tab",name);
   if(name==="backtest")renderBacktestTab();
   if(name==="strategies")renderStrategiesContext();
+  if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
 }
 function initTabs(){
   document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
@@ -984,15 +985,40 @@ function renderHistoryPagination(){
 }
 
 // ------------------------------------------------------------- trade viewer
-async function openTradeViewer(runId){
+let tvActiveView="trades";
+function setTvView(view){
+  tvActiveView=view;
+  document.querySelectorAll(".tv-subtab").forEach(b=>b.classList.toggle("active",b.dataset.tvView===view));
+  $("tvTradesView").classList.toggle("hidden",view!=="trades");
+  $("tvChartView").classList.toggle("hidden",view!=="chart");
+  if(view==="chart"&&window.TradeChart)window.TradeChart.activate($("tvChartView"));
+}
+document.querySelectorAll(".tv-subtab").forEach(b=>b.onclick=()=>setTvView(b.dataset.tvView));
+
+async function openTradeViewer(runId,focusTradeId){
   tvRunId=runId;tvPage=1;
   $("tradeViewer").classList.remove("hidden");
   $("tradeDetail").classList.add("hidden");
   const run=await fetch(`/api/backtests/${runId}`).then(r=>r.json());
   $("tradeViewerHead").innerHTML=`<h3>Сделки: ${run.portfolio_name_snapshot||"портфель"}</h3><p class="muted-note">${fmtDateTime(run.created_at)} · ${run.combinations_ok}/${run.combinations_count} комбинаций</p>`;
   $("tvFilterTicker").innerHTML=`<option value="">Все тикеры</option>`+[...new Set((run.results||[]).map(r=>r.ticker))].map(t=>`<option value="${t}">${t}</option>`).join("");
+  window.TradeChart&&window.TradeChart.setRun(run);
   loadTrades();
+  if(focusTradeId!=null){
+    setTvView("chart");
+    window.TradeChart&&window.TradeChart.focusTrade(focusTradeId);
+  } else {
+    setTvView("trades");
+  }
 }
+window.openTradeViewer=openTradeViewer;
+window.money=money;
+window.fmtDateTime=fmtDateTime;
+window.highlightTradeRow=function(id){
+  document.querySelectorAll("[data-row-id].trade-row-highlight").forEach(el=>el.classList.remove("trade-row-highlight"));
+  const row=document.querySelector(`[data-row-id="${id}"]`);
+  if(row){row.classList.add("trade-row-highlight");row.scrollIntoView({block:"nearest"});}
+};
 ["tvFilterTicker","tvFilterStrategy","tvFilterProfitable","tvFilterDirection","tvFilterExitReason"].forEach(id=>{
   document.getElementById(id).onchange=()=>{tvPage=1;loadTrades()};
 });
@@ -1011,14 +1037,15 @@ function renderTradesTable(items,total){
   if(!items.length){$("tvTable").innerHTML="<div class='empty'>Сделок не найдено по текущим фильтрам.</div>";$("tvPagination").innerHTML="";return}
   $("tvTable").innerHTML=`<div class="table-scroll"><table><thead><tr>
     <th>#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Лоты</th><th>Прибыль</th><th>Доходность</th><th>Причина</th><th></th>
-  </tr></thead><tbody>${items.map((t,i)=>`<tr>
+  </tr></thead><tbody>${items.map((t,i)=>`<tr data-row-id="${t.id}">
       <td>${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
       <td>${t.direction}</td><td>${t.entry_datetime}<br><small>${money(t.entry_price)} ₽</small></td>
       <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td>${t.quantity_lots}</td>
       <td class="${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td>${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
-      <td><button class="link-btn" data-trade-detail="${t.id}">Подробнее</button></td>
+      <td><button class="link-btn" data-trade-detail="${t.id}">Подробнее</button> <button class="link-btn" data-trade-chart="${t.id}">На графике</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-trade-detail]").forEach(b=>b.onclick=()=>openTradeDetail(b.dataset.tradeDetail));
+  document.querySelectorAll("[data-trade-chart]").forEach(b=>b.onclick=()=>{setTvView("chart");window.TradeChart&&window.TradeChart.focusTrade(b.dataset.tradeChart);});
   const pages=Math.max(1,Math.ceil(total/tvPageSize));
   $("tvPagination").innerHTML=`<button class="secondary" ${tvPage<=1?"disabled":""} id="tvPrev">← Назад</button><span>Страница ${tvPage} из ${pages} (${total})</span><button class="secondary" ${tvPage>=pages?"disabled":""} id="tvNext">Вперёд →</button>`;
   const prev=document.getElementById("tvPrev"),next=document.getElementById("tvNext");

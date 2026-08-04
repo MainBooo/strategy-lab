@@ -1,0 +1,126 @@
+/* Styling for the shared chart engine, the backtest trade chart, and the
+ * "Анализ графиков" page. Reuses the color tokens from styles.css
+ * (--bg, --panel, --line, --text, --muted, --accent, --accent-2,
+ * --danger) instead of introducing a second palette. */
+
+.tv-subtabs { display: flex; gap: 8px; margin: 10px 0 14px; }
+.tv-subtab {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.tv-subtab.active { color: var(--text); border-color: var(--accent); background: rgba(124,140,255,.12); }
+
+.trade-row-highlight { background: rgba(124,140,255,.16) !important; }
+
+.tc-toolbar, .ca-toolbar {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  padding: 10px 0; font-size: 13px; color: var(--muted);
+}
+.tc-toolbar label, .ca-toolbar label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.tc-toolbar select, .tc-toolbar input, .ca-toolbar select, .ca-toolbar input {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 7px; padding: 6px 8px; font-size: 13px;
+}
+.tc-toolbar .toggle, .ca-toolbar .toggle { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; }
+.ca-toolbar-spacer { flex: 1 1 auto; }
+
+.tc-nav { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }
+.tc-status, .ca-status { min-height: 18px; font-size: 12px; color: var(--muted); }
+
+.tc-chart-host { width: 100%; height: 460px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0c1019; }
+.tc-card {
+  margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel-2);
+}
+.tc-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.tc-card-head h3 { margin: 0; font-size: 15px; }
+
+.icon-btn {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  width: 32px; height: 32px; border-radius: 7px; cursor: pointer; font-size: 15px;
+}
+.icon-btn.active { color: var(--accent); border-color: var(--accent); }
+.icon-btn:hover { color: var(--text); }
+
+/* ---------------------------------------------------------- Анализ графиков -- */
+
+.charts-page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.charts-page-head h2 { display: flex; align-items: center; gap: 10px; }
+.star-btn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+.star-btn:hover { color: #ffce54; }
+
+.ca-workspace { display: grid; grid-template-columns: 52px 1fr 300px; gap: 12px; align-items: start; }
+.tab-page.ca-fullscreen #chartsRoot,
+.ca-fullscreen .ca-workspace { position: fixed; inset: 0; z-index: 60; background: var(--bg); padding: 12px; margin: 0; }
+.ca-fullscreen .ca-chart-host { height: calc(100vh - 160px) !important; }
+
+.ca-tools {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 4px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.ca-tool-btn {
+  width: 42px; height: 38px; border-radius: 8px; border: 1px solid transparent; background: transparent;
+  color: var(--muted); font-size: 16px; cursor: pointer;
+}
+.ca-tool-btn:hover { background: rgba(255,255,255,.05); color: var(--text); }
+.ca-tool-btn.active { background: rgba(124,140,255,.16); border-color: var(--accent); color: var(--accent); }
+.ca-tool-danger { color: var(--danger); margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
+
+.ca-chart-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ca-chart-host { width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0c1019; }
+.ca-range-presets { display: flex; gap: 4px; }
+.range-preset {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+.range-preset:hover { color: var(--text); border-color: var(--accent); }
+
+.ca-side {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+  padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 300px;
+}
+.ca-side-tabs { display: flex; gap: 6px; }
+.ca-side-tab { flex: 1; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 6px 0; font-size: 12px; cursor: pointer; }
+.ca-side-tab.active { color: var(--text); border-color: var(--accent); background: rgba(124,140,255,.12); }
+.ca-side-panel { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.ca-side-panel.hidden { display: none; }
+.ca-side-panel h4 { margin: 0; font-size: 13px; color: var(--text); }
+.ca-side-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.ca-side-panel input[type=text], .ca-side-panel input[type=number], .ca-side-panel textarea {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 8px;
+}
+.ca-side-panel input[type=color] { width: 100%; height: 30px; padding: 2px; }
+
+.ca-object-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.ca-object-row:hover { background: rgba(255,255,255,.04); }
+.ca-object-row.active { background: rgba(124,140,255,.14); }
+.ca-object-actions button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 3px; }
+
+.ca-indicator-menu, .ca-template-menu { position: relative; }
+.ca-popover {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 220px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+  box-shadow: 0 12px 28px rgba(0,0,0,.4);
+}
+.ca-indicator-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 13px; }
+.ca-template-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 2px; }
+
+.ca-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(5,7,12,.72); display: flex; align-items: center; justify-content: center;
+  z-index: 80;
+}
+.ca-modal-backdrop.hidden { display: none; }
+.ca-modal {
+  width: min(560px, calc(100% - 32px)); max-height: 86vh; overflow: auto; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 14px; padding: 24px; position: relative; display: flex; flex-direction: column; gap: 10px;
+}
+.ca-modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.ca-modal input, .ca-modal textarea {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 8px 10px; font: inherit;
+}
+.ca-warning { background: rgba(255,180,84,.12); border: 1px solid rgba(255,180,84,.35); color: #ffb454; border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
+
+@media (max-width: 980px) {
+  .ca-workspace { grid-template-columns: 44px 1fr; }
+  .ca-side { grid-column: 1 / -1; }
+}
