@@ -48,6 +48,7 @@ function activateTab(name){
   if(name==="backtest")renderBacktestTab();
   if(name==="strategies")renderStrategiesContext();
   if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
+  if(name==="replay"&&window.MarketReplayPage)window.MarketReplayPage.init($("replayRoot"));
   if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
 }
 function initTabs(){

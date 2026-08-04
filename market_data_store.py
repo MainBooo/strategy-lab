@@ -180,6 +180,38 @@ def get_candles(ticker: str, board: str, timeframe: str, *, ts_from: int | None 
         conn.close()
 
 
+def get_candles_ascending(ticker: str, board: str, timeframe: str, *, ts_from: int, limit: int) -> list[dict]:
+    """Earliest `limit` candles at/after ts_from, ascending - the shape
+    Market Replay needs to answer "what are the first N bars from my replay
+    start point" via a single indexed query instead of loading everything."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT ts, open, high, low, close, volume FROM candles "
+            "WHERE ticker=? AND board=? AND timeframe=? AND ts>=? ORDER BY ts ASC LIMIT ?",
+            (ticker, board, timeframe, int(ts_from), int(limit)),
+        ).fetchall()
+        return [
+            {"time": r["ts"], "open": r["open"], "high": r["high"], "low": r["low"],
+             "close": r["close"], "volume": r["volume"]}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def count_candles_from(ticker: str, board: str, timeframe: str, *, ts_from: int) -> int:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM candles WHERE ticker=? AND board=? AND timeframe=? AND ts>=?",
+            (ticker, board, timeframe, int(ts_from)),
+        ).fetchone()
+        return row["n"] or 0
+    finally:
+        conn.close()
+
+
 def update_sync_state(ticker: str, board: str, timeframe: str, *, market: str = "shares",
                        engine: str = "stock", status: str | None = None,
                        progress_pct: float | None = None, last_error: str | None = None,

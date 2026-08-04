@@ -17,7 +17,7 @@
 </section>
 
 <nav class="tabs">
-  <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button><button class="tab" data-tab="charts">Анализ графиков</button>
+  <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button><button class="tab" data-tab="charts">Анализ графиков</button><button class="tab" data-tab="replay">Market Replay</button>
 </nav>
 
 <section id="tab-portfolio" class="tab-page">
@@ -203,6 +203,14 @@
   </header>
   <div id="chartsRoot"></div>
 </section>
+
+<section id="tab-replay" class="tab-page hidden">
+  <header class="charts-page-head">
+    <div><h2>Market Replay</h2>
+      <p class="muted-note">Ручное тестирование стратегий: пошаговое воспроизведение истории без будущих данных</p></div>
+  </header>
+  <div id="replayRoot"></div>
+</section>
 </main>
 <script>
 window.STRATEGIES={{ strategies|tojson }};
@@ -223,6 +231,7 @@ window.PRESET_LABELS={{ preset_labels|tojson }};
 <script src="{{ url_for('static',filename='trade-chart.js') }}"></script>
 <script src="{{ url_for('static',filename='watchlist-sidebar.js') }}"></script>
 <script src="{{ url_for('static',filename='market-data-manager.js') }}"></script>
+<script src="{{ url_for('static',filename='market-replay.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-analysis.js') }}"></script>
 <script>
 (function(){

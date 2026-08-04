@@ -19,6 +19,8 @@ import charts_db as cdb
 import legacy_candle_migration
 import market_data_store as mds
 import market_data_sync as mds_sync
+import replay_db as rdb
+import replay_engine
 from candle_api import get_candles,tick_availability
 from feature_flags import has_feature
 from downloader import download_moex_candles
@@ -43,6 +45,7 @@ JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
 mds.init_db(STORAGE/"market_data.db")
+rdb.init_db(STORAGE/"replay.db")
 CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
 try:
     _migration_summary=legacy_candle_migration.migrate_if_empty(DATA_DIR)
@@ -1029,6 +1032,86 @@ def market_data_sync_start():
                      extra={"tickers":tickers,"timeframes":timeframes,"mode":mode,"board":board})
     threading.Thread(target=_execute_market_data_sync_job,args=(job["job_id"],tickers,timeframes,mode,board),daemon=True).start()
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
+
+
+# ------------------------------------------------------------ market replay --
+
+def _replay_error(exc:replay_engine.ReplayError,code:int=400):
+    return jsonify({"error":str(exc)}),code
+
+@app.post("/api/replay/sessions")
+def replay_create():
+    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    p=request.get_json(force=True) or {}
+    ticker=str(p.get("ticker","")).strip().upper()
+    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    try:
+        state=replay_engine.create_session(
+            ticker=ticker,board=str(p.get("board","TQBR")),timeframe=str(p.get("timeframe","1m")),
+            start_date=str(p.get("start_date")),start_hour=int(p.get("start_hour",10)),
+            start_minute=int(p.get("start_minute",0)),
+            starting_balance=float(p.get("starting_balance",1_000_000)),
+            commission_rate=float(p.get("commission_rate",0.0005)),
+            slippage_bps=float(p.get("slippage_bps",0)),speed=float(p.get("speed",1)),
+            lot_size=int(p.get("lot_size") or lot_size_for(ticker)))
+    except replay_engine.ReplayError as exc:return _replay_error(exc)
+    except (ValueError,TypeError) as exc:return jsonify({"error":f"Некорректные параметры: {exc}"}),400
+    return jsonify(state),201
+
+@app.get("/api/replay/sessions")
+def replay_list():
+    status=request.args.get("status")
+    return jsonify([replay_engine.public_session(s) for s in rdb.list_sessions(status=status)])
+
+@app.get("/api/replay/sessions/<session_id>")
+def replay_get(session_id):
+    session=rdb.get_session(session_id)
+    if not session:return jsonify({"error":"Сессия не найдена"}),404
+    return jsonify(replay_engine.visible_state(session))
+
+@app.delete("/api/replay/sessions/<session_id>")
+def replay_delete(session_id):
+    if not rdb.delete_session(session_id):return jsonify({"error":"Сессия не найдена"}),404
+    return jsonify({"ok":True})
+
+@app.post("/api/replay/sessions/<session_id>/step")
+def replay_step(session_id):
+    p=request.get_json(silent=True) or {}
+    try:return jsonify(replay_engine.step(session_id,bars=int(p.get("bars",1))))
+    except replay_engine.ReplayError as exc:return _replay_error(exc,404 if "не найдена" in str(exc) else 400)
+
+@app.post("/api/replay/sessions/<session_id>/back")
+def replay_back(session_id):
+    try:return jsonify(replay_engine.step_back(session_id))
+    except replay_engine.ReplayError as exc:return _replay_error(exc,404 if "не найдена" in str(exc) else 400)
+
+@app.post("/api/replay/sessions/<session_id>/goto")
+def replay_goto(session_id):
+    p=request.get_json(force=True) or {}
+    try:
+        return jsonify(replay_engine.goto(session_id,str(p.get("date")),int(p.get("hour",0)),int(p.get("minute",0))))
+    except replay_engine.ReplayError as exc:return _replay_error(exc,404 if "не найдена" in str(exc) else 400)
+    except (ValueError,TypeError) as exc:return jsonify({"error":f"Некорректная дата: {exc}"}),400
+
+@app.post("/api/replay/sessions/<session_id>/reset")
+def replay_reset(session_id):
+    try:return jsonify(replay_engine.reset(session_id))
+    except replay_engine.ReplayError as exc:return _replay_error(exc,404 if "не найдена" in str(exc) else 400)
+
+@app.post("/api/replay/sessions/<session_id>/order")
+def replay_order(session_id):
+    p=request.get_json(force=True) or {}
+    try:
+        return jsonify(replay_engine.place_order(session_id,str(p.get("action")),int(p.get("lots",1)),
+            stop_loss=float(p["stop_loss"]) if p.get("stop_loss") not in (None,"") else None,
+            take_profit=float(p["take_profit"]) if p.get("take_profit") not in (None,"") else None))
+    except replay_engine.ReplayError as exc:return _replay_error(exc,404 if "не найдена" in str(exc) else 400)
+    except (ValueError,TypeError) as exc:return jsonify({"error":f"Некорректные параметры ордера: {exc}"}),400
+
+@app.get("/api/replay/sessions/<session_id>/trades")
+def replay_trades(session_id):
+    if not rdb.get_session(session_id):return jsonify({"error":"Сессия не найдена"}),404
+    return jsonify(rdb.list_trades(session_id))
 
 
 @app.get("/api/chart-layouts")
