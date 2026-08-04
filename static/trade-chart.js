@@ -73,12 +73,17 @@
           <label>Направление <select id="tcDirection"><option value="">Все</option><option value="long">Long</option><option value="short">Short</option></select></label>
           <label>Результат <select id="tcResult"><option value="">Все сделки</option><option value="true">Прибыльные</option><option value="false">Убыточные</option></select></label>
           <label>№ сделки <input id="tcTradeNumber" type="number" min="1" placeholder="любая"></label>
+          <button class="secondary" id="tcHideAll" title="Скрыть все сделки на графике">Скрыть сделки</button>
+          <button class="secondary" id="tcResetRange" title="Вернуть масштаб графика к общему диапазону тестирования">К общему диапазону</button>
         </div>
         <div class="tc-toolbar">
           <label class="toggle"><input type="checkbox" id="tcShowAll" checked><span>Показывать все сделки</span></label>
           <label class="toggle"><input type="checkbox" id="tcOnlySelected"><span>Только выбранная сделка</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowLevels" checked><span>Стопы/тейки</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowLabels" checked><span>Подписи</span></label>
+          <label class="toggle"><input type="checkbox" id="tcShowMarkers" checked><span>Маркеры</span></label>
+          <label class="toggle"><input type="checkbox" id="tcShowConnectors" checked><span>Линии вход–выход</span></label>
+          <label class="toggle"><input type="checkbox" id="tcShowStopLoss" checked><span>Stop-loss</span></label>
+          <label class="toggle"><input type="checkbox" id="tcShowTakeProfit" checked><span>Take-profit</span></label>
+          <label class="toggle"><input type="checkbox" id="tcShowResultLabels" checked><span>Подписи результата</span></label>
           <label class="toggle"><input type="checkbox" id="tcShowRsi"><span>RSI(14)</span></label>
           <label class="toggle"><input type="checkbox" id="tcShowAtr"><span>ATR(14)</span></label>
         </div>
@@ -108,13 +113,28 @@
         .map((t) => `<option value="${t}">${t}</option>`).join("");
       container.querySelector("#tcTicker").onchange = (e) => this.selectTicker(e.target.value);
 
-      ["tcStrategy", "tcDirection", "tcResult", "tcTradeNumber", "tcShowAll", "tcOnlySelected", "tcShowLevels", "tcShowLabels"].forEach((id) => {
+      [
+        "tcStrategy", "tcDirection", "tcResult", "tcTradeNumber", "tcShowAll", "tcOnlySelected",
+        "tcShowMarkers", "tcShowConnectors", "tcShowStopLoss", "tcShowTakeProfit", "tcShowResultLabels",
+      ].forEach((id) => {
         container.querySelector("#" + id).addEventListener("input", () => this._applyFilters());
       });
       container.querySelector("#tcShowRsi").onchange = (e) => this._toggleIndicator("rsi", e.target.checked);
       container.querySelector("#tcShowAtr").onchange = (e) => this._toggleIndicator("atr", e.target.checked);
       container.querySelector("#tcPrev").onclick = () => this.selection.prev();
       container.querySelector("#tcNext").onclick = () => this.selection.next();
+      container.querySelector("#tcHideAll").onclick = () => {
+        container.querySelector("#tcShowAll").checked = false;
+        this.selection.select(null);
+        this._applyFilters();
+      };
+      container.querySelector("#tcResetRange").onclick = () => {
+        const trades = this.selection.filtered;
+        if (!trades.length) { this.core.fitContent(); return; }
+        const from = Math.min(...trades.map((t) => t.entry_time));
+        const to = Math.max(...trades.map((t) => t.exit_time || t.entry_time));
+        this.core.setVisibleRange(from, to);
+      };
 
       this.core.chart.subscribeClick((param) => this._onChartClick(param));
       this._built = true;
@@ -204,12 +224,16 @@
       const el = (id) => this.container.querySelector("#" + id);
       const showAll = el("tcShowAll").checked;
       const onlySelected = el("tcOnlySelected").checked;
-      const showLevels = el("tcShowLevels").checked;
-      const showLabels = el("tcShowLabels").checked;
+      const showMarkers = el("tcShowMarkers").checked;
+      const showConnectors = el("tcShowConnectors").checked;
+      const showStopLoss = el("tcShowStopLoss").checked;
+      const showTakeProfit = el("tcShowTakeProfit").checked;
+      const showResultLabels = el("tcShowResultLabels").checked;
       const sel = this.selection.selectedTrade();
       const visible = onlySelected && sel ? [sel] : showAll ? this.selection.filtered : sel ? [sel] : [];
 
-      this.markersHandle.setMarkers(global.ChartEngine.Trades.buildMarkers(visible, { showLabels, showExits: showLevels }));
+      this.markersHandle.setMarkers(showMarkers ? global.ChartEngine.Trades.buildMarkers(visible, { showResultLabels, showExits: true }) : []);
+      this.overlay.setDisplayOptions({ showConnectors, showStopLoss, showTakeProfit });
       this.overlay.setTrades(visible);
       this.overlay.setSelected(this.selection.selectedId);
 

@@ -75,6 +75,39 @@ p { color: var(--muted); max-width: 680px; line-height: 1.6; }
 .status.error { color: var(--danger); }
 .status.working { color: #f0d16a; }
 
+/* ------------------------------------------------------- portfolio balance -- */
+
+.pb-widget { position: relative; flex: none; }
+.pb-widget.hidden { display: none; }
+.pb-loading {
+  border: 1px solid var(--line); background: rgba(255,255,255,.045); color: var(--muted);
+  padding: 11px 15px; border-radius: 14px; font-size: 13px;
+}
+.pb-summary {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-end;
+  border: 1px solid var(--line); background: rgba(255,255,255,.045);
+  padding: 9px 16px; border-radius: 14px; cursor: pointer; font: inherit; color: inherit;
+  min-width: 180px;
+}
+.pb-summary.pb-static { cursor: default; align-items: flex-start; }
+.pb-summary:hover { border-color: var(--accent); }
+.pb-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.pb-value { font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
+.pb-change { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pb-empty { font-size: 13px; color: var(--muted); }
+.pb-detail {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; min-width: 260px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: 0 12px 28px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 6px; font-size: 13px;
+}
+.pb-detail div { display: flex; justify-content: space-between; gap: 12px; }
+.pb-detail span { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .pb-summary { min-width: unset; align-items: flex-start; }
+  .pb-detail { right: auto; left: 0; }
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -258,6 +291,8 @@ pre {
 .range-box strong{display:block;margin-bottom:10px}
 .range-box label{margin-bottom:8px}
 .table-scroll{overflow:auto;margin-top:18px;border:1px solid var(--line);border-radius:14px}
+.table-scroll tbody tr[data-row-id]{cursor:pointer}
+.table-scroll tbody tr[data-row-id]:hover{background:rgba(255,255,255,.04)}
 table{border-collapse:collapse;width:100%;font-size:12px}
 th,td{padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
 th{color:var(--muted);background:#0e1420;position:sticky;top:0}

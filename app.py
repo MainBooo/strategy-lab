@@ -218,6 +218,30 @@ def get_portfolio(portfolio_id):
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
 
+@app.get("/api/portfolios/<portfolio_id>/summary")
+def portfolio_summary(portfolio_id):
+    # There is no live/paper trading account in this app - "portfolio
+    # balance" is the ending equity of the most recently *completed*
+    # backtest run for this portfolio (backtest_runs.final_capital, already
+    # computed by portfolio_engine.simulate_portfolio during that run).
+    # Never fabricated: if no completed run exists yet, say so explicitly.
+    portfolio=PORTFOLIOS.get(portfolio_id)
+    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed",page=1,page_size=1)
+    if not rows:
+        rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed_with_errors",page=1,page_size=1)
+    if not rows:
+        return jsonify({"has_run":False,"portfolio_id":portfolio_id,"portfolio_name":portfolio.get("name")})
+    run=rows[0]
+    return jsonify({
+        "has_run":True,"portfolio_id":portfolio_id,"portfolio_name":portfolio.get("name"),
+        "run_id":run["id"],"status":run["status"],"date_from":run.get("date_from"),"date_to":run.get("date_to"),
+        "completed_at":run.get("completed_at"),
+        "initial_capital":run.get("initial_capital"),"final_capital":run.get("final_capital"),
+        "profit":run.get("profit"),"return_percent":run.get("return_percent"),"max_drawdown":run.get("max_drawdown"),
+        "trades_count":run.get("trades_count"),
+    })
+
 def _validate_portfolio_payload(payload:dict)->str|None:
     """Returns an error message, or None if the payload is acceptable."""
     instruments=payload.get("instruments")

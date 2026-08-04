@@ -23,8 +23,13 @@
     return Number(trade.net_profit) >= 0 ? theme.up : theme.down;
   }
 
-  /** Builds the marker list for createSeriesMarkers, given the trades currently meant to be visible. */
-  function buildMarkers(trades, { showLabels, showExits } = {}) {
+  /** Builds the marker list for createSeriesMarkers, given the trades
+   * currently meant to be visible. `showExits` gates whether exit markers
+   * are built at all (tied 1:1 to the "Маркеры" toggle in the caller, since
+   * entry+exit are one visual layer); `showResultLabels` is the
+   * "Подписи результата" toggle - when on, the exit marker's text is the
+   * exit reason plus the trade's actual P&L percent, not a generic caption. */
+  function buildMarkers(trades, { showResultLabels, showExits } = {}) {
     const markers = [];
     for (const t of trades) {
       const long = isLong(t);
@@ -33,17 +38,19 @@
         position: long ? "belowBar" : "aboveBar",
         color: tradeColor(t),
         shape: long ? "arrowUp" : "arrowDown",
-        text: showLabels ? (long ? "L" : "S") + (t.number ? ` #${t.number}` : "") : "",
+        text: showResultLabels ? (long ? "L" : "S") + (t.number ? ` #${t.number}` : "") : "",
         id: `entry_${t.id}`,
       });
       if (showExits && t.exit_time) {
-        const label = EXIT_LABEL[t.exit_reason] || (t.exit_reason ? String(t.exit_reason).toUpperCase() : "EXIT");
+        const reason = EXIT_LABEL[t.exit_reason] || (t.exit_reason ? String(t.exit_reason).toUpperCase() : "EXIT");
+        const pct = t.return_percent;
+        const label = showResultLabels && pct != null ? `${reason} ${pct >= 0 ? "+" : ""}${pct}%` : reason;
         markers.push({
           time: t.exit_time,
           position: long ? "aboveBar" : "belowBar",
           color: EXIT_COLOR[t.exit_reason] || theme.accent,
           shape: "circle",
-          text: showLabels ? label : "",
+          text: showResultLabels ? label : "",
           id: `exit_${t.id}`,
         });
       }
@@ -68,15 +75,17 @@
       this._segments = [];
       this._zones = [];
 
-      for (const t of src.trades) {
-        if (t.exit_time == null) continue;
-        const x1 = x(t.entry_time), x2 = x(t.exit_time);
-        if (x1 == null || x2 == null) continue;
-        const y1 = y(t.entry_price), y2 = y(t.exit_price);
-        const selected = src.selectedId === t.id;
-        this._segments.push({
-          kind: "connector", x1, y1, x2, y2, color: tradeColor(t), selected,
-        });
+      if (src.showConnectors !== false) {
+        for (const t of src.trades) {
+          if (t.exit_time == null) continue;
+          const x1 = x(t.entry_time), x2 = x(t.exit_time);
+          if (x1 == null || x2 == null) continue;
+          const y1 = y(t.entry_price), y2 = y(t.exit_price);
+          const selected = src.selectedId === t.id;
+          this._segments.push({
+            kind: "connector", x1, y1, x2, y2, color: tradeColor(t), selected,
+          });
+        }
       }
 
       const sel = src.trades.find((t) => t.id === src.selectedId);
@@ -85,14 +94,14 @@
         const x2 = sel.exit_time != null ? x(sel.exit_time) : x1 + 60;
         if (x1 != null && x2 != null) {
           const entryY = y(sel.entry_price);
-          if (sel.stop_loss != null) {
+          if (sel.stop_loss != null && src.showStopLoss !== false) {
             const stopY = y(sel.stop_loss);
             if (entryY != null && stopY != null) {
               this._segments.push({ kind: "level", x1, x2, y: stopY, color: theme.down, label: `Стоп ${fmtPrice(sel.stop_loss)}` });
               this._zones.push({ x1, x2, yTop: Math.min(entryY, stopY), yBottom: Math.max(entryY, stopY), color: "rgba(255,112,129,.14)" });
             }
           }
-          if (sel.take_profit != null) {
+          if (sel.take_profit != null && src.showTakeProfit !== false) {
             const takeY = y(sel.take_profit);
             if (entryY != null && takeY != null) {
               this._segments.push({ kind: "level", x1, x2, y: takeY, color: theme.up, label: `Тейк ${fmtPrice(sel.take_profit)}` });
@@ -162,12 +171,25 @@
       this.series = series;
       this.trades = [];
       this.selectedId = null;
+      // Independent display layers (spec: "Маркеры / Линии вход-выход /
+      // Stop-loss / Take-profit / Подписи результата"). Markers and labels
+      // are controlled by the marker list built in buildMarkers() below;
+      // these three gate what this canvas overlay draws.
+      this.showConnectors = true;
+      this.showStopLoss = true;
+      this.showTakeProfit = true;
       this._paneViews = [new TradeOverlayPaneView(this)];
       this._requestUpdate = null;
     }
     attached(params) { this._requestUpdate = params && params.requestUpdate; }
     setTrades(trades) { this.trades = trades; this._requestUpdate && this._requestUpdate(); }
     setSelected(id) { this.selectedId = id; this._requestUpdate && this._requestUpdate(); }
+    setDisplayOptions({ showConnectors, showStopLoss, showTakeProfit } = {}) {
+      if (showConnectors != null) this.showConnectors = showConnectors;
+      if (showStopLoss != null) this.showStopLoss = showStopLoss;
+      if (showTakeProfit != null) this.showTakeProfit = showTakeProfit;
+      this._requestUpdate && this._requestUpdate();
+    }
     updateAllViews() { this._paneViews.forEach((v) => v.update()); }
     paneViews() { return this._paneViews; }
   }

@@ -27,6 +27,16 @@ TIMEFRAME_TO_MOEX_INTERVAL = {
     "1d": 24, "1w": 7, "1mo": 31,
 }
 
+# Timeframes MOEX ISS does not expose directly. Built by aggregating a
+# native ("base") timeframe on real candles only - never synthesized or
+# randomly generated. `bucket_seconds` must be an exact multiple of the
+# base timeframe's own interval so bucket boundaries always land on a real
+# base-candle boundary.
+AGGREGATE_TIMEFRAMES = {
+    "30m": {"base": "10m", "bucket_seconds": 30 * 60},
+    "4h": {"base": "60m", "bucket_seconds": 4 * 60 * 60},
+}
+
 _CACHE_FILE_RE = re.compile(r"^([A-Z0-9]+)__([A-Z]+)__(\d+)__(\d{4}-\d{2}-\d{2})__(\d{4}-\d{2}-\d{2})\.csv$")
 
 
@@ -53,6 +63,49 @@ def _find_cached(cache_dir: Path, ticker: str, board: str, interval: int) -> tup
     return best
 
 
+def _aggregate(candles: list[dict], bucket_seconds: int) -> list[dict]:
+    """Rolls up already-sorted-ascending OHLCV candles into `bucket_seconds`
+    buckets: open=first, high=max, low=min, close=last, volume=sum. Since
+    input is sorted ascending and bucket keys are non-decreasing with time,
+    a single forward pass suffices - no bucket is ever revisited."""
+    result: list[dict] = []
+    current: dict | None = None
+    for c in candles:
+        key = (int(c["time"]) // bucket_seconds) * bucket_seconds
+        if current is None or current["time"] != key:
+            if current is not None:
+                result.append(current)
+            current = {"time": key, "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": c["volume"]}
+        else:
+            current["high"] = max(current["high"], c["high"])
+            current["low"] = min(current["low"], c["low"])
+            current["close"] = c["close"]
+            current["volume"] += c["volume"]
+    if current is not None:
+        result.append(current)
+    return result
+
+
+def _get_aggregated_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from_date: str,
+                             till_date: str, limit: int, before: int | None) -> dict:
+    agg = AGGREGATE_TIMEFRAMES[timeframe]
+    base_interval_seconds = TIMEFRAME_TO_MOEX_INTERVAL[agg["base"]] * 60
+    factor = agg["bucket_seconds"] // base_interval_seconds
+    base = get_candles(data_dir, ticker=ticker, board=board, timeframe=agg["base"], from_date=from_date,
+                        till_date=till_date, limit=limit * factor + factor, before=before)
+    bars = _aggregate(base["candles"], agg["bucket_seconds"])
+    # The oldest bucket can be partial if the base fetch was truncated
+    # mid-bucket (base["nextCursor"] set): drop it instead of showing a
+    # short/misleading bar. The lazy-load-older path re-requests it, this
+    # time together with the rest of its base candles, on the next page.
+    if base["nextCursor"] is not None and bars:
+        bars = bars[1:]
+    truncated = len(bars) > limit
+    bars = bars[-limit:] if limit else bars
+    next_cursor = bars[0]["time"] if bars and (truncated or base["nextCursor"] is not None) else None
+    return {"candles": bars, "nextCursor": next_cursor}
+
+
 def get_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
                  limit: int, before: int | None = None) -> dict:
     """Returns {"candles": [...], "nextCursor": int|None} - unix-seconds OHLCV.
@@ -62,10 +115,13 @@ def get_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from
     the frontend can page further into the past without re-fetching bars
     it already has.
     """
+    ticker = ticker.upper()
+    if timeframe in AGGREGATE_TIMEFRAMES:
+        return _get_aggregated_candles(data_dir, ticker=ticker, board=board, timeframe=timeframe,
+                                        from_date=from_date, till_date=till_date, limit=limit, before=before)
     if timeframe not in TIMEFRAME_TO_MOEX_INTERVAL:
         raise ValueError(f"Неизвестный таймфрейм: {timeframe}")
     interval = TIMEFRAME_TO_MOEX_INTERVAL[timeframe]
-    ticker = ticker.upper()
     cache_dir = _cache_dir(data_dir)
 
     cached = _find_cached(cache_dir, ticker, board, interval)

@@ -48,6 +48,7 @@ function activateTab(name){
   if(name==="backtest")renderBacktestTab();
   if(name==="strategies")renderStrategiesContext();
   if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
+  if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
 }
 function initTabs(){
   document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
@@ -294,6 +295,7 @@ function showBuildSuccess(job){
     ` Теперь выберите стратегии и запустите бэктест.`;
   activePortfolioId=r.portfolio_id;
   localStorage.setItem("moexlab_active_portfolio",activePortfolioId);
+  if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
   if(errs.length){
     const btn=document.getElementById("retryPartialBuild");
     if(btn)btn.onclick=()=>{catalogSelected=new Set(errs.map(e=>e.ticker));setBuildTarget(r.portfolio_id);renderCatalog();$("buildSuccess").classList.add("hidden")};
@@ -382,7 +384,7 @@ function renderPortfolioList(){
     const p=portfolios.find(x=>x.id===b.dataset.id);
     if(!confirm(`Удалить портфель «${p?p.name:''}»? Загруженные исторические данные останутся — они используются и другими портфелями.`))return;
     await fetch(`/api/portfolios/${b.dataset.id}`,{method:"DELETE"});
-    if(activePortfolioId===b.dataset.id){activePortfolioId=null;localStorage.removeItem("moexlab_active_portfolio")}
+    if(activePortfolioId===b.dataset.id){activePortfolioId=null;localStorage.removeItem("moexlab_active_portfolio");if(window.refreshPortfolioBalance)window.refreshPortfolioBalance()}
     expandedPortfolios.delete(b.dataset.id);editorDirty.delete(b.dataset.id);
     loadPortfolios();
   });
@@ -720,6 +722,7 @@ function selectBacktestPortfolio(id){
   btPortfolio=portfolios.find(p=>p.id===id);
   if(!btPortfolio)return;
   activePortfolioId=id;localStorage.setItem("moexlab_active_portfolio",id);
+  if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
   btIncluded=new Set((btPortfolio.instruments||[]).map(i=>i.ticker));
   renderBacktestSectorFilter();
   renderBacktestChips();
@@ -838,6 +841,7 @@ function pollBacktestJob(jobId){
           setStatus(job.status==="completed"?"Бэктест завершён":"Бэктест завершён с ошибками по части комбинаций","success");
           await loadPortfolios();
           loadHistory(1);
+          if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
         }else{
           $("backtestMessage").textContent=`${job.status==="canceled"?"Отменено":"Ошибка"}: ${job.error?.message||"неизвестная ошибка"}`;
           setStatus(job.status==="canceled"?"Бэктест отменён":"Ошибка бэктеста","error");
@@ -1046,6 +1050,10 @@ function renderTradesTable(items,total){
     </tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-trade-detail]").forEach(b=>b.onclick=()=>openTradeDetail(b.dataset.tradeDetail));
   document.querySelectorAll("[data-trade-chart]").forEach(b=>b.onclick=()=>{setTvView("chart");window.TradeChart&&window.TradeChart.focusTrade(b.dataset.tradeChart);});
+  document.querySelectorAll("[data-row-id]").forEach(row=>row.onclick=(e)=>{
+    if(e.target.closest("button"))return; // buttons above already handle their own action
+    setTvView("chart");window.TradeChart&&window.TradeChart.focusTrade(row.dataset.rowId);
+  });
   const pages=Math.max(1,Math.ceil(total/tvPageSize));
   $("tvPagination").innerHTML=`<button class="secondary" ${tvPage<=1?"disabled":""} id="tvPrev">← Назад</button><span>Страница ${tvPage} из ${pages} (${total})</span><button class="secondary" ${tvPage>=pages?"disabled":""} id="tvNext">Вперёд →</button>`;
   const prev=document.getElementById("tvPrev"),next=document.getElementById("tvNext");

@@ -62,7 +62,13 @@
       return this._candlesByTime.get(time) || null;
     }
 
-    /** Loads a fresh range for a symbol, replacing any previously loaded data. */
+    /** Loads a fresh range for a symbol, replacing any previously loaded data.
+     * A single page is capped at `limit` bars, so for a wide from/to span on
+     * a fine-grained timeframe the first page can land short of `from` (e.g.
+     * a 6-month request on 10m bars is ~10-15k bars, far past the 5000 page
+     * cap). Rather than making the user scroll left to trigger lazy paging
+     * for a range they explicitly asked for, keep pulling older pages here
+     * until the requested `from` is covered or real history runs out. */
     async load({ symbol, board, timeframe, from, to, limit, onState }) {
       this._fetchParams = { symbol, board, timeframe };
       this._reachedHistoryStart = false;
@@ -85,12 +91,29 @@
         if (controller.signal.aborted) return;
         this._setCandles(data.candles || []);
         this._reachedHistoryStart = !data.nextCursor;
+        await this._fillDownTo(from, controller);
+        if (controller.signal.aborted) return;
         onState && onState(this._candles.length ? "ready" : "empty");
         return data;
       } catch (err) {
         if (controller.signal.aborted) return;
         onState && onState("error", err);
         throw err;
+      }
+    }
+
+    /** Keeps fetching older pages (same mechanism as _maybeLoadOlder) until
+     * the oldest loaded bar reaches `from` or the API says there's no more
+     * history. Bounded by an iteration cap so a misbehaving cursor can't
+     * spin forever. */
+    async _fillDownTo(from, controller) {
+      const fromTs = Math.floor(new Date(from).getTime() / 1000);
+      if (!Number.isFinite(fromTs)) return;
+      for (let i = 0; i < 200; i++) {
+        if (controller.signal.aborted || this._reachedHistoryStart) return;
+        if (!this._candles.length || this._candles[0].time <= fromTs) return;
+        const added = await this._fetchOlderPage(controller.signal);
+        if (!added) return;
       }
     }
 
@@ -122,6 +145,14 @@
       if (!logicalRange || this._loadingOlder || this._reachedHistoryStart || !this._fetchParams) return;
       if (logicalRange.from > 12) return; // still far from the left edge
       if (!this._candles.length) return;
+      await this._fetchOlderPage();
+    }
+
+    /** Fetches one older page and prepends it to `_candles`. Returns true if
+     * any new (strictly older) bars were added, false if history is
+     * exhausted (and sets `_reachedHistoryStart` accordingly). */
+    async _fetchOlderPage(signal) {
+      if (this._loadingOlder || !this._fetchParams || !this._candles.length) return false;
       this._loadingOlder = true;
       try {
         const earliest = this._candles[0].time;
@@ -134,16 +165,20 @@
           before: String(earliest),
           limit: "2000",
         });
-        const res = await fetch(`/api/candles?${params}`);
-        if (!res.ok) return;
+        const res = await fetch(`/api/candles?${params}`, signal ? { signal } : undefined);
+        if (!res.ok) return false;
         const data = await res.json();
         const older = (data.candles || []).filter((c) => c.time < earliest);
         if (!older.length) {
           this._reachedHistoryStart = true;
-          return;
+          return false;
         }
         this._setCandles(older.concat(this._candles));
         this._reachedHistoryStart = !data.nextCursor;
+        return true;
+      } catch (err) {
+        if (signal && signal.aborted) return false;
+        throw err;
       } finally {
         this._loadingOlder = false;
       }

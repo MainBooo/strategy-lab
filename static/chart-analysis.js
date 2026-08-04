@@ -3,14 +3,30 @@
  * downloaded on demand and cached server-side - see candle_api.py).
  * Drawings/layouts are persisted per-object through /api/chart-layouts
  * and /api/chart-drawings (see charts_db.py) with a debounced autosave;
- * this file never keeps drawing state only in localStorage. */
+ * this file never keeps drawing state only in localStorage.
+ *
+ * The page is a workspace of one or more independent chart tiles
+ * (ChartEngine.ChartTile, chart-engine/chart-tile.js) laid out in a grid.
+ * The shared toolbar (symbol/timeframe/range/indicators/drawing tools/
+ * templates) always acts on the *active* tile - Page.symbol/timeframe/
+ * from/to/layout/core/indicatorMgr/drawingMgr below are getters/setters
+ * that delegate to `this.activeTile`, which is what lets almost all of the
+ * pre-existing single-chart logic (template save/load, drawing autosave,
+ * the properties/objects side panel, the "order a strategy" modal) keep
+ * working unchanged even though there can now be up to four charts. */
 (function (global) {
   "use strict";
 
   const CE = global.ChartEngine;
+  /* Candle interval (bar size) - distinct from the visible history range
+   * below (RANGE_PRESETS). 30m/4h have no native MOEX ISS interval code and
+   * are aggregated server-side from real 10m/60m candles - see
+   * candle_api.AGGREGATE_TIMEFRAMES. Everything else maps 1:1 to a MOEX
+   * interval and is fetched as-is. */
   const TIMEFRAMES = [
-    { id: "1m", label: "1м" }, { id: "10m", label: "10м" }, { id: "60m", label: "1ч" },
-    { id: "1d", label: "1Д" }, { id: "1w", label: "1Н" }, { id: "1mo", label: "1Мес" },
+    { id: "1m", label: "1м" }, { id: "10m", label: "10м" }, { id: "30m", label: "30м" },
+    { id: "60m", label: "1ч" }, { id: "4h", label: "4ч" }, { id: "1d", label: "1д" },
+    { id: "1w", label: "1н" }, { id: "1mo", label: "1мес" },
   ];
   const RANGE_PRESETS = [
     { label: "1Д", days: 1 }, { label: "5Д", days: 5 }, { label: "1М", days: 30 }, { label: "3М", days: 90 },
@@ -28,29 +44,57 @@
     { id: "long_position", label: "Long позиция", icon: "↑" },
     { id: "short_position", label: "Short позиция", icon: "↓" },
   ];
+  const LAYOUTS = [
+    { id: "1", label: "1 график", rows: 1, cols: 1 },
+    { id: "2v", label: "2 графика вертикально", rows: 2, cols: 1 },
+    { id: "2h", label: "2 графика горизонтально", rows: 1, cols: 2 },
+    { id: "4", label: "4 графика", rows: 2, cols: 2 },
+  ];
+  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "4": 4 };
+  const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "4", 4: "4" };
+  const WORKSPACE_STATE_KEY = "moexlab_chart_workspace";
 
   const Page = {
     root: null,
-    core: null,
-    indicatorMgr: null,
-    drawingMgr: null,
-    symbol: "SBER",
-    board: "TQBR",
-    timeframe: "1d",
-    from: null,
-    to: null,
-    layout: null,
     securities: [],
+    tiles: [],
+    activeTileId: null,
+    layoutMode: "1",
+    _archivedTiles: [],
     _built: false,
     _saveQueue: {},
+
+    get activeTile() {
+      return this.tiles.find((t) => t.id === this.activeTileId) || this.tiles[0] || null;
+    },
+    get symbol() { return this.activeTile ? this.activeTile.symbol : "SBER"; },
+    set symbol(v) { if (this.activeTile) this.activeTile.symbol = v; },
+    get board() { return this.activeTile ? this.activeTile.board : "TQBR"; },
+    set board(v) { if (this.activeTile) this.activeTile.board = v; },
+    get timeframe() { return this.activeTile ? this.activeTile.timeframe : "1d"; },
+    set timeframe(v) { if (this.activeTile) this.activeTile.timeframe = v; },
+    get from() { return this.activeTile ? this.activeTile.from : null; },
+    set from(v) { if (this.activeTile) this.activeTile.from = v; },
+    get to() { return this.activeTile ? this.activeTile.to : null; },
+    set to(v) { if (this.activeTile) this.activeTile.to = v; },
+    get layout() { return this.activeTile ? this.activeTile.layout : null; },
+    set layout(v) { if (this.activeTile) this.activeTile.layout = v; },
+    get core() { return this.activeTile ? this.activeTile.core : null; },
+    get indicatorMgr() { return this.activeTile ? this.activeTile.indicatorMgr : null; },
+    get drawingMgr() { return this.activeTile ? this.activeTile.drawingMgr : null; },
 
     init(root) {
       this.root = root;
       if (this._built) return;
       this._built = true;
-      this.to = new Date().toISOString().slice(0, 10);
-      this.from = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+      if (!this._restoreWorkspaceState()) {
+        const tile = new CE.ChartTile({});
+        this.tiles = [tile];
+        this.activeTileId = tile.id;
+        this.layoutMode = "1";
+      }
       this._build();
+      this._syncTileGrid();
       this._loadSecurities().then(() => this._loadOrInit());
     },
 
@@ -82,10 +126,19 @@
           <button class="secondary" id="caSaveBtn">Сохранить</button>
           <button class="primary" id="caOrderBtn">⚙ Заказать стратегию по разметке</button>
           <span class="ca-toolbar-spacer"></span>
+          <div class="ca-layout-switch" id="caLayoutSwitch">
+            ${LAYOUTS.map((l) => `
+              <button class="ca-layout-btn ${l.id === this.layoutMode ? "active" : ""}" data-layout="${l.id}" title="${l.label}" aria-label="${l.label}">
+                <span class="ca-layout-icon" style="grid-template-columns:repeat(${l.cols},1fr);grid-template-rows:repeat(${l.rows},1fr)">
+                  ${Array.from({ length: l.rows * l.cols }).map(() => "<i></i>").join("")}
+                </span>
+              </button>`).join("")}
+          </div>
           <button class="icon-btn" id="caUndoBtn" title="Отменить (Ctrl+Z)">↶</button>
           <button class="icon-btn" id="caRedoBtn" title="Повторить (Ctrl+Shift+Z)">↷</button>
           <button class="icon-btn" id="caSnapBtn" title="Прилипание к свечам">🧲</button>
-          <button class="icon-btn" id="caFullscreenBtn" title="Полноэкранный режим">⛶</button>
+          <button class="icon-btn" id="caWatchlistToggleBtn" title="Список тикеров">☰</button>
+          <button class="icon-btn" id="caFullscreenBtn" title="Полноэкранный режим рабочего пространства">⛶</button>
         </div>
         <div class="ca-workspace" id="caWorkspace">
           <div class="ca-tools" id="caTools">
@@ -93,7 +146,7 @@
             <button class="ca-tool-btn ca-tool-danger" id="caDeleteBtn" title="Удалить объект (Delete)" aria-label="Удалить объект">🗑</button>
           </div>
           <div class="ca-chart-col">
-            <div id="caChartHost" class="ca-chart-host"></div>
+            <div class="ca-tile-grid" id="caTileGrid"></div>
             <div class="ca-range-presets" id="caRangePresets">
               ${RANGE_PRESETS.map((p) => `<button class="range-preset" data-days="${p.days ?? ""}">${p.label}</button>`).join("")}
             </div>
@@ -107,40 +160,60 @@
             <div id="caProps" class="ca-side-panel"></div>
             <div id="caObjects" class="ca-side-panel hidden"></div>
           </div>
+          <div class="ca-watchlist" id="caWatchlist"></div>
         </div>
+        <div class="wl-mobile-backdrop" id="caWatchlistBackdrop"></div>
       `;
 
       this.root.querySelector("#caFrom").value = this.from;
       this.root.querySelector("#caTo").value = this.to;
 
-      this.core = new CE.ChartCore(this.root.querySelector("#caChartHost"), { showVolume: true });
-      this.indicatorMgr = new CE.Indicators.PaneManager(this.core);
-      this.drawingMgr = new CE.Drawings.DrawingManager(this.core);
-      this.drawingMgr.onChange((mgr, detail) => this._onDrawingsChanged(detail));
-
-      this.root.querySelector("#caSymbol").onchange = (e) => { this.symbol = e.target.value; this.layout = null; this._reload(); };
-      this.root.querySelector("#caTimeframe").onchange = (e) => { this.timeframe = e.target.value; this._reload(); };
-      this.root.querySelector("#caFrom").onchange = (e) => { this.from = e.target.value; this._reload(); };
-      this.root.querySelector("#caTo").onchange = (e) => { this.to = e.target.value; this._reload(); };
+      this.root.querySelector("#caSymbol").onchange = (e) => this._selectSymbol(e.target.value);
+      this.root.querySelector("#caTimeframe").onchange = (e) => {
+        this.timeframe = e.target.value;
+        if (this.activeTile) this.activeTile.updateHeader();
+        this._reload();
+        this._saveWorkspaceState();
+      };
+      this.root.querySelector("#caFrom").onchange = (e) => { this.from = e.target.value; this._reload(); this._saveWorkspaceState(); };
+      this.root.querySelector("#caTo").onchange = (e) => { this.to = e.target.value; this._reload(); this._saveWorkspaceState(); };
       this.root.querySelectorAll(".range-preset").forEach((b) => (b.onclick = () => this._applyRangePreset(b.dataset.days)));
 
       this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => {
         b.onclick = () => {
           this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((x) => x.classList.remove("active"));
           b.classList.add("active");
-          this.drawingMgr.setTool(b.dataset.tool || null);
+          if (this.drawingMgr) this.drawingMgr.setTool(b.dataset.tool || null);
         };
       });
-      this.root.querySelector("#caDeleteBtn").onclick = () => { if (this.drawingMgr.selectedId) this.drawingMgr.removeDrawing(this.drawingMgr.selectedId); };
-      this.root.querySelector("#caUndoBtn").onclick = () => this.drawingMgr.undo();
-      this.root.querySelector("#caRedoBtn").onclick = () => this.drawingMgr.redo();
+      this.root.querySelector("#caDeleteBtn").onclick = () => { if (this.drawingMgr && this.drawingMgr.selectedId) this.drawingMgr.removeDrawing(this.drawingMgr.selectedId); };
+      this.root.querySelector("#caUndoBtn").onclick = () => this.drawingMgr && this.drawingMgr.undo();
+      this.root.querySelector("#caRedoBtn").onclick = () => this.drawingMgr && this.drawingMgr.redo();
       this.root.querySelector("#caSnapBtn").onclick = (e) => {
+        if (!this.drawingMgr) return;
         this.drawingMgr.snapEnabled = !this.drawingMgr.snapEnabled;
         e.target.classList.toggle("active", this.drawingMgr.snapEnabled);
       };
-      this.root.querySelector("#caFullscreenBtn").onclick = () => this.root.closest(".tab-page").classList.toggle("ca-fullscreen");
+      this._fsCtrl = new CE.Fullscreen.FullscreenController(this.root, {
+        className: "is-fullscreen",
+        onChange: (active) => this._onFullscreenChange(active),
+      });
+      this.root.querySelector("#caFullscreenBtn").onclick = () => this._fsCtrl.toggle();
       this.root.querySelector("#caSaveBtn").onclick = () => this._saveAsTemplate();
       this.root.querySelector("#caOrderBtn").onclick = () => this._openOrderModal();
+
+      this.root.querySelectorAll(".ca-layout-btn").forEach((b) => (b.onclick = () => this._setLayout(b.dataset.layout)));
+
+      let watchlistCollapsed = false;
+      try { watchlistCollapsed = localStorage.getItem("moexlab_watchlist_collapsed") === "1"; } catch (e) { /* ignore */ }
+      this.watchlist = new global.WatchlistSidebar(this.root.querySelector("#caWatchlist"), {
+        collapsed: watchlistCollapsed,
+        onSelect: (ticker) => this._selectSymbol(ticker),
+        mobileBackdrop: this.root.querySelector("#caWatchlistBackdrop"),
+      });
+      this.watchlist.setActive(this.symbol);
+      this.root.querySelector("#caWatchlistToggleBtn").onclick = () => this.watchlist.openMobileDrawer();
+      this.root.querySelector("#caWatchlistBackdrop").onclick = () => this.watchlist.closeMobileDrawer();
 
       this.root.querySelectorAll(".ca-side-tab").forEach((b) => {
         b.onclick = () => {
@@ -153,7 +226,175 @@
 
       this._buildIndicatorPopover();
       this._buildTemplatePopover();
-      this.drawingMgr.onChange(() => { this._renderProps(); this._renderObjects(); });
+    },
+
+    // ------------------------------------------------------------- tiles --
+
+    _syncTileGrid() {
+      const grid = this.root.querySelector("#caTileGrid");
+      grid.className = "ca-tile-grid layout-" + this.layoutMode;
+      const keep = new Set(this.tiles.filter((t) => t.el).map((t) => t.el));
+      [...grid.children].forEach((child) => { if (!keep.has(child)) child.remove(); });
+      this.tiles.forEach((tile) => {
+        if (!tile.el) {
+          const el = document.createElement("div");
+          grid.appendChild(el);
+          tile.mount(el, {
+            onActivate: (t) => this._setActiveTile(t.id),
+            onClose: (t) => this._closeTile(t.id),
+          });
+          tile.drawingMgr.onChange((mgr, detail) => this._onDrawingsChanged(tile, detail));
+          tile.drawingMgr.onChange(() => {
+            if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
+          });
+          this._loadTile(tile);
+        } else if (tile.el.parentElement !== grid) {
+          grid.appendChild(tile.el);
+        }
+        tile.setActiveVisual(tile.id === this.activeTileId);
+      });
+    },
+
+    _setLayout(mode) {
+      if (!LAYOUT_TILE_COUNT[mode]) return;
+      this.layoutMode = mode;
+      this._resizeTiles(LAYOUT_TILE_COUNT[mode]);
+      this._syncTileGrid();
+      this._syncActiveLayoutButton();
+      this._syncToolbarFromActiveTile();
+      this._saveWorkspaceState();
+    },
+
+    _resizeTiles(targetCount) {
+      while (this.tiles.length > targetCount) {
+        const tile = this.tiles.pop();
+        this._archivedTiles.push(tile.toConfig());
+        tile.destroy();
+      }
+      while (this.tiles.length < targetCount) {
+        const cfg = this._archivedTiles.pop() || { symbol: this.symbol, board: this.board, timeframe: this.timeframe, from: this.from, to: this.to };
+        this.tiles.push(new CE.ChartTile(cfg));
+      }
+      if (!this.tiles.some((t) => t.id === this.activeTileId)) this.activeTileId = this.tiles[0].id;
+    },
+
+    _closeTile(id) {
+      if (this.tiles.length <= 1) return;
+      const idx = this.tiles.findIndex((t) => t.id === id);
+      if (idx === -1) return;
+      const [tile] = this.tiles.splice(idx, 1);
+      const wasActive = tile.id === this.activeTileId;
+      tile.destroy();
+      this.layoutMode = COUNT_TO_LAYOUT[this.tiles.length] || this.layoutMode;
+      if (wasActive) this.activeTileId = this.tiles[Math.max(0, idx - 1)].id;
+      this._syncActiveLayoutButton();
+      this._syncTileGrid();
+      this._syncToolbarFromActiveTile();
+      this._saveWorkspaceState();
+    },
+
+    _setActiveTile(id) {
+      if (id === this.activeTileId) return;
+      this.activeTileId = id;
+      this.tiles.forEach((t) => t.setActiveVisual(t.id === id));
+      this._syncToolbarFromActiveTile();
+      if (this.watchlist) this.watchlist.setActive(this.symbol);
+      this._renderProps();
+      this._renderObjects();
+      this._saveWorkspaceState();
+    },
+
+    _syncActiveLayoutButton() {
+      this.root.querySelectorAll(".ca-layout-btn").forEach((b) => b.classList.toggle("active", b.dataset.layout === this.layoutMode));
+    },
+
+    _syncToolbarFromActiveTile() {
+      const t = this.activeTile;
+      if (!t) return;
+      const sel = this.root.querySelector("#caSymbol"); if (sel) sel.value = t.symbol;
+      const tf = this.root.querySelector("#caTimeframe"); if (tf) tf.value = t.timeframe;
+      const from = this.root.querySelector("#caFrom"); if (from) from.value = t.from;
+      const to = this.root.querySelector("#caTo"); if (to) to.value = t.to;
+      // Drawing-tool selection is a per-interaction toolbar concept, not
+      // per-tile persisted state - switching the active tile resets it to
+      // the cursor so the newly focused tile isn't left mid-draw with a
+      // tool it never picked.
+      this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => b.classList.toggle("active", !b.dataset.tool));
+      if (t.drawingMgr) t.drawingMgr.setTool(null);
+    },
+
+    async _loadTile(tile) {
+      if (!tile || !tile.core) return;
+      const isActive = tile.id === this.activeTileId;
+      const status = isActive ? this.root.querySelector("#caStatus") : null;
+      if (status) status.textContent = "Загрузка свечей…";
+      try {
+        await tile.core.load({ symbol: tile.symbol, board: tile.board, timeframe: tile.timeframe, from: tile.from, to: tile.to, limit: 5000, onState: (s) => {
+          if (!status) return;
+          status.textContent = s === "loading" ? "Загрузка свечей…" : s === "empty" ? "Нет данных за выбранный период." : s === "error" ? "Ошибка загрузки свечей." : "";
+        } });
+        tile.core.fitContent();
+      } catch (err) {
+        if (status) status.textContent = "Ошибка: " + err.message;
+      }
+      tile.updateHeader();
+    },
+
+    // ------------------------------------------------------- persistence --
+
+    _saveWorkspaceState() {
+      try {
+        localStorage.setItem(WORKSPACE_STATE_KEY, JSON.stringify({
+          layoutMode: this.layoutMode,
+          tiles: this.tiles.map((t) => t.toConfig()),
+          activeIndex: this.tiles.findIndex((t) => t.id === this.activeTileId),
+        }));
+      } catch (e) { /* localStorage unavailable - workspace just won't restore next visit */ }
+    },
+
+    _restoreWorkspaceState() {
+      try {
+        const raw = localStorage.getItem(WORKSPACE_STATE_KEY);
+        if (!raw) return false;
+        const state = JSON.parse(raw);
+        if (!state || !Array.isArray(state.tiles) || !state.tiles.length) return false;
+        this.layoutMode = LAYOUT_TILE_COUNT[state.layoutMode] ? state.layoutMode : "1";
+        const count = LAYOUT_TILE_COUNT[this.layoutMode];
+        this.tiles = state.tiles.slice(0, count).map((cfg) => new CE.ChartTile(cfg));
+        while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
+        const activeIdx = Number.isInteger(state.activeIndex) && state.activeIndex >= 0 && state.activeIndex < this.tiles.length ? state.activeIndex : 0;
+        this.activeTileId = this.tiles[activeIdx].id;
+        return true;
+      } catch (e) {
+        return false;
+      }
+    },
+
+    // --------------------------------------------------------- toolbar ---
+
+    _selectSymbol(ticker) {
+      this.symbol = ticker;
+      this.layout = null;
+      const sel = this.root.querySelector("#caSymbol");
+      if (sel) sel.value = ticker;
+      if (this.watchlist) this.watchlist.setActive(ticker);
+      if (this.activeTile) this.activeTile.updateHeader();
+      this._reload();
+      this._saveWorkspaceState();
+    },
+
+    _onFullscreenChange(active) {
+      const btn = this.root.querySelector("#caFullscreenBtn");
+      if (!btn) return;
+      btn.textContent = active ? "⤢" : "⛶";
+      btn.title = active ? "Выйти из полноэкранного режима (Esc)" : "Полноэкранный режим рабочего пространства";
+      btn.setAttribute("aria-label", btn.title);
+      btn.classList.toggle("active", active);
+      // The container's box size changes on the fullscreen transition; each
+      // tile's own ResizeObserver picks this up, but nudging every tile
+      // explicitly avoids a one-frame stale layout on browsers that defer
+      // the ResizeObserver callback until the next paint.
+      requestAnimationFrame(() => this.tiles.forEach((t) => t.core && t.core._onResize()));
     },
 
     _applyRangePreset(days) {
@@ -164,6 +405,7 @@
       this.root.querySelector("#caFrom").value = this.from;
       this.root.querySelector("#caTo").value = this.to;
       this._reload();
+      this._saveWorkspaceState();
     },
 
     async _loadOrInit() {
@@ -183,23 +425,16 @@
       this.root.querySelector("#caTimeframe").value = this.timeframe;
       this.root.querySelector("#caFrom").value = this.from;
       this.root.querySelector("#caTo").value = this.to;
+      if (this.watchlist) this.watchlist.setActive(this.symbol);
+      if (this.activeTile) this.activeTile.updateHeader();
       await this._reload();
       const full = await CE.api.getLayout(layout.id);
       this.drawingMgr.loadDrawings(full.drawings || []);
       (layout.indicators || []).forEach((ind) => this.indicatorMgr.add(ind.type, ind.params));
     },
 
-    async _reload() {
-      const status = this.root.querySelector("#caStatus");
-      status.textContent = "Загрузка свечей…";
-      try {
-        await this.core.load({ symbol: this.symbol, board: this.board, timeframe: this.timeframe, from: this.from, to: this.to, limit: 5000, onState: (s) => {
-          status.textContent = s === "loading" ? "Загрузка свечей…" : s === "empty" ? "Нет данных за выбранный период." : s === "error" ? "Ошибка загрузки свечей." : "";
-        } });
-        this.core.fitContent();
-      } catch (err) {
-        status.textContent = "Ошибка: " + err.message;
-      }
+    _reload() {
+      return this._loadTile(this.activeTile);
     },
 
     _buildIndicatorPopover() {
@@ -212,8 +447,11 @@
       pop.querySelectorAll("input[data-ind]").forEach((cb) => {
         cb.onchange = () => {
           const id = cb.dataset.ind;
-          if (cb.checked) this["_ind_" + id] = this.indicatorMgr.add(id, {});
-          else if (this["_ind_" + id]) { this.indicatorMgr.remove(this["_ind_" + id]); this["_ind_" + id] = null; }
+          const tile = this.activeTile;
+          if (!tile) return;
+          const key = "_ind_" + id;
+          if (cb.checked) tile[key] = tile.indicatorMgr.add(id, {});
+          else if (tile[key]) { tile.indicatorMgr.remove(tile[key]); tile[key] = null; }
         };
       });
       this.root.querySelector("#caIndicatorsBtn").onclick = () => pop.classList.toggle("hidden");
@@ -271,27 +509,33 @@
       return this.layout;
     },
 
-    _onDrawingsChanged(detail) {
+    _onDrawingsChanged(tile, detail) {
       if (detail.loaded || detail.history) return; // bulk operations - nothing to diff/save per-id
       const id = detail.created || detail.updated;
-      if (id) this._queueSave(id);
+      if (id) this._queueSave(tile, id);
       if (detail.removed) this._queueDelete(detail.removed);
     },
 
-    _queueSave(id) {
-      clearTimeout(this._saveQueue[id]);
-      this._saveQueue[id] = setTimeout(() => this._flushSave(id), 500);
+    _queueSave(tile, id) {
+      const key = tile.id + ":" + id;
+      clearTimeout(this._saveQueue[key]);
+      this._saveQueue[key] = setTimeout(() => this._flushSave(tile, id), 500);
     },
 
-    async _flushSave(id) {
-      const d = this.drawingMgr.drawings.find((x) => x.id === id);
+    async _flushSave(tile, id) {
+      const d = tile.drawingMgr.drawings.find((x) => x.id === id);
       if (!d) return;
-      await this._persistDrawing(d);
+      await this._persistDrawing(tile, d);
     },
 
-    async _persistDrawing(d) {
-      const layout = await this._ensureLayout();
-      const payload = { type: d.type, symbol: this.symbol, timeframe: this.timeframe, points: d.points, properties: d.properties, locked: d.locked, hidden: d.hidden, zIndex: d.zIndex };
+    async _persistDrawing(tileOrDrawing, maybeDrawing) {
+      // Called two ways: (tile, drawing) from the autosave path above, or
+      // (drawing) from _saveAsTemplate where "the active tile" is implied.
+      const tile = maybeDrawing ? tileOrDrawing : this.activeTile;
+      const d = maybeDrawing || tileOrDrawing;
+      const layout = tile === this.activeTile ? await this._ensureLayout() : null;
+      if (!layout) return; // autosave for a non-active tile has no persisted layout target yet
+      const payload = { type: d.type, symbol: tile.symbol, timeframe: tile.timeframe, points: d.points, properties: d.properties, locked: d.locked, hidden: d.hidden, zIndex: d.zIndex };
       if (d._backendId) return CE.api.updateDrawing(d._backendId, payload).catch(() => {});
       const created = await CE.api.createDrawing(layout.id, payload).catch(() => null);
       if (created) d._backendId = created.id;
@@ -305,7 +549,8 @@
 
     _renderProps() {
       const panel = this.root.querySelector("#caProps");
-      const d = this.drawingMgr.drawings.find((x) => x.id === this.drawingMgr.selectedId);
+      const dm = this.drawingMgr;
+      const d = dm ? dm.drawings.find((x) => x.id === dm.selectedId) : null;
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
       panel.innerHTML = `
@@ -323,27 +568,29 @@
         <button class="secondary" id="propDuplicate">Дублировать (Ctrl+D)</button>
         <button class="secondary" id="propDelete">Удалить</button>
       `;
-      panel.querySelector("#propColor").oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { color: e.target.value } });
-      panel.querySelector("#propWidth").oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
-      panel.querySelector("#propLocked").onchange = (e) => this.drawingMgr.updateDrawing(d.id, { locked: e.target.checked });
-      panel.querySelector("#propHidden").onchange = (e) => this.drawingMgr.updateDrawing(d.id, { hidden: e.target.checked });
+      panel.querySelector("#propColor").oninput = (e) => dm.updateDrawing(d.id, { properties: { color: e.target.value } });
+      panel.querySelector("#propWidth").oninput = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
+      panel.querySelector("#propLocked").onchange = (e) => dm.updateDrawing(d.id, { locked: e.target.checked });
+      panel.querySelector("#propHidden").onchange = (e) => dm.updateDrawing(d.id, { hidden: e.target.checked });
       const textInput = panel.querySelector("#propText");
-      if (textInput) textInput.oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { text: e.target.value } });
+      if (textInput) textInput.oninput = (e) => dm.updateDrawing(d.id, { properties: { text: e.target.value } });
       if (isPosition) {
-        panel.querySelector("#propQty").oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { quantity: Number(e.target.value) } });
-        panel.querySelector("#propStopPct").oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
-        panel.querySelector("#propTakePct").oninput = (e) => this.drawingMgr.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
+        panel.querySelector("#propQty").oninput = (e) => dm.updateDrawing(d.id, { properties: { quantity: Number(e.target.value) } });
+        panel.querySelector("#propStopPct").oninput = (e) => dm.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
+        panel.querySelector("#propTakePct").oninput = (e) => dm.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
       }
-      panel.querySelector("#propDuplicate").onclick = () => this.drawingMgr.duplicateDrawing(d.id);
-      panel.querySelector("#propDelete").onclick = () => this.drawingMgr.removeDrawing(d.id);
+      panel.querySelector("#propDuplicate").onclick = () => dm.duplicateDrawing(d.id);
+      panel.querySelector("#propDelete").onclick = () => dm.removeDrawing(d.id);
     },
 
     _renderObjects() {
       const panel = this.root.querySelector("#caObjects");
-      this.root.querySelector('.ca-side-tab[data-side="objects"]').textContent = `Объекты (${this.drawingMgr.drawings.length})`;
-      panel.innerHTML = this.drawingMgr.drawings.length
-        ? this.drawingMgr.drawings.map((d) => `
-            <div class="ca-object-row ${d.id === this.drawingMgr.selectedId ? "active" : ""}" data-obj="${d.id}">
+      const dm = this.drawingMgr;
+      const drawings = dm ? dm.drawings : [];
+      this.root.querySelector('.ca-side-tab[data-side="objects"]').textContent = `Объекты (${drawings.length})`;
+      panel.innerHTML = drawings.length
+        ? drawings.map((d) => `
+            <div class="ca-object-row ${d.id === dm.selectedId ? "active" : ""}" data-obj="${d.id}">
               <span>${CE.Drawings.TOOL_DEFS[d.type].label}</span>
               <span class="ca-object-actions">
                 <button data-toggle-hidden="${d.id}" title="Показать/скрыть">${d.hidden ? "🙈" : "👁"}</button>
@@ -352,10 +599,10 @@
               </span>
             </div>`).join("")
         : `<div class="muted-note">Пока нет объектов разметки.</div>`;
-      panel.querySelectorAll("[data-obj]").forEach((row) => (row.onclick = (e) => { if (!e.target.closest("button")) this.drawingMgr.select(row.dataset.obj); }));
-      panel.querySelectorAll("[data-toggle-hidden]").forEach((b) => (b.onclick = () => { const d = this.drawingMgr.drawings.find((x) => x.id === b.dataset.toggleHidden); this.drawingMgr.updateDrawing(d.id, { hidden: !d.hidden }); }));
-      panel.querySelectorAll("[data-toggle-locked]").forEach((b) => (b.onclick = () => { const d = this.drawingMgr.drawings.find((x) => x.id === b.dataset.toggleLocked); this.drawingMgr.updateDrawing(d.id, { locked: !d.locked }); }));
-      panel.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => this.drawingMgr.removeDrawing(b.dataset.remove)));
+      panel.querySelectorAll("[data-obj]").forEach((row) => (row.onclick = (e) => { if (!e.target.closest("button")) dm.select(row.dataset.obj); }));
+      panel.querySelectorAll("[data-toggle-hidden]").forEach((b) => (b.onclick = () => { const d = dm.drawings.find((x) => x.id === b.dataset.toggleHidden); dm.updateDrawing(d.id, { hidden: !d.hidden }); }));
+      panel.querySelectorAll("[data-toggle-locked]").forEach((b) => (b.onclick = () => { const d = dm.drawings.find((x) => x.id === b.dataset.toggleLocked); dm.updateDrawing(d.id, { locked: !d.locked }); }));
+      panel.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => dm.removeDrawing(b.dataset.remove)));
     },
 
     async _openOrderModal() {

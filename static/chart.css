@@ -49,10 +49,24 @@
 .star-btn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
 .star-btn:hover { color: #ffce54; }
 
-.ca-workspace { display: grid; grid-template-columns: 52px 1fr 300px; gap: 12px; align-items: start; }
-.tab-page.ca-fullscreen #chartsRoot,
-.ca-fullscreen .ca-workspace { position: fixed; inset: 0; z-index: 60; background: var(--bg); padding: 12px; margin: 0; }
-.ca-fullscreen .ca-chart-host { height: calc(100vh - 160px) !important; }
+.ca-workspace { display: grid; grid-template-columns: 52px 1fr 260px auto; gap: 12px; align-items: start; }
+
+/* Real Fullscreen API target is #chartsRoot itself (see FullscreenController
+ * in chart-engine/fullscreen.js) - only ONE element in the chain gets
+ * position:fixed. Previously both #chartsRoot *and* its .ca-workspace child
+ * had position:fixed;inset:0 with the same z-index, which - per CSS paint
+ * order - made the (later, positioned) workspace box render on top of the
+ * toolbar above it, permanently hiding the exit-fullscreen button. */
+#chartsRoot.is-fullscreen {
+  position: fixed; inset: 0; z-index: 9999; background: var(--bg);
+  padding: 12px; margin: 0; display: flex; flex-direction: column; gap: 10px;
+}
+#chartsRoot.is-fullscreen .ca-workspace { flex: 1 1 auto; min-height: 0; }
+#chartsRoot.is-fullscreen .ca-chart-col { height: 100%; }
+#chartsRoot.is-fullscreen .ca-tile-grid { flex: 1 1 auto; min-height: 0; height: auto !important; }
+/* The browser already renders :fullscreen elements filling the viewport;
+ * this mirrors the same box for the no-Fullscreen-API CSS fallback path. */
+#chartsRoot:fullscreen { width: 100vw; height: 100vh; }
 
 .ca-tools {
   display: flex; flex-direction: column; gap: 6px; padding: 8px 4px;
@@ -67,8 +81,58 @@
 .ca-tool-danger { color: var(--danger); margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
 
 .ca-chart-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.ca-chart-host { width: 100%; height: 560px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0c1019; }
-.ca-range-presets { display: flex; gap: 4px; }
+
+/* -------------------------------------------------------- multi-chart grid -- */
+
+.ca-layout-switch { display: flex; gap: 4px; }
+.ca-layout-btn {
+  width: 34px; height: 30px; border-radius: 7px; border: 1px solid var(--line); background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.ca-layout-btn:hover { border-color: var(--accent); }
+.ca-layout-btn.active { background: rgba(124,140,255,.16); border-color: var(--accent); }
+.ca-layout-icon { display: grid; gap: 2px; width: 16px; height: 12px; }
+.ca-layout-icon i { background: var(--muted); border-radius: 1px; }
+.ca-layout-btn.active .ca-layout-icon i { background: var(--accent); }
+
+.ca-tile-grid { display: grid; gap: 8px; min-height: 560px; }
+.ca-tile-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.ca-tile-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+.ca-tile-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.ca-tile-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+/* Only one chart on screen: the close button would have nothing to close
+ * down to, so hide it instead of guarding every click handler for it. */
+.ca-tile-grid.layout-1 .ca-tile-close { display: none; }
+
+.ca-tile {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+  border: 2px solid var(--line); border-radius: 10px; background: #0c1019;
+}
+.ca-tile.active { border-color: var(--accent); }
+.ca-tile.is-fullscreen { position: fixed; inset: 0; z-index: 9999; padding: 8px; background: var(--bg); border-radius: 0; }
+.ca-tile.is-fullscreen .ca-tile-chart-host { flex: 1 1 auto; height: auto !important; }
+.ca-tile:fullscreen { width: 100vw; height: 100vh; }
+
+.ca-tile-header {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: default;
+}
+.ca-tile-symbol { font-weight: 700; color: var(--text); }
+.ca-tile-tf { color: var(--muted); font-size: 10.5px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; }
+.ca-tile-spacer { flex: 1; }
+.ca-tile-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 4px; line-height: 1; }
+.ca-tile-btn:hover { color: var(--text); }
+.ca-tile-close:hover { color: var(--danger); }
+.ca-tile-chart-host { flex: 1 1 auto; min-height: 0; }
+
+@media (max-width: 980px) {
+  .ca-tile-grid.layout-2h,
+  .ca-tile-grid.layout-4 { grid-template-columns: 1fr; }
+  .ca-tile-grid.layout-4 { grid-template-rows: repeat(4, minmax(220px, 1fr)); }
+  .ca-tile-grid.layout-2v { grid-template-rows: repeat(2, minmax(220px, 1fr)); }
+  .ca-tile-grid { min-height: unset; }
+}
+.ca-range-presets { display: flex; gap: 4px; flex-wrap: wrap; }
 .range-preset {
   background: transparent; border: 1px solid var(--line); color: var(--muted);
   padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
@@ -95,6 +159,60 @@
 .ca-object-row:hover { background: rgba(255,255,255,.04); }
 .ca-object-row.active { background: rgba(124,140,255,.14); }
 .ca-object-actions button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 3px; }
+
+/* --------------------------------------------------------- right watchlist -- */
+
+#caWatchlistToggleBtn { display: none; }
+
+.ca-watchlist {
+  width: 280px; justify-self: end; transition: width .15s ease;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+  display: flex; flex-direction: column; overflow: hidden; min-height: 300px; max-height: 640px;
+}
+.ca-watchlist.wl-collapsed { width: 44px; }
+.ca-watchlist.wl-collapsed .wl-header input,
+.ca-watchlist.wl-collapsed .wl-tabs,
+.ca-watchlist.wl-collapsed .wl-list { display: none; }
+
+.wl-header { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); }
+.wl-header input[type=search] {
+  flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 7px; padding: 6px 8px; font-size: 12px;
+}
+.wl-tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
+.wl-tab {
+  flex: 1; background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 7px; padding: 5px 4px; font-size: 10.5px; cursor: pointer; white-space: nowrap;
+}
+.wl-tab.active { color: var(--text); border-color: var(--accent); background: rgba(124,140,255,.12); }
+.wl-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.wl-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 8px; cursor: pointer; }
+.wl-row:hover { background: rgba(255,255,255,.04); }
+.wl-row.active { background: rgba(124,140,255,.14); }
+.wl-star { background: none; border: none; color: var(--muted); font-size: 14px; cursor: pointer; padding: 0; width: 18px; flex: none; }
+.wl-star.active { color: #ffce54; }
+.wl-info { flex: 1; min-width: 0; }
+.wl-ticker { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.wl-name { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-price { text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+.wl-last { font-size: 12px; color: var(--text); }
+.wl-change { font-size: 11px; }
+
+.wl-mobile-backdrop { display: none; }
+
+@media (max-width: 980px) {
+  .ca-watchlist { display: none; }
+  .ca-watchlist.wl-mobile-open {
+    display: flex; position: fixed; inset: 0 0 0 auto; width: min(320px, 86vw); height: 100vh;
+    z-index: 75; border-radius: 0; border-left: 1px solid var(--line);
+  }
+  .ca-watchlist.wl-mobile-open.wl-collapsed { width: min(320px, 86vw); }
+  .ca-watchlist.wl-mobile-open.wl-collapsed .wl-header input,
+  .ca-watchlist.wl-mobile-open.wl-collapsed .wl-tabs,
+  .ca-watchlist.wl-mobile-open.wl-collapsed .wl-list { display: revert; }
+  #caWatchlistToggleBtn { display: inline-flex; align-items: center; justify-content: center; }
+  .wl-mobile-backdrop.show { display: block; position: fixed; inset: 0; background: rgba(5,7,12,.6); z-index: 74; }
+}
 
 .ca-indicator-menu, .ca-template-menu { position: relative; }
 .ca-popover {
