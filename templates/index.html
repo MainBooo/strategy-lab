@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MOEX Strategy Lab V3</title>
+  <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
+</head>
+<body>
+<main class="shell">
+<header class="hero"><div><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории — без ручной возни с файлами данных.</p></div><div class="status" id="status">Загрузка справочника MOEX…</div></header>
+
+<section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
+  <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
+</section>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button>
+</nav>
+
+<section id="tab-portfolio" class="tab-page">
+
+  <article class="card">
+    <div class="card-head"><div><span class="step">01</span><h2>Сформируйте портфель</h2></div></div>
+    <p class="lead">Выберите российские акции. Мы автоматически загрузим недостающие данные и подготовим портфель для бэктеста.</p>
+
+    <div class="catalog-toolbar">
+      <input id="catalogSearch" class="catalog-search" placeholder="Поиск по тикеру или названию, например Сбер или SBER">
+      <select id="catalogSector"><option value="">Все отрасли</option><option value="Финансы">Финансы</option><option value="Нефть и газ">Нефть и газ</option><option value="Металлургия">Металлургия</option><option value="IT">IT</option><option value="Прочее">Прочее</option></select>
+      <select id="catalogDataStatus"><option value="">Любой статус данных</option><option value="fresh">Данные есть</option><option value="stale">Требуют обновления</option><option value="none">Данных нет</option></select>
+      <label class="toggle"><input type="checkbox" id="catalogOnlyLiquid"><span>Только ликвидные</span></label>
+      <label class="toggle"><input type="checkbox" id="catalogOnlySelected"><span>Только выбранные</span></label>
+    </div>
+
+    <div class="preset-block">
+      <strong>Готовые наборы</strong>
+      <div class="preset-actions" id="presetActions"></div>
+    </div>
+
+    <div class="catalog-summary">
+      <span>Найдено: <strong id="catalogFoundCount">0</strong></span>
+      <span>Выбрано: <strong id="catalogSelectedCount">0</strong></span>
+      <button class="secondary" id="selectAllFiltered">Выбрать всё по фильтру</button>
+      <button class="secondary" id="clearCatalogSelection">Снять выбор</button>
+    </div>
+
+    <div id="selectedTickers" class="selected-tickers empty-selection">Инструменты не выбраны</div>
+
+    <div id="securityList" class="security-list"></div>
+
+    <div class="build-panel" id="buildPanel">
+      <div id="buildTargetBanner" class="build-target-banner hidden"></div>
+      <div class="form-grid three">
+        <label>Название портфеля <input id="portfolioNameInput" value="Мой портфель"></label>
+        <label>Стартовый капитал, ₽ <input id="buildCapital" type="number" value="1000000" step="10000"></label>
+        <label>Период данных <span class="tip" data-tip="Диапазон исторических свечей, которые будут загружены для новых инструментов. Для уже загруженных данных используется существующий диапазон, если он не устарел.">?</span>
+          <span class="range-inline"><input id="buildFrom" type="date" value="{{ defaults.from_date }}"><input id="buildTill" type="date" value="{{ defaults.till_date }}"></span>
+        </label>
+      </div>
+      <div class="allocation-row">
+        <strong>Распределение капитала</strong>
+        <div class="mode-tabs" id="allocationModes">
+          <button class="mode-tab active" data-mode="equal_lots">Одинаковое количество лотов</button>
+          <button class="mode-tab" data-mode="equal_capital">Поровну по капиталу</button>
+          <button class="mode-tab" data-mode="manual">Вручную</button>
+        </div>
+        <div id="allocationExtra"></div>
+      </div>
+      <button class="primary" id="buildPortfolioBtn">Сформировать портфель</button>
+      <div class="message" id="buildMessage"></div>
+    </div>
+
+    <div class="build-progress hidden" id="buildProgress">
+      <h3 id="buildProgressTitle">Подготавливаем портфель</h3>
+      <div class="progress-bar"><div class="progress-bar-fill" id="buildProgressFill"></div></div>
+      <div class="progress-meta">
+        <span id="buildProgressPercent">0%</span>
+        <span id="buildProgressStage">—</span>
+        <span id="buildProgressCounts">0 из 0</span>
+      </div>
+      <div id="buildProgressErrors" class="build-errors"></div>
+      <button class="secondary" id="cancelBuildBtn">Отменить</button>
+    </div>
+
+    <div class="build-success hidden" id="buildSuccess">
+      <button class="close-btn" id="buildSuccessClose" aria-label="Закрыть уведомление">×</button>
+      <div class="success-badge">✓</div>
+      <h3>Портфель сформирован</h3>
+      <p id="buildSuccessText"></p>
+      <div class="success-actions">
+        <button class="primary" id="successGoStrategy">Выбрать стратегию</button>
+        <button class="secondary" id="successGoBacktest">Перейти к бэктесту</button>
+        <button class="secondary" id="successOpenPortfolio">Открыть портфель</button>
+      </div>
+    </div>
+  </article>
+
+  <article class="card results-card"><div class="card-head"><div><span class="step">PORT</span><h2>Сохранённые портфели</h2></div></div><div id="portfolioList"></div></article>
+</section>
+
+<section id="tab-strategies" class="tab-page hidden">
+  <article class="card"><div class="card-head"><div><span class="step">02</span><h2>Библиотека стратегий</h2></div><div class="message" id="strategiesContext"></div></div><div id="strategyCards" class="strategy-grid"></div></article>
+</section>
+
+<section id="tab-backtest" class="tab-page hidden">
+
+  <article class="card" id="backtestNoPortfolio">
+    <div class="card-head"><div><span class="step">03</span><h2>Бэктест портфеля</h2></div></div>
+    <div class="empty">Сначала сформируйте портфель на вкладке «Портфель».<br><button class="secondary" id="goToPortfolioTab" style="margin-top:14px">Перейти к портфелю</button></div>
+  </article>
+
+  <div id="backtestBody" class="hidden">
+    <article class="card">
+      <div class="card-head"><div><span class="step">03</span><h2>Настройка бэктеста</h2></div></div>
+      <div class="form-grid three">
+        <label>Портфель <select id="backtestPortfolioSelect"></select></label>
+        <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
+        <label>&nbsp;<button class="secondary" id="applyStrategyPrompt" style="width:100%">Настроить стратегии портфеля</button></label>
+      </div>
+
+      <div class="ticker-select-head">
+        <strong>Выбрано для тестирования: <span id="backtestSelectedCount">0</span> из <span id="backtestTotalCount">0</span></strong>
+        <div class="ticker-select-actions">
+          <button class="secondary" id="selectAllTickers">Весь портфель</button>
+          <button class="secondary" id="clearAllTickers">Снять всё</button>
+          <button class="secondary" id="selectDataReadyTickers">Только с готовыми данными</button>
+          <select id="selectBySector"><option value="">По отрасли…</option></select>
+        </div>
+      </div>
+      <div id="backtestTickerChips" class="selected-tickers"></div>
+
+      <div class="combo-estimate" id="comboEstimate"></div>
+
+      <button class="primary" id="runBacktestBtn">Запустить бэктест</button>
+      <div class="message" id="backtestMessage"></div>
+
+      <div class="build-progress hidden" id="backtestProgress">
+        <div class="progress-bar"><div class="progress-bar-fill" id="backtestProgressFill"></div></div>
+        <div class="progress-meta">
+          <span id="backtestProgressPercent">0%</span>
+          <span id="backtestProgressStage">—</span>
+          <span id="backtestProgressCounts">0 из 0</span>
+        </div>
+        <button class="secondary" id="cancelBacktestBtn">Отменить</button>
+      </div>
+    </article>
+
+    <article class="card results-card hidden" id="backtestResults">
+      <div class="card-head"><div><span class="step">RESULT</span><h2>Результат портфеля</h2></div></div>
+      <div id="portfolioMetrics" class="metrics"></div>
+      <div id="backtestErrors" class="build-errors"></div>
+      <div id="byTickerTable"></div>
+      <div id="byStrategyTable"></div>
+    </article>
+
+    <article class="card results-card">
+      <div class="card-head"><div><span class="step">HISTORY</span><h2>История бэктестов</h2></div></div>
+      <div class="catalog-toolbar">
+        <select id="historyFilterPortfolio"><option value="">Все портфели</option></select>
+        <input id="historyFilterTicker" placeholder="Тикер">
+        <select id="historyFilterStrategy"><option value="">Все стратегии</option></select>
+        <select id="historyFilterStatus"><option value="">Любой статус</option><option value="completed">Завершён</option><option value="completed_with_errors">С ошибками</option><option value="failed">Ошибка</option><option value="canceled">Отменён</option></select>
+        <input id="historyFilterDateFrom" type="date">
+        <input id="historyFilterDateTo" type="date">
+      </div>
+      <div id="historyTable"></div>
+      <div class="history-pagination" id="historyPagination"></div>
+    </article>
+
+    <div class="trade-viewer hidden" id="tradeViewer">
+      <div class="trade-viewer-backdrop" id="tradeViewerBackdrop"></div>
+      <div class="trade-viewer-panel" role="dialog" aria-modal="true" aria-label="Сделки запуска">
+        <button class="close-btn" id="tradeViewerClose" aria-label="Закрыть">×</button>
+        <div id="tradeViewerHead"></div>
+        <div class="catalog-toolbar">
+          <select id="tvFilterTicker"><option value="">Все тикеры</option></select>
+          <select id="tvFilterStrategy"><option value="">Все стратегии</option></select>
+          <select id="tvFilterProfitable"><option value="">Все сделки</option><option value="true">Прибыльные</option><option value="false">Убыточные</option></select>
+          <select id="tvFilterDirection"><option value="">Long/Short</option><option value="long">Long</option><option value="short">Short</option></select>
+          <select id="tvFilterExitReason"><option value="">Причина выхода</option><option value="take">Take</option><option value="stop">Stop</option><option value="end_of_period">Конец периода</option></select>
+        </div>
+        <div id="tvTable"></div>
+        <div class="history-pagination" id="tvPagination"></div>
+        <div id="tradeDetail" class="trade-detail hidden"></div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+<script>
+window.STRATEGIES={{ strategies|tojson }};
+window.SECURITY_PRESETS={{ security_presets|tojson }};
+window.PRESET_LABELS={{ preset_labels|tojson }};
+</script>
+<script src="{{ url_for('static',filename='app.js') }}"></script>
+</body></html>
