@@ -8,7 +8,9 @@
 </head>
 <body>
 <main class="shell">
-<header class="hero"><div><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории — без ручной возни с файлами данных.</p></div><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div></header>
+<header class="hero"><div><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории — без ручной возни с файлами данных.</p></div><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><button class="secondary hero-data-btn" id="openMarketDataManager" type="button">Хранилище данных</button><div class="status" id="status">Загрузка справочника MOEX…</div></header>
+
+<div id="marketDataManagerRoot"></div>
 
 <section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
   <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
@@ -220,5 +222,15 @@ window.PRESET_LABELS={{ preset_labels|tojson }};
 <script src="{{ url_for('static',filename='portfolio-balance.js') }}"></script>
 <script src="{{ url_for('static',filename='trade-chart.js') }}"></script>
 <script src="{{ url_for('static',filename='watchlist-sidebar.js') }}"></script>
+<script src="{{ url_for('static',filename='market-data-manager.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-analysis.js') }}"></script>
+<script>
+(function(){
+  var root=document.getElementById('marketDataManagerRoot');
+  var btn=document.getElementById('openMarketDataManager');
+  if(!root||!btn)return;
+  var manager=new MarketDataManager(root);
+  btn.onclick=function(){manager.open()};
+})();
+</script>
 </body></html>

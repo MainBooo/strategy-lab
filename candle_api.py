@@ -1,66 +1,74 @@
 from __future__ import annotations
 
-"""Generic OHLCV candle lookup for the "Analysis" chart module.
+"""Generic OHLCV candle lookup for the "Analysis" chart module and Market
+Replay, backed by the centralized SQLite candle store (market_data_store.py)
+instead of a per-request CSV cache. Candles accumulate across requests -
+a ticker/timeframe/date-range only ever needs to be fetched from MOEX once;
+every later request (from any browser tab, any user) is served straight
+from the indexed local database.
 
-Separate from the portfolio-builder's data pipeline (DATA_DIR /
+Still separate from the portfolio-builder's data pipeline (DATA_DIR /
 FILENAME_RE / _local_data_index in app.py) on purpose: that pipeline is
-keyed to a single hardcoded 10-minute interval per portfolio instrument
-and its filename regex only understands "<TICKER>_<minutes>m_..." names.
-Bolting multi-timeframe (including day/week/month, which MOEX addresses
-with non-"m" interval codes) onto that regex would risk the existing
-portfolio/backtest flow. This module keeps its own cache directory and
-reuses downloader.download_moex_candles + strategies.common.load_candles
-for the actual fetch/parse - it does not reimplement candle downloading.
+keyed to a single hardcoded 10-minute interval per portfolio instrument and
+its own file-based conventions feed the (already well-tested) backtest
+engine. Changing what backtests read from is out of scope here - this
+module only serves the chart/replay read path.
 """
 
-import re
+import calendar
 import time
+from datetime import date
 from pathlib import Path
 
-import pandas as pd
+import market_data_store as store
+import market_data_sync as sync
+from timeframes import AGGREGATE_TIMEFRAMES, TIMEFRAME_TO_MOEX_INTERVAL, canonical
 
-from downloader import download_moex_candles
-from strategies.common import load_candles
+# Re-exported for backward compatibility (older tests/callers import these
+# from candle_api directly).
+__all__ = ["TIMEFRAME_TO_MOEX_INTERVAL", "AGGREGATE_TIMEFRAMES", "get_candles", "tick_availability"]
 
-TIMEFRAME_TO_MOEX_INTERVAL = {
-    "1m": 1, "10m": 10, "60m": 60, "1h": 60,
-    "1d": 24, "1w": 7, "1mo": 31,
+DEFAULT_MARKET = "shares"
+DEFAULT_ENGINE = "stock"
+
+# How long a completed forward-sync stays "fresh enough" before a new
+# request to the same (ticker, board, timeframe) triggers another MOEX
+# round trip. Finer timeframes go stale faster (intraday bars keep forming).
+_FRESHNESS_SECONDS = {
+    "1m": 120, "10m": 300, "60m": 900,
+    "1d": 6 * 3600, "1w": 12 * 3600, "1mo": 24 * 3600,
 }
 
-# Timeframes MOEX ISS does not expose directly. Built by aggregating a
-# native ("base") timeframe on real candles only - never synthesized or
-# randomly generated. `bucket_seconds` must be an exact multiple of the
-# base timeframe's own interval so bucket boundaries always land on a real
-# base-candle boundary.
-AGGREGATE_TIMEFRAMES = {
-    "30m": {"base": "10m", "bucket_seconds": 30 * 60},
-    "4h": {"base": "60m", "bucket_seconds": 4 * 60 * 60},
-}
 
-_CACHE_FILE_RE = re.compile(r"^([A-Z0-9]+)__([A-Z]+)__(\d+)__(\d{4}-\d{2}-\d{2})__(\d{4}-\d{2}-\d{2})\.csv$")
+def _date_to_ts(d: str) -> int:
+    # Naive-as-UTC convention (see market_data_sync.py) so this stays
+    # consistent with how stored candle timestamps were computed.
+    y, m, day = (int(x) for x in d.split("-"))
+    return calendar.timegm((y, m, day, 0, 0, 0, 0, 0, 0))
 
 
-def _cache_dir(data_dir: Path) -> Path:
-    d = data_dir / "chart_cache"
-    d.mkdir(exist_ok=True)
-    return d
+def _ensure_coverage(ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
+                      market: str, engine: str) -> None:
+    cov = store.coverage(ticker, board, timeframe)
+    from_ts = _date_to_ts(from_date)
+    till_ts = _date_to_ts(till_date) + 86399
 
+    if cov["candle_count"] == 0:
+        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                    mode="initial", from_date=from_date, till_date=till_date)
+        return
 
-def _cache_path(cache_dir: Path, ticker: str, board: str, interval: int, from_date: str, till_date: str) -> Path:
-    return cache_dir / f"{ticker}__{board}__{interval}__{from_date}__{till_date}.csv"
+    state = store.get_sync_state(ticker, board, timeframe) or {}
+    if from_ts < (cov["earliest_ts"] or from_ts) and not state.get("backfilled_complete"):
+        older_till = date.fromtimestamp(cov["earliest_ts"]).isoformat()
+        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                    mode="initial", from_date=from_date, till_date=older_till)
 
-
-def _find_cached(cache_dir: Path, ticker: str, board: str, interval: int) -> tuple[Path, str, str] | None:
-    """Newest cache file for (ticker, board, interval), or None."""
-    best = None
-    for p in cache_dir.glob(f"{ticker}__{board}__{interval}__*.csv"):
-        m = _CACHE_FILE_RE.match(p.name)
-        if not m:
-            continue
-        cached_from, cached_till = m.group(4), m.group(5)
-        if best is None or cached_till > best[2]:
-            best = (p, cached_from, cached_till)
-    return best
+    fresh_enough = bool(state.get("last_synced_at")) and \
+        (time.time() - state["last_synced_at"]) < _FRESHNESS_SECONDS.get(timeframe, 3600)
+    if till_ts > (cov["latest_ts"] or 0) and not fresh_enough:
+        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                    mode="continue", till_date=till_date)
 
 
 def _aggregate(candles: list[dict], bucket_seconds: int) -> list[dict]:
@@ -86,13 +94,13 @@ def _aggregate(candles: list[dict], bucket_seconds: int) -> list[dict]:
     return result
 
 
-def _get_aggregated_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from_date: str,
-                             till_date: str, limit: int, before: int | None) -> dict:
+def _get_aggregated_candles(*, ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
+                             limit: int, before: int | None, market: str, engine: str) -> dict:
     agg = AGGREGATE_TIMEFRAMES[timeframe]
     base_interval_seconds = TIMEFRAME_TO_MOEX_INTERVAL[agg["base"]] * 60
     factor = agg["bucket_seconds"] // base_interval_seconds
-    base = get_candles(data_dir, ticker=ticker, board=board, timeframe=agg["base"], from_date=from_date,
-                        till_date=till_date, limit=limit * factor + factor, before=before)
+    base = get_candles(None, ticker=ticker, board=board, timeframe=agg["base"], from_date=from_date,
+                        till_date=till_date, limit=limit * factor + factor, before=before, market=market, engine=engine)
     bars = _aggregate(base["candles"], agg["bucket_seconds"])
     # The oldest bucket can be partial if the base fetch was truncated
     # mid-bucket (base["nextCursor"] set): drop it instead of showing a
@@ -103,12 +111,25 @@ def _get_aggregated_candles(data_dir: Path, *, ticker: str, board: str, timefram
     truncated = len(bars) > limit
     bars = bars[-limit:] if limit else bars
     next_cursor = bars[0]["time"] if bars and (truncated or base["nextCursor"] is not None) else None
-    return {"candles": bars, "nextCursor": next_cursor}
+    return {
+        "candles": bars, "nextCursor": next_cursor,
+        "hasOlder": next_cursor is not None,
+        "hasNewer": base.get("hasNewer", False),
+        "actualFrom": bars[0]["time"] if bars else None,
+        "actualTill": bars[-1]["time"] if bars else None,
+    }
 
 
-def get_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
-                 limit: int, before: int | None = None) -> dict:
-    """Returns {"candles": [...], "nextCursor": int|None} - unix-seconds OHLCV.
+def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
+                 limit: int, before: int | None = None, market: str = DEFAULT_MARKET,
+                 engine: str = DEFAULT_ENGINE) -> dict:
+    """Returns {"candles": [...], "nextCursor": int|None, "hasOlder": bool,
+    "hasNewer": bool, "actualFrom": int|None, "actualTill": int|None} -
+    unix-seconds OHLCV, ascending.
+
+    `data_dir` is accepted (and ignored) for backward compatibility with
+    existing call sites; candle data lives in the SQLite store now, not on
+    a per-request filesystem path.
 
     from_date/till_date bound the window we're willing to serve; `before`
     (unix seconds), if given, additionally caps the latest bar returned so
@@ -117,39 +138,42 @@ def get_candles(data_dir: Path, *, ticker: str, board: str, timeframe: str, from
     """
     ticker = ticker.upper()
     if timeframe in AGGREGATE_TIMEFRAMES:
-        return _get_aggregated_candles(data_dir, ticker=ticker, board=board, timeframe=timeframe,
-                                        from_date=from_date, till_date=till_date, limit=limit, before=before)
+        return _get_aggregated_candles(ticker=ticker, board=board, timeframe=timeframe, from_date=from_date,
+                                        till_date=till_date, limit=limit, before=before, market=market, engine=engine)
     if timeframe not in TIMEFRAME_TO_MOEX_INTERVAL:
         raise ValueError(f"Неизвестный таймфрейм: {timeframe}")
-    interval = TIMEFRAME_TO_MOEX_INTERVAL[timeframe]
-    cache_dir = _cache_dir(data_dir)
+    canon_tf = canonical(timeframe)
 
-    cached = _find_cached(cache_dir, ticker, board, interval)
-    source: Path
-    if cached and cached[1] <= from_date and cached[2] >= till_date:
-        source = cached[0]
-    else:
-        span_from = min(from_date, cached[1]) if cached else from_date
-        span_till = max(till_date, cached[2]) if cached else till_date
-        source = _cache_path(cache_dir, ticker, board, interval, span_from, span_till)
-        download_moex_candles(ticker, board, interval, span_from, span_till, source)
-        if cached and cached[0] != source:
-            cached[0].unlink(missing_ok=True)
+    _ensure_coverage(ticker, board, canon_tf, from_date, till_date, market, engine)
 
-    df = load_candles(source, from_date, till_date)
-    if before is not None:
-        df = df[df["begin"] < pd.to_datetime(before, unit="s")]
-    truncated = len(df) > limit
-    df = df.tail(limit)
+    from_ts = _date_to_ts(from_date)
+    till_ts = _date_to_ts(till_date) + 86399
+    candles = store.get_candles(ticker, board, canon_tf, ts_from=from_ts, ts_to=till_ts, before=before, limit=limit)
 
-    candles = [
-        {
-            "time": int(row["begin"].timestamp()),
-            "open": float(row["open"]), "high": float(row["high"]),
-            "low": float(row["low"]), "close": float(row["close"]),
-            "volume": float(row["volume"]) if "volume" in df.columns and pd.notna(row.get("volume")) else 0,
-        }
-        for _, row in df.iterrows()
-    ]
-    next_cursor = candles[0]["time"] if candles and truncated else None
-    return {"candles": candles, "nextCursor": next_cursor}
+    cov = store.coverage(ticker, board, canon_tf)
+    next_cursor = candles[0]["time"] if len(candles) == limit else None
+    has_newer = bool(candles) and cov["latest_ts"] is not None and candles[-1]["time"] < cov["latest_ts"]
+    return {
+        "candles": candles,
+        "nextCursor": next_cursor,
+        "hasOlder": next_cursor is not None,
+        "hasNewer": has_newer,
+        "actualFrom": candles[0]["time"] if candles else None,
+        "actualTill": candles[-1]["time"] if candles else None,
+    }
+
+
+def tick_availability(ticker: str) -> dict:
+    """Honest tick-data availability report. MOEX ISS does not expose a
+    historical trade-by-trade (tick) archive through this integration -
+    only OHLCV candles - so this always reports unavailable rather than
+    silently faking tick playback from candles."""
+    return {
+        "ticker": ticker.upper(),
+        "available": False,
+        "earliest": None,
+        "latest": None,
+        "reason": "Исторические тиковые данные (сделка за сделкой) недоступны через MOEX ISS "
+                  "в этой интеграции - только агрегированные OHLCV-свечи. Market Replay "
+                  "воспроизводит историю по свечам минимального доступного таймфрейма (1 минута).",
+    }

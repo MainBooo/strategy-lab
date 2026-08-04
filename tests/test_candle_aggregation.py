@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import pandas as pd
+import calendar
+import time
+
 import pytest
 
 import candle_api
+import market_data_store as store
 
 
 def test_aggregate_rolls_up_ohlcv_correctly():
@@ -51,29 +54,41 @@ def test_aggregate_no_fabricated_gaps():
     assert bars[1]["time"] == 16 * 3600
 
 
-def _fake_minute_download_factory(call_log, minutes_per_bar=60):
-    def _fake_download(ticker, board, interval, from_date, till_date, output_path):
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path):
+    store.init_db(tmp_path / "candles.db")
+    yield tmp_path
+
+
+def _fake_fetch_page_factory(call_log, minutes_per_bar, expected_interval=None):
+    """Fakes market_data_sync._fetch_page for the base timeframe an
+    aggregate (30m/4h) is built from - one page per sync, terminated by an
+    empty page on the next `start` offset, same contract as real MOEX."""
+    def _fake(session, *, engine, market, board, ticker, interval, from_date, till_date, start):
         call_log.append((ticker, board, interval, from_date, till_date))
-        assert interval == 60  # the 4h aggregate must fetch its declared 60m base, never a different one
-        start = pd.Timestamp(from_date) + pd.Timedelta(hours=9)  # arbitrary session start
-        end = pd.Timestamp(till_date) + pd.Timedelta(hours=21)
-        times = pd.date_range(start, end, freq=f"{minutes_per_bar}min")
-        df = pd.DataFrame({
-            "begin": times,
-            "open": [100 + i * 0.1 for i in range(len(times))],
-            "high": [100.5 + i * 0.1 for i in range(len(times))],
-            "low": [99.5 + i * 0.1 for i in range(len(times))],
-            "close": [100.2 + i * 0.1 for i in range(len(times))],
-            "volume": [1000] * len(times),
-        })
-        df.to_csv(output_path, index=False)
-        return {"rows": len(df)}
-    return _fake_download
+        if expected_interval is not None:
+            assert interval == expected_interval, "aggregate must fetch its declared base interval, never another one"
+        if start > 0:
+            return {"columns": [], "data": []}
+        start_ts = calendar.timegm(time.strptime(from_date, "%Y-%m-%d")) + 9 * 3600
+        end_ts = calendar.timegm(time.strptime(till_date, "%Y-%m-%d")) + 21 * 3600
+        columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+        rows = []
+        ts = start_ts
+        i = 0
+        while ts <= end_ts:
+            begin = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts))
+            rows.append([100 + i * 0.1, 100.2 + i * 0.1, 100.5 + i * 0.1, 99.5 + i * 0.1, 1.0, 1000, begin, begin])
+            ts += minutes_per_bar * 60
+            i += 1
+        return {"columns": columns, "data": rows}
+    return _fake
 
 
-def test_get_candles_4h_aggregates_from_60m_base(tmp_path, monkeypatch):
+def test_get_candles_4h_aggregates_from_60m_base(monkeypatch, tmp_path):
+    import market_data_sync as sync
     calls = []
-    monkeypatch.setattr(candle_api, "download_moex_candles", _fake_minute_download_factory(calls))
+    monkeypatch.setattr(sync, "_fetch_page", _fake_fetch_page_factory(calls, minutes_per_bar=60, expected_interval=60))
     result = candle_api.get_candles(tmp_path, ticker="SBER", board="TQBR", timeframe="4h",
                                      from_date="2025-01-01", till_date="2025-01-02", limit=100)
     assert calls, "4h must fetch real 60m candles, not synthesize its own data"
@@ -84,20 +99,25 @@ def test_get_candles_4h_aggregates_from_60m_base(tmp_path, monkeypatch):
         assert bar["open"] is not None and bar["close"] is not None
 
 
-def test_get_candles_30m_aggregates_from_10m_base(tmp_path, monkeypatch):
-    def _fake_download(ticker, board, interval, from_date, till_date, output_path):
+def test_get_candles_30m_aggregates_from_10m_base(monkeypatch, tmp_path):
+    import market_data_sync as sync
+
+    def _fake(session, *, engine, market, board, ticker, interval, from_date, till_date, start):
         assert interval == 10
-        start = pd.Timestamp(from_date) + pd.Timedelta(hours=10)
-        end = pd.Timestamp(till_date) + pd.Timedelta(hours=18)
-        times = pd.date_range(start, end, freq="10min")
-        df = pd.DataFrame({
-            "begin": times,
-            "open": [200] * len(times), "high": [201] * len(times),
-            "low": [199] * len(times), "close": [200.5] * len(times), "volume": [500] * len(times),
-        })
-        df.to_csv(output_path, index=False)
-        return {"rows": len(df)}
-    monkeypatch.setattr(candle_api, "download_moex_candles", _fake_download)
+        if start > 0:
+            return {"columns": [], "data": []}
+        start_ts = calendar.timegm(time.strptime(from_date, "%Y-%m-%d")) + 10 * 3600
+        end_ts = calendar.timegm(time.strptime(till_date, "%Y-%m-%d")) + 18 * 3600
+        columns = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+        rows = []
+        ts = start_ts
+        while ts <= end_ts:
+            begin = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts))
+            rows.append([200, 200.5, 201, 199, 1.0, 500, begin, begin])
+            ts += 600
+        return {"columns": columns, "data": rows}
+
+    monkeypatch.setattr(sync, "_fetch_page", _fake)
     result = candle_api.get_candles(tmp_path, ticker="GAZP", board="TQBR", timeframe="30m",
                                      from_date="2025-01-01", till_date="2025-01-01", limit=50)
     assert result["candles"]
@@ -110,8 +130,9 @@ def test_get_candles_30m_aggregates_from_10m_base(tmp_path, monkeypatch):
     assert result["candles"][0]["volume"] == 1500
 
 
-def test_limit_and_next_cursor_propagate_through_aggregation(tmp_path, monkeypatch):
-    monkeypatch.setattr(candle_api, "download_moex_candles", _fake_minute_download_factory([]))
+def test_limit_and_next_cursor_propagate_through_aggregation(monkeypatch, tmp_path):
+    import market_data_sync as sync
+    monkeypatch.setattr(sync, "_fetch_page", _fake_fetch_page_factory([], minutes_per_bar=60, expected_interval=60))
     result = candle_api.get_candles(tmp_path, ticker="SBER", board="TQBR", timeframe="4h",
                                      from_date="2025-01-01", till_date="2025-01-05", limit=2)
     assert len(result["candles"]) == 2

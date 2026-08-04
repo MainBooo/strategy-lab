@@ -481,4 +481,48 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 .trade-viewer-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
 .trade-viewer-panel{position:relative;width:min(1100px,94vw);max-height:90vh;overflow:auto;background:#0d1220;border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
 .trade-detail{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}
+
+/* ---------- Market data manager modal ---------- */
+.hero-data-btn{align-self:center;white-space:nowrap;width:auto;padding:11px 16px;font-size:13px}
+#marketDataManagerRoot{display:none}
+#marketDataManagerRoot.mdm-open{display:block}
+.mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
+.mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
+.mdm-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line)}
+.mdm-head h3{margin:0;font-size:18px}
+.mdm-body{padding:20px 24px;overflow:auto}
+.mdm-controls{display:flex;flex-direction:column;gap:12px;margin-bottom:16px}
+.mdm-controls #mdmSearch{width:100%;height:40px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--text);padding:0 12px;font-size:14px}
+.mdm-tf-picker{display:flex;flex-wrap:wrap;gap:8px}
+.mdm-tf-chip{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);cursor:pointer;font-size:13px;min-height:36px}
+.mdm-tf-chip input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.mdm-mode{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)}
+.mdm-mode label{display:flex;align-items:center;gap:6px;min-height:44px;cursor:pointer}
+.mdm-mode input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+.mdm-actions{display:flex;flex-wrap:wrap;gap:8px}
+.mdm-actions button{width:auto;margin-top:0;padding:10px 14px;font-size:13px;min-height:40px}
+.mdm-progress{margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.03)}
+.mdm-progress.hidden{display:none}
+.mdm-progress-bar{height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;margin-bottom:8px}
+.mdm-progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s ease}
+.mdm-progress-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+.mdm-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;overflow:auto}
+.mdm-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02)}
+.mdm-row-check{display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;cursor:pointer}
+.mdm-row-check input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
+.mdm-row-main{flex:1;min-width:0}
+.mdm-row-title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.mdm-row-title .muted{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mdm-row-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.mdm-tf-badge{font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.mdm-tf-badge.mdm-tf-ok{color:var(--accent-2);border-color:rgba(77,212,172,.35)}
+.mdm-tf-badge.mdm-tf-failed{color:var(--danger);border-color:rgba(255,112,129,.35)}
+.mdm-tf-badge.mdm-tf-running{color:#c8d0ff;border-color:rgba(124,140,255,.4)}
+.mdm-tf-badge.mdm-tf-empty{opacity:.45}
+.mdm-row-updated{font-size:11px;color:var(--muted);white-space:nowrap}
+@media(max-width:720px){
+  .mdm-modal{width:96vw;max-height:92vh;top:4vh;left:2vw;transform:none}
+  .mdm-row{flex-wrap:wrap}
+  .mdm-row-updated{width:100%;text-align:left}
+}
 @media(max-width:820px){.trade-viewer-panel{padding:18px;width:96vw}}

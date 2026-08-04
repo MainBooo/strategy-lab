@@ -16,7 +16,10 @@ from flask import Flask,jsonify,render_template,request,send_file,Response
 
 import backtests_db as bdb
 import charts_db as cdb
-from candle_api import get_candles
+import legacy_candle_migration
+import market_data_store as mds
+import market_data_sync as mds_sync
+from candle_api import get_candles,tick_availability
 from feature_flags import has_feature
 from downloader import download_moex_candles
 from jobs import JobStore
@@ -30,6 +33,7 @@ from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
 from strategies.head_shoulders import run_head_shoulders
 from strategies.simple_strategies import RUNNERS,STRATEGY_CATALOG
+from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES
 
 BASE_DIR=Path(__file__).resolve().parent; DATA_DIR=BASE_DIR/"data"; RESULTS_DIR=BASE_DIR/"results"; STORAGE=BASE_DIR/"storage"
 LOGS_DIR=Path(os.environ.get("MOEX_LAB_LOGS_DIR") or BASE_DIR/"logs")
@@ -38,7 +42,14 @@ CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
+mds.init_db(STORAGE/"market_data.db")
 CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
+try:
+    _migration_summary=legacy_candle_migration.migrate_if_empty(DATA_DIR)
+    if _migration_summary:
+        logging.getLogger(__name__).info("Imported legacy candle CSVs into market_data.db: %s",_migration_summary)
+except Exception:
+    logging.getLogger(__name__).exception("Legacy candle CSV migration failed (non-fatal, chart data will re-download as needed)")
 # No login exists in this app (single operator). Every chart-layout/drawing/
 # request row still carries a user id so real per-user ownership can be
 # switched on later without another migration - see charts_db.py and
@@ -936,6 +947,88 @@ def api_candles():
         app.logger.exception("Candle lookup failed for %s/%s/%s",ticker,board,timeframe)
         return jsonify({"error":f"Не удалось загрузить свечи {ticker}: {exc}"}),502
     return jsonify({"symbol":ticker,"board":board,"timeframe":timeframe,**result})
+
+@app.get("/api/chart/history")
+def api_chart_history():
+    """Spec-named alias for /api/candles - same handler, same response
+    shape (candles, nextCursor, hasOlder, hasNewer, actualFrom/Till)."""
+    return api_candles()
+
+@app.get("/api/market-data/tick-coverage")
+def market_data_tick_coverage():
+    ticker=(request.args.get("ticker") or "").strip().upper()
+    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    return jsonify(tick_availability(ticker))
+
+@app.get("/api/market-data/instruments")
+def market_data_instruments():
+    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    q=(request.args.get("q") or "").strip().upper()
+    items_map:dict[str,dict]={}
+    for it in catalog():
+        ticker=str(it.get("SECID","")).strip()
+        if not ticker:continue
+        items_map[ticker]={"ticker":ticker,"board":"TQBR","shortname":it.get("SHORTNAME",ticker),
+                            "timeframes":{},"last_synced_at":None}
+    for r in mds.list_instruments_status():
+        entry=items_map.setdefault(r["ticker"],{"ticker":r["ticker"],"board":r["board"],
+                                                  "shortname":r["ticker"],"timeframes":{},"last_synced_at":None})
+        entry["timeframes"][r["timeframe"]]={"candle_count":r["candle_count"],"earliest_ts":r["earliest_ts"],
+                                              "latest_ts":r["latest_ts"],"status":r["status"],
+                                              "progress_pct":r["progress_pct"],"last_error":r["last_error"]}
+        if r["last_synced_at"] and (entry["last_synced_at"] is None or r["last_synced_at"]>entry["last_synced_at"]):
+            entry["last_synced_at"]=r["last_synced_at"]
+    items=list(items_map.values())
+    if q:
+        items=[it for it in items if q in it["ticker"] or q in (it["shortname"] or "").upper()]
+    items.sort(key=lambda it:(0 if it["timeframes"] else 1,it["ticker"]))
+    return jsonify({"items":items,"native_timeframes":list(NATIVE_TIMEFRAMES),"all_timeframes":list(ALL_TIMEFRAMES)})
+
+def _execute_market_data_sync_job(job_id:str,tickers:list[str],timeframes:list[str],mode:str,board:str)->None:
+    total=len(tickers)*len(timeframes)
+    JOBS.update(job_id,status="running",stage="Загрузка…",total=total)
+    completed=0; errors=[]
+    for ticker in tickers:
+        if JOBS.is_cancel_requested(job_id):
+            JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
+        for tf in timeframes:
+            if JOBS.is_cancel_requested(job_id):
+                JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
+            JOBS.update(job_id,current_ticker=f"{ticker} {tf}",stage=f"{ticker} · {tf}: подключение к MOEX…")
+            def _progress(pages,rows_added,span_from,span_till,_ticker=ticker,_tf=tf):
+                JOBS.update(job_id,stage=f"{_ticker} · {_tf}: страница {pages}, +{rows_added} свечей")
+            try:
+                result=mds_sync.sync_native_timeframe(ticker,board,tf,mode=mode,progress_cb=_progress,
+                    should_cancel=lambda:JOBS.is_cancel_requested(job_id))
+                if result["status"]=="failed":
+                    errors.append({"ticker":ticker,"timeframe":tf,"error":result["error"]})
+                elif result["status"]=="canceled":
+                    JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
+            except Exception as exc:
+                app.logger.exception("market-data sync failed for %s/%s",ticker,tf)
+                errors.append({"ticker":ticker,"timeframe":tf,"error":str(exc)})
+            completed+=1
+            JOBS.update(job_id,completed=completed,percent=round(100*completed/total,1) if total else 100)
+    JOBS.update(job_id,status=("completed_with_errors" if errors else "completed"),
+                stage="Готово",errors=errors,percent=100)
+
+@app.post("/api/market-data/sync")
+def market_data_sync_start():
+    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    p=request.get_json(force=True) or {}
+    tickers=[str(t).strip().upper() for t in p.get("tickers",[]) if str(t).strip()]
+    if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
+    timeframes=[str(t) for t in p.get("timeframes",[])] or list(NATIVE_TIMEFRAMES)
+    bad_tf=[t for t in timeframes if t not in NATIVE_TIMEFRAMES]
+    if bad_tf:return jsonify({"error":f"Эти таймфреймы не загружаются напрямую (агрегируются на лету): {', '.join(bad_tf)}"}),400
+    mode=str(p.get("mode","initial")) if p.get("mode") in ("initial","continue","update") else "initial"
+    board=str(p.get("board","TQBR"))
+    total=len(tickers)*len(timeframes)
+    label=f"Загрузка данных: {', '.join(tickers[:3])}{'…' if len(tickers)>3 else ''}"
+    job=JOBS.create(None,label,total,kind="market_data_sync",
+                     extra={"tickers":tickers,"timeframes":timeframes,"mode":mode,"board":board})
+    threading.Thread(target=_execute_market_data_sync_job,args=(job["job_id"],tickers,timeframes,mode,board),daemon=True).start()
+    return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
 @app.get("/api/chart-layouts")
