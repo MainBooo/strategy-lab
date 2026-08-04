@@ -15,6 +15,9 @@ import pandas as pd
 from flask import Flask,jsonify,render_template,request,send_file,Response
 
 import backtests_db as bdb
+import charts_db as cdb
+from candle_api import get_candles
+from feature_flags import has_feature
 from downloader import download_moex_candles
 from jobs import JobStore
 from market_ticker import get_market_ticker,get_prices
@@ -34,6 +37,13 @@ DATA_DIR.mkdir(exist_ok=True);RESULTS_DIR.mkdir(exist_ok=True);STORAGE.mkdir(exi
 CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"portfolios.json")
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
+cdb.init_db(STORAGE/"charts.db")
+CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
+# No login exists in this app (single operator). Every chart-layout/drawing/
+# request row still carries a user id so real per-user ownership can be
+# switched on later without another migration - see charts_db.py and
+# feature_flags.py docstrings.
+CURRENT_USER_ID="local"
 # Real single-ticker backtests on a year of 10m candles take ~5-6s; 60s gives
 # a wide safety margin so this only trips on a genuine hang, not normal load.
 PORTFOLIO_INSTRUMENT_TIMEOUT=60
@@ -610,6 +620,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
                             "stop_loss":row.get("stop_price"),"take_profit":row.get("take_price"),
                             "exit_reason":row.get("exit_reason"),
                             "signal_metadata":{"mae_pct":mae,"mfe_pct":mfe,"bars_held":row.get("bars_held")},
+                            "signal_datetime":str(row["signal_time"]) if pd.notna(row.get("signal_time")) else None,
                         })
                 profit=(float(summary["final_capital_rub"])-float(summary["starting_capital_rub"])) if summary.get("final_capital_rub") is not None else None
                 result_id=bdb.add_result(run_id,ticker=ticker,strategy_id=strategy_id,strategy_name_snapshot=strategy_name,
@@ -752,6 +763,32 @@ def get_backtest_results(run_id):
     if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
     return jsonify(bdb.get_results(run_id))
 
+@app.get("/api/backtests/<run_id>/candles")
+def get_backtest_candles(run_id):
+    """Candles for the trade chart: the same local file+range the backtest
+    engine actually read for this ticker, not a fresh MOEX fetch - so the
+    chart can never show a different history than what produced the trades."""
+    run=bdb.get_run(run_id)
+    if not run:return jsonify({"error":"Запуск не найден"}),404
+    ticker=(request.args.get("ticker") or "").strip().upper()
+    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    portfolio=PORTFOLIOS.get(run["portfolio_id"])
+    instrument_file=next((i["file"] for i in (portfolio or {}).get("instruments",[]) if i["ticker"]==ticker),None)
+    if not instrument_file:
+        return jsonify({"error":f"Файл котировок {ticker} для этого портфеля не найден"}),404
+    source=DATA_DIR/Path(instrument_file).name
+    if not source.exists():
+        return jsonify({"error":f"Файл котировок {ticker} отсутствует на диске"}),404
+    try:
+        candles=load_candles(source,run.get("date_from"),run.get("date_to"))
+    except Exception as exc:
+        app.logger.exception("Failed to load candles for run %s/%s",run_id,ticker)
+        return jsonify({"error":f"Не удалось прочитать котировки {ticker}: {exc}"}),500
+    rows=[{"time":int(r["begin"].timestamp()),"open":float(r["open"]),"high":float(r["high"]),
+           "low":float(r["low"]),"close":float(r["close"]),"volume":float(r["volume"]) if "volume" in candles.columns and pd.notna(r.get("volume")) else 0}
+          for _,r in candles.iterrows()]
+    return jsonify({"symbol":ticker,"candles":rows,"nextCursor":None})
+
 @app.get("/api/backtests/<run_id>/trades")
 def get_backtest_trades(run_id):
     if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
@@ -839,5 +876,167 @@ def export_backtest_csv(run_id):
     buf=io.StringIO(); df.to_csv(buf,index=False)
     return Response(buf.getvalue(),mimetype="text/csv",
                      headers={"Content-Disposition":f'attachment; filename="backtest_{run_id}_trades.csv"'})
+
+
+# ----------------------------------------------------------------- charts --
+
+def _forbidden_feature(feature:str):
+    return jsonify({"error":f"Функция «{feature}» недоступна."}),403
+
+@app.get("/api/candles")
+def api_candles():
+    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    args=request.args
+    ticker=(args.get("symbol") or args.get("ticker") or "").strip().upper()
+    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    board=args.get("board","TQBR")
+    timeframe=args.get("timeframe","1d")
+    till_date=args.get("to") or date.today().isoformat()
+    from_date=args.get("from") or (date.today()-timedelta(days=365)).isoformat()
+    try:
+        from_date=date.fromtimestamp(int(from_date)).isoformat() if from_date.isdigit() else from_date
+        till_date=date.fromtimestamp(int(till_date)).isoformat() if till_date.isdigit() else till_date
+    except (ValueError,OSError):
+        return jsonify({"error":"Некорректный диапазон дат"}),400
+    try:limit=max(50,min(20000,int(args.get("limit",5000))))
+    except ValueError:return jsonify({"error":"Некорректный limit"}),400
+    before=args.get("before")
+    try:before=int(before) if before else None
+    except ValueError:return jsonify({"error":"Некорректный курсор before"}),400
+    try:
+        result=get_candles(DATA_DIR,ticker=ticker,board=board,timeframe=timeframe,from_date=from_date,
+                             till_date=till_date,limit=limit,before=before)
+    except ValueError as exc:
+        return jsonify({"error":str(exc)}),400
+    except Exception as exc:
+        app.logger.exception("Candle lookup failed for %s/%s/%s",ticker,board,timeframe)
+        return jsonify({"error":f"Не удалось загрузить свечи {ticker}: {exc}"}),502
+    return jsonify({"symbol":ticker,"board":board,"timeframe":timeframe,**result})
+
+
+@app.get("/api/chart-layouts")
+def list_chart_layouts():
+    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    return jsonify(cdb.list_layouts(CURRENT_USER_ID,context=request.args.get("context"),symbol=request.args.get("symbol")))
+
+@app.post("/api/chart-layouts")
+def create_chart_layout():
+    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    p=request.get_json(force=True) or {}
+    if not p.get("name"):return jsonify({"error":"Укажите название шаблона"}),400
+    layout=cdb.create_layout(CURRENT_USER_ID,context=p.get("context","analysis"),name=p["name"],symbol=p.get("symbol"),
+                               board=p.get("board"),timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),
+                               visible_to=p.get("visibleTo"),chart_type=p.get("chartType","candles"),
+                               settings=p.get("settings"),indicators=p.get("indicators"),is_default=bool(p.get("isDefault")))
+    return jsonify(layout),201
+
+@app.get("/api/chart-layouts/<layout_id>")
+def get_chart_layout(layout_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    layout=cdb.get_layout(layout_id,CURRENT_USER_ID)
+    if not layout:return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify({**layout,"drawings":cdb.list_drawings(layout_id,CURRENT_USER_ID)})
+
+@app.put("/api/chart-layouts/<layout_id>")
+def update_chart_layout(layout_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    p=request.get_json(force=True) or {}
+    layout=cdb.update_layout(layout_id,CURRENT_USER_ID,name=p.get("name"),symbol=p.get("symbol"),board=p.get("board"),
+                               timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
+                               chart_type=p.get("chartType"),settings=p.get("settings"),indicators=p.get("indicators"),
+                               is_default=p.get("isDefault"))
+    if not layout:return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify(layout)
+
+@app.delete("/api/chart-layouts/<layout_id>")
+def delete_chart_layout(layout_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not cdb.delete_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify({"ok":True})
+
+
+@app.get("/api/chart-layouts/<layout_id>/drawings")
+def list_chart_drawings(layout_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify(cdb.list_drawings(layout_id,CURRENT_USER_ID))
+
+@app.post("/api/chart-layouts/<layout_id>/drawings")
+def create_chart_drawing(layout_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    p=request.get_json(force=True) or {}
+    if not p.get("type") or not p.get("points"):return jsonify({"error":"Не указан тип или точки объекта"}),400
+    drawing=cdb.create_drawing(layout_id,CURRENT_USER_ID,type=p["type"],symbol=p.get("symbol"),timeframe=p.get("timeframe"),
+                                 points=p["points"],properties=p.get("properties"),locked=bool(p.get("locked")),
+                                 hidden=bool(p.get("hidden")),z_index=int(p.get("zIndex",0)))
+    if not drawing:return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify(drawing),201
+
+@app.put("/api/chart-drawings/<drawing_id>")
+def update_chart_drawing(drawing_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    p=request.get_json(force=True) or {}
+    fields={}
+    if "points" in p:fields["points"]=p["points"]
+    if "properties" in p:fields["properties"]=p["properties"]
+    if "locked" in p:fields["locked"]=p["locked"]
+    if "hidden" in p:fields["hidden"]=p["hidden"]
+    if "zIndex" in p:fields["z_index"]=p["zIndex"]
+    drawing=cdb.update_drawing(drawing_id,CURRENT_USER_ID,**fields)
+    if not drawing:return jsonify({"error":"Объект не найден"}),404
+    return jsonify(drawing)
+
+@app.delete("/api/chart-drawings/<drawing_id>")
+def delete_chart_drawing(drawing_id):
+    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.delete_drawing(drawing_id,CURRENT_USER_ID):return jsonify({"error":"Объект не найден"}),404
+    return jsonify({"ok":True})
+
+
+@app.post("/api/chart-screenshot")
+def upload_chart_screenshot():
+    """Stores a data: URL PNG exported by chart.takeScreenshot() so a strategy
+    request can reference it as a file path instead of inlining megabytes of
+    base64 into the request row."""
+    if not has_feature(CURRENT_USER_ID,"CHART_EXPORT"):return _forbidden_feature("CHART_EXPORT")
+    p=request.get_json(force=True) or {}
+    data_url=p.get("dataUrl","")
+    if not data_url.startswith("data:image/png;base64,"):return jsonify({"error":"Ожидается PNG data URL"}),400
+    import base64,uuid as _uuid
+    raw=base64.b64decode(data_url.split(",",1)[1])
+    if len(raw)>8_000_000:return jsonify({"error":"Скриншот слишком большой"}),400
+    name=f"{_uuid.uuid4().hex[:16]}.png"
+    (CHART_SCREENSHOTS_DIR/name).write_bytes(raw)
+    return jsonify({"path":f"chart_screenshots/{name}"}),201
+
+@app.get("/api/chart-screenshot/<name>")
+def get_chart_screenshot(name):
+    path=CHART_SCREENSHOTS_DIR/Path(name).name
+    if not path.exists():return jsonify({"error":"Файл не найден"}),404
+    return send_file(path)
+
+
+@app.post("/api/chart-strategy-requests")
+def create_chart_strategy_request():
+    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    p=request.get_json(force=True) or {}
+    if not (p.get("ideaDescription") or "").strip():return jsonify({"error":"Опишите торговую идею"}),400
+    layout_id=p.get("layoutId")
+    if layout_id and not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
+    req=cdb.create_strategy_request(CURRENT_USER_ID,layout_id=layout_id,symbol=p.get("symbol"),board=p.get("board"),
+                                      timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
+                                      drawings_snapshot=p.get("drawingsSnapshot"),indicators=p.get("indicators"),
+                                      idea_description=p.get("ideaDescription"),entry_conditions=p.get("entryConditions"),
+                                      exit_conditions=p.get("exitConditions"),stop_description=p.get("stopDescription"),
+                                      take_description=p.get("takeDescription"),position_management=p.get("positionManagement"),
+                                      risk_tolerance=p.get("riskTolerance"),comment=p.get("comment"),
+                                      screenshot_path=p.get("screenshotPath"))
+    return jsonify(req),201
+
+@app.get("/api/chart-strategy-requests")
+def list_chart_strategy_requests():
+    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    return jsonify(cdb.list_strategy_requests(CURRENT_USER_ID))
+
 
 if __name__=="__main__":app.run(host="127.0.0.1",port=5050,debug=False)
