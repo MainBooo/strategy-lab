@@ -27,6 +27,33 @@
       this.drawingMgr = null;
       this.fsCtrl = null;
       this.el = null;
+      this._rangeChangeCbs = [];
+      this._crosshairCbs = [];
+      this._applyingRange = false;
+      this._applyingCrosshair = false;
+    }
+
+    /** Fires with the tile's own visible logical range whenever the user
+     * pans/zooms it - used by the workspace to broadcast to other tiles
+     * when range sync is enabled. Suppressed while a range is being
+     * applied programmatically (applyLogicalRange) to avoid feedback loops. */
+    onRangeChange(cb) { this._rangeChangeCbs.push(cb); }
+    onCrosshairMove(cb) { this._crosshairCbs.push(cb); }
+
+    applyLogicalRange(range) {
+      if (!this.core || !range) return;
+      this._applyingRange = true;
+      try { this.core.chart.timeScale().setVisibleLogicalRange(range); }
+      finally { this._applyingRange = false; }
+    }
+
+    applyCrosshair(time, price) {
+      if (!this.core) return;
+      this._applyingCrosshair = true;
+      try {
+        if (time == null) this.core.chart.clearCrosshairPosition();
+        else this.core.chart.setCrosshairPosition(price ?? 0, time, this.core.candleSeries);
+      } finally { this._applyingCrosshair = false; }
     }
 
     /** Builds the DOM (header + chart host) inside `container` and creates
@@ -42,6 +69,8 @@
         <div class="ca-tile-header">
           <span class="ca-tile-symbol" data-role="symbol"></span>
           <span class="ca-tile-tf" data-role="tf"></span>
+          <span class="ca-tile-ohlc" data-role="ohlc"></span>
+          <span class="ca-tile-change" data-role="change"></span>
           <span class="ca-tile-spacer"></span>
           <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки">⛶</button>
           <button class="ca-tile-btn ca-tile-close" data-role="close" title="Закрыть плитку" aria-label="Закрыть плитку">✕</button>
@@ -52,6 +81,18 @@
       this.core = new CE.ChartCore(host, { showVolume: true });
       this.indicatorMgr = new CE.Indicators.PaneManager(this.core);
       this.drawingMgr = new CE.Drawings.DrawingManager(this.core);
+      this.core.onDataChanged(() => this._updatePriceHeader());
+      this.core.chart.subscribeCrosshairMove((param) => {
+        const bar = param && param.time != null ? this.core.candleAt(param.time) : null;
+        this._updatePriceHeader(bar);
+        if (!this._applyingCrosshair) {
+          const price = param && param.seriesData && param.seriesData.get(this.core.candleSeries);
+          this._crosshairCbs.forEach((cb) => cb(param && param.time, price && price.close));
+        }
+      });
+      this.core.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (!this._applyingRange) this._rangeChangeCbs.forEach((cb) => cb(range));
+      });
 
       this.fsCtrl = new CE.Fullscreen.FullscreenController(container, {
         className: "is-fullscreen",
@@ -79,6 +120,36 @@
       if (!this.el) return;
       this.el.querySelector('[data-role="symbol"]').textContent = this.symbol;
       this.el.querySelector('[data-role="tf"]').textContent = TF_LABEL[this.timeframe] || this.timeframe;
+    }
+
+    /** Shows the hovered bar's OHLC while the crosshair is over it (called
+     * with `bar`), falling back to the latest bar otherwise (called with no
+     * argument, e.g. from onDataChanged). Change % is always vs the bar
+     * immediately before whichever bar is currently shown. */
+    _updatePriceHeader(bar) {
+      if (!this.el || !this.core) return;
+      const candles = this.core.candles;
+      const ohlcEl = this.el.querySelector('[data-role="ohlc"]');
+      const changeEl = this.el.querySelector('[data-role="change"]');
+      if (!candles.length) {
+        ohlcEl.textContent = "";
+        changeEl.textContent = "";
+        return;
+      }
+      const target = bar || candles[candles.length - 1];
+      const idx = candles.indexOf(target);
+      const prev = idx > 0 ? candles[idx - 1] : null;
+      const fmt = (n) => (n == null ? "—" : n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      ohlcEl.textContent = `ОТКР ${fmt(target.open)}  МАКС ${fmt(target.high)}  МИН ${fmt(target.low)}  ЗАКР ${fmt(target.close)}`;
+      if (prev) {
+        const diff = target.close - prev.close;
+        const pct = prev.close ? (diff / prev.close) * 100 : 0;
+        changeEl.textContent = `${diff >= 0 ? "+" : ""}${fmt(diff)} (${diff >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+        changeEl.className = `ca-tile-change ${diff >= 0 ? "pnl-pos" : "pnl-neg"}`;
+      } else {
+        changeEl.textContent = "";
+        changeEl.className = "ca-tile-change";
+      }
     }
 
     setActiveVisual(active) {

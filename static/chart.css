@@ -100,6 +100,7 @@
 .ca-tile-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
 .ca-tile-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
 .ca-tile-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.ca-tile-grid.layout-6 { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; }
 /* Only one chart on screen: the close button would have nothing to close
  * down to, so hide it instead of guarding every click handler for it. */
 .ca-tile-grid.layout-1 .ca-tile-close { display: none; }
@@ -119,6 +120,8 @@
 }
 .ca-tile-symbol { font-weight: 700; color: var(--text); }
 .ca-tile-tf { color: var(--muted); font-size: 10.5px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; }
+.ca-tile-ohlc { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ca-tile-change { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ca-tile-spacer { flex: 1; }
 .ca-tile-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 4px; line-height: 1; }
 .ca-tile-btn:hover { color: var(--text); }
@@ -127,10 +130,16 @@
 
 @media (max-width: 980px) {
   .ca-tile-grid.layout-2h,
-  .ca-tile-grid.layout-4 { grid-template-columns: 1fr; }
+  .ca-tile-grid.layout-4,
+  .ca-tile-grid.layout-6 { grid-template-columns: 1fr; }
   .ca-tile-grid.layout-4 { grid-template-rows: repeat(4, minmax(220px, 1fr)); }
+  .ca-tile-grid.layout-6 { grid-template-rows: repeat(6, minmax(220px, 1fr)); }
   .ca-tile-grid.layout-2v { grid-template-rows: repeat(2, minmax(220px, 1fr)); }
   .ca-tile-grid { min-height: unset; }
+  .ca-tile-ohlc { display: none; }
+}
+@media (max-width: 620px) {
+  .ca-tile-change { display: none; }
 }
 .ca-range-presets { display: flex; gap: 4px; flex-wrap: wrap; }
 .range-preset {

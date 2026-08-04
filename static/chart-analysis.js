@@ -49,9 +49,10 @@
     { id: "2v", label: "2 графика вертикально", rows: 2, cols: 1 },
     { id: "2h", label: "2 графика горизонтально", rows: 1, cols: 2 },
     { id: "4", label: "4 графика", rows: 2, cols: 2 },
+    { id: "6", label: "6 графиков (3×2)", rows: 2, cols: 3 },
   ];
-  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "4": 4 };
-  const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "4", 4: "4" };
+  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "4": 4, "6": 6 };
+  const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "4", 4: "4", 5: "6", 6: "6" };
   const WORKSPACE_STATE_KEY = "moexlab_chart_workspace";
 
   const Page = {
@@ -137,6 +138,7 @@
           <button class="icon-btn" id="caUndoBtn" title="Отменить (Ctrl+Z)">↶</button>
           <button class="icon-btn" id="caRedoBtn" title="Повторить (Ctrl+Shift+Z)">↷</button>
           <button class="icon-btn" id="caSnapBtn" title="Прилипание к свечам">🧲</button>
+          <button class="icon-btn" id="caSyncBtn" title="Синхронизировать время, масштаб и перекрестие между графиками" aria-label="Синхронизация графиков">🔗</button>
           <button class="icon-btn" id="caWatchlistToggleBtn" title="Список тикеров">☰</button>
           <button class="icon-btn" id="caFullscreenBtn" title="Полноэкранный режим рабочего пространства">⛶</button>
         </div>
@@ -194,6 +196,12 @@
         this.drawingMgr.snapEnabled = !this.drawingMgr.snapEnabled;
         e.target.classList.toggle("active", this.drawingMgr.snapEnabled);
       };
+      this.root.querySelector("#caSyncBtn").classList.toggle("active", !!this.syncEnabled);
+      this.root.querySelector("#caSyncBtn").onclick = (e) => {
+        this.syncEnabled = !this.syncEnabled;
+        e.target.classList.toggle("active", this.syncEnabled);
+        this._saveWorkspaceState();
+      };
       this._fsCtrl = new CE.Fullscreen.FullscreenController(this.root, {
         className: "is-fullscreen",
         onChange: (active) => this._onFullscreenChange(active),
@@ -247,12 +255,26 @@
           tile.drawingMgr.onChange(() => {
             if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
           });
+          tile.onRangeChange((range) => { if (this.syncEnabled) this._broadcastRange(tile, range); });
+          tile.onCrosshairMove((time, price) => { if (this.syncEnabled) this._broadcastCrosshair(tile, time, price); });
           this._loadTile(tile);
         } else if (tile.el.parentElement !== grid) {
           grid.appendChild(tile.el);
         }
         tile.setActiveVisual(tile.id === this.activeTileId);
       });
+    },
+
+    /** Optional sync toggle (🔗 button): mirrors visible range and crosshair
+     * position across every tile so panning/zooming/hovering one chart
+     * moves the others the same way - each tile's own applyLogicalRange/
+     * applyCrosshair sets an internal flag while applying, so this never
+     * loops back into another broadcast. */
+    _broadcastRange(source, range) {
+      this.tiles.forEach((t) => { if (t !== source) t.applyLogicalRange(range); });
+    },
+    _broadcastCrosshair(source, time, price) {
+      this.tiles.forEach((t) => { if (t !== source) t.applyCrosshair(time, price); });
     },
 
     _setLayout(mode) {
@@ -348,6 +370,7 @@
           layoutMode: this.layoutMode,
           tiles: this.tiles.map((t) => t.toConfig()),
           activeIndex: this.tiles.findIndex((t) => t.id === this.activeTileId),
+          syncEnabled: !!this.syncEnabled,
         }));
       } catch (e) { /* localStorage unavailable - workspace just won't restore next visit */ }
     },
@@ -364,6 +387,7 @@
         while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
         const activeIdx = Number.isInteger(state.activeIndex) && state.activeIndex >= 0 && state.activeIndex < this.tiles.length ? state.activeIndex : 0;
         this.activeTileId = this.tiles[activeIdx].id;
+        this.syncEnabled = !!state.syncEnabled;
         return true;
       } catch (e) {
         return false;
