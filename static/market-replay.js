@@ -287,10 +287,25 @@
     },
 
     _applyState(state) {
+      const prev = this.state;
+      // The common case during playback is "exactly one more bar than
+      // before, same session, same history context" - append that single
+      // bar via the chart's incremental update instead of re-serializing
+      // and redrawing the whole series on every tick (matters a lot at
+      // 25x-50x speed, where this runs several times a second).
+      const isSingleForwardStep = prev && this.core &&
+        prev.session.id === state.session.id &&
+        state.reveal_index === prev.reveal_index + 1 &&
+        (prev.history || []).length === (state.history || []).length &&
+        (state.revealed || []).length > 0;
       this.state = state;
-      const combined = (state.history || []).concat(state.revealed || []);
-      this.core.setCandlesDirect(combined);
-      if (combined.length) this.core.fitContent();
+      if (isSingleForwardStep) {
+        this.core.appendCandle(state.revealed[state.revealed.length - 1]);
+      } else {
+        const combined = (state.history || []).concat(state.revealed || []);
+        this.core.setCandlesDirect(combined);
+        if (combined.length) this.core.fitContent();
+      }
       this.root.querySelector("#mrClock").textContent = fmtDateTime(state.current_time);
       this.root.querySelector("#mrPercent").textContent = `${state.percent}% · ${state.reveal_index}/${state.total_available}`;
       this.root.querySelector("#mrStatusPill").textContent = this.playing ? "Воспроизведение" : "Пауза";

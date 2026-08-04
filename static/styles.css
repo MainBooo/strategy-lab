@@ -485,7 +485,13 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 /* ---------- Market data manager modal ---------- */
 .hero-data-btn{align-self:center;white-space:nowrap;width:auto;padding:11px 16px;font-size:13px}
 #marketDataManagerRoot{display:none}
-#marketDataManagerRoot.mdm-open{display:block}
+/* display:contents, not block: both children (.mdm-backdrop/.mdm-modal) are
+   position:fixed and don't need this wrapper for layout - as a block box it
+   would collapse to zero height (no in-flow content), which is harmless for
+   sighted mouse/touch users (fixed children still paint and hit-test fine
+   regardless of an ancestor's box) but a real problem for anything that
+   inspects this element's own bounding box (screen readers, automation). */
+#marketDataManagerRoot.mdm-open{display:contents}
 .mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
 .mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
 .mdm-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line)}

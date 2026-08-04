@@ -125,6 +125,34 @@
       this._setCandles(candles);
     }
 
+    /** Appends (or, if it shares the last bar's timestamp, replaces) exactly
+     * one candle via lightweight-charts' incremental `series.update()`
+     * instead of re-serializing and redrawing the entire series with
+     * `setData()`. Market Replay calls this on every forward step - at 25x-
+     * 50x speed that's several redraws a second, and a full setData() over
+     * a growing multi-thousand-bar array on every one of them is exactly
+     * the "перерисовывался полностью на каждый тик" perf issue to avoid.
+     * Falls back to a full _setCandles() if `candle` doesn't extend the
+     * series (e.g. after a goto/reset jump) so state never desyncs. */
+    appendCandle(candle) {
+      const last = this._candles[this._candles.length - 1];
+      if (last && candle.time < last.time) {
+        this._setCandles(this._candles.concat([candle]));
+        return;
+      }
+      if (last && candle.time === last.time) {
+        this._candles[this._candles.length - 1] = candle;
+      } else {
+        this._candles.push(candle);
+      }
+      this._candlesByTime.set(candle.time, candle);
+      this.candleSeries.update({ time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close });
+      if (this.volumeSeries) {
+        this.volumeSeries.update({ time: candle.time, value: candle.volume || 0, color: candle.close >= candle.open ? theme.upSoft : theme.downSoft });
+      }
+      this._notifyDataChanged();
+    }
+
     _setCandles(candles) {
       this._candles = candles.slice().sort((a, b) => a.time - b.time);
       this._candlesByTime = new Map(this._candles.map((c) => [c.time, c]));
