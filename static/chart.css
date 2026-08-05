@@ -475,6 +475,13 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
   box-shadow: 0 12px 28px rgba(0,0,0,.4);
 }
+/* Same-specificity override: .ca-popover-right (defined earlier in this
+ * file, for the tile/workspace "more" menus anchored at the right edge)
+ * would otherwise lose its left:auto;right:0 to this rule's left:0 by
+ * source order alone, letting a right-edge-anchored popover render mostly
+ * off-viewport - see the "Ещё" menu bug this fixes. Combined-class selector
+ * beats single-class regardless of order. */
+.ca-popover.ca-popover-right { left: auto; right: 0; }
 .ca-indicator-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 13px; }
 .ca-template-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 2px; }
 

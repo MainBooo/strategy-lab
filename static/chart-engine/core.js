@@ -12,6 +12,30 @@
   const LWC = global.LightweightCharts;
   const theme = global.ChartEngine.theme;
 
+  /* Cross-tile dedup for the main candle load (Stage 4: "единый кэш по
+   * ключу ticker+interval+range" - the URL's querystring already IS that
+   * key, symbol+board+timeframe+from/to+limit). Two tiles opening the same
+   * ticker/timeframe (independently, or via the ticker/interval sync
+   * toggles in chart-analysis.js) share the in-flight request instead of
+   * both hitting /api/candles. Mirrors the exact pattern already used for
+   * realtime quotes (see fetchRealtimeShared in realtime-indicator.js) -
+   * deliberately a short in-flight dedup window, not a long-lived stale
+   * cache, so a real "reload with fresh data" always hits the network. */
+  const CANDLE_FETCH_DEDUP_MS = 4000;
+  const _sharedCandleFetches = new Map(); // url -> {promise, ts}
+  function fetchCandlesShared(url) {
+    const now = Date.now();
+    const cached = _sharedCandleFetches.get(url);
+    if (cached && now - cached.ts < CANDLE_FETCH_DEDUP_MS) return cached.promise;
+    const promise = fetch(url).then(async (res) => {
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      return res.json();
+    });
+    _sharedCandleFetches.set(url, { promise, ts: now });
+    promise.catch(() => { _sharedCandleFetches.delete(url); }); // never cache a failed request
+    return promise;
+  }
+
   class ChartCore {
     /** @param {HTMLElement} container @param {{showVolume?:boolean}} opts */
     constructor(container, opts) {
@@ -277,9 +301,7 @@
         });
         if (to) params.set("to", String(to));
         if (from) params.set("from", String(from));
-        const res = await fetch(`/api/candles?${params}`, { signal: controller.signal });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-        const data = await res.json();
+        const data = await fetchCandlesShared(`/api/candles?${params}`);
         if (controller.signal.aborted) return;
         this._setCandles(data.candles || []);
         this._reachedHistoryStart = !data.nextCursor;
