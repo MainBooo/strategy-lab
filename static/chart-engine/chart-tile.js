@@ -473,6 +473,14 @@
 
     _onDrawingsChanged(detail) {
       if (detail.loaded || detail.history) return; // bulk operations - nothing to diff/save per-id
+      if (detail.removed) {
+        clearTimeout(this._saveTimers[detail.removed]);
+        delete this._saveTimers[detail.removed];
+        // Was never persisted (deleted before its debounced create/update
+        // ever flushed) - nothing to delete server-side.
+        if (detail.removedBackendId) CE.api.deleteDrawing(detail.removedBackendId).catch(() => {});
+        return;
+      }
       const id = detail.created || detail.updated;
       if (id) this._queueSave(id);
     }

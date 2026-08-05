@@ -15,29 +15,67 @@
   const HIT_TOLERANCE_PX = 6;
   const HANDLE_RADIUS_PX = 5;
 
+  // pointsNeeded: -1 means "unbounded" (polyline) - finished explicitly via
+  // dblclick or Enter, not by reaching a fixed count (see _placePoint).
   const TOOL_DEFS = {
     horizontal_line: { pointsNeeded: 1, label: "Горизонтальный уровень" },
     vertical_line: { pointsNeeded: 1, label: "Вертикальная линия" },
     trend_line: { pointsNeeded: 2, label: "Линия тренда" },
     ray: { pointsNeeded: 2, label: "Луч" },
+    extended_line: { pointsNeeded: 2, label: "Расширенная линия" },
+    parallel_channel: { pointsNeeded: 3, label: "Параллельный канал" },
     rectangle: { pointsNeeded: 2, label: "Прямоугольная зона" },
+    circle: { pointsNeeded: 2, label: "Окружность" },
+    polyline: { pointsNeeded: -1, label: "Полилиния" },
     price_range: { pointsNeeded: 2, label: "Измерение" },
+    time_range: { pointsNeeded: 2, label: "Диапазон времени" },
     text: { pointsNeeded: 1, label: "Текстовая заметка" },
+    note: { pointsNeeded: 1, label: "Заметка" },
+    fib_retracement: { pointsNeeded: 2, label: "Коррекция Фибоначчи" },
+    fib_extension: { pointsNeeded: 3, label: "Расширение Фибоначчи" },
     long_position: { pointsNeeded: 2, label: "Long позиция" },
     short_position: { pointsNeeded: 2, label: "Short позиция" },
   };
 
+  const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  const FIB_EXTENSION_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2.618];
+
   function defaultProperties(type) {
     const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "" };
-    if (type === "rectangle" || type === "price_range") return Object.assign(base, { fill: true });
+    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel") return Object.assign(base, { fill: true });
     if (type === "long_position") return Object.assign(base, { color: theme.up, riskDistance: null, rewardDistance: null, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "text") return Object.assign(base, { text: "Заметка" });
+    if (type === "note") return Object.assign(base, { text: "Заметка", color: "#ffce54" });
+    if (type === "fib_retracement" || type === "fib_extension") return Object.assign(base, { color: theme.accent });
     return base;
+  }
+
+  /** Linear interpolation of a trend line's price at an arbitrary time -
+   * used by the parallel-channel tool to compute the offset line without
+   * needing a third stored point pair. Callers already guard against a
+   * zero-width line (p0.time === p1.time) being drawn in the first place
+   * (a degenerate click), so this never divides by zero in practice; if it
+   * did, the NaN is caught by the pix[i]?.x != null guards at render time. */
+  function lerpPriceAtTime(p0, p1, time) {
+    const span = p1.time - p0.time;
+    if (!span) return p0.price;
+    const t = (time - p0.time) / span;
+    return p0.price + (p1.price - p0.price) * t;
   }
 
   function uid() {
     return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  }
+
+  /** Human-readable span for the time-range tool's label - picks the
+   * coarsest unit that keeps the number readable (days once it's >=1 day,
+   * otherwise hours/minutes), matching how the rest of the app formats
+   * durations (e.g. RealtimeIndicator's fmtDelay). */
+  function fmtDuration(seconds) {
+    if (seconds < 3600) return `${Math.round(seconds / 60)} мин.`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} ч.`;
+    return `${(seconds / 86400).toFixed(1)} дн.`;
   }
 
   // ------------------------------------------------------------- geometry --
@@ -141,10 +179,15 @@
 
     removeDrawing(id) {
       const before = this._snapshot();
+      const removedDrawing = this.drawings.find((d) => d.id === id);
       this.drawings = this.drawings.filter((d) => d.id !== id);
       if (this.selectedId === id) this.selectedId = null;
       this._pushHistory(before);
-      this._emit({ removed: id });
+      // The removed drawing's _backendId travels in the event because it's
+      // about to be gone from this.drawings - the listener (ChartTile,
+      // chart-tile.js) needs it to actually delete the backend row, and
+      // can't look it up afterward.
+      this._emit({ removed: id, removedBackendId: removedDrawing && removedDrawing._backendId });
     }
 
     duplicateDrawing(id) {
@@ -190,6 +233,13 @@
       this.drawings = rows.map((r) => ({
         id: r.id, type: r.type, points: r.points, properties: r.properties,
         locked: r.locked, hidden: r.hidden, zIndex: r.z_index || 0,
+        // Without this, editing a drawing that was loaded (not created this
+        // session) would find _backendId undefined in _persistDrawing and
+        // POST a duplicate row instead of PATCHing the existing one - the
+        // local `id` IS the backend row id for anything that came from
+        // loadDrawings (see charts_db.py), same value, just also under the
+        // name _persistDrawing actually checks for.
+        _backendId: r.id,
       }));
       this._undoStack = []; this._redoStack = [];
       this._emit({ loaded: true });
@@ -230,32 +280,99 @@
           return Math.abs(px - pix[0].x) <= tol ? { id: d.id, handle: null } : null;
         }
         case "trend_line":
-        case "ray": {
+        case "ray":
+        case "extended_line": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
-          let x2 = pix[1].x, y2 = pix[1].y;
-          if (d.type === "ray") {
+          let x1 = pix[0].x, y1 = pix[0].y, x2 = pix[1].x, y2 = pix[1].y;
+          if (d.type === "ray" || d.type === "extended_line") {
             const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
             const scale = dx !== 0 ? (this.core.container.clientWidth * 2) / Math.max(1, Math.abs(dx)) : 1;
             x2 = pix[0].x + dx * scale; y2 = pix[0].y + dy * scale;
+            if (d.type === "extended_line") { x1 = pix[0].x - dx * scale; y1 = pix[0].y - dy * scale; }
           }
-          return pointToSegmentDist(px, py, pix[0].x, pix[0].y, x2, y2) <= tol ? { id: d.id, handle: null } : null;
+          return pointToSegmentDist(px, py, x1, y1, x2, y2) <= tol ? { id: d.id, handle: null } : null;
+        }
+        case "parallel_channel": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          if (pointToSegmentDist(px, py, pix[0].x, pix[0].y, pix[1].x, pix[1].y) <= tol) return { id: d.id, handle: null };
+          const offsetPrice = d.points[2].price - lerpPriceAtTime(d.points[0], d.points[1], d.points[2].time);
+          const q0 = { time: d.points[0].time, price: d.points[0].price + offsetPrice };
+          const q1 = { time: d.points[1].time, price: d.points[1].price + offsetPrice };
+          const [pq0, pq1] = toPixels(this.core, [q0, q1]);
+          if (pq0.x != null && pq1.x != null && pointToSegmentDist(px, py, pq0.x, pq0.y, pq1.x, pq1.y) <= tol) return { id: d.id, handle: null };
+          return null;
         }
         case "rectangle":
-        case "price_range": {
+        case "price_range":
+        case "time_range": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
           const x1 = Math.min(pix[0].x, pix[1].x), x2 = Math.max(pix[0].x, pix[1].x);
-          const y1 = Math.min(pix[0].y, pix[1].y), y2 = Math.max(pix[0].y, pix[1].y);
+          const y1 = d.type === "time_range" ? 0 : Math.min(pix[0].y, pix[1].y);
+          const y2 = d.type === "time_range" ? this.core.container.clientHeight : Math.max(pix[0].y, pix[1].y);
           return px >= x1 - tol && px <= x2 + tol && py >= y1 - tol && py <= y2 + tol ? { id: d.id, handle: null } : null;
         }
-        case "text": {
+        case "circle": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const cx = (pix[0].x + pix[1].x) / 2, cy = (pix[0].y + pix[1].y) / 2;
+          const rx = Math.abs(pix[1].x - pix[0].x) / 2, ry = Math.abs(pix[1].y - pix[0].y) / 2;
+          if (!rx || !ry) return null;
+          // Inside the ellipse counts as a hit (matches rectangle's filled-box
+          // behavior) rather than only the boundary ring.
+          const norm = ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2;
+          return norm <= 1.15 ? { id: d.id, handle: null } : null;
+        }
+        case "polyline": {
+          if (pix.length < 2) return null;
+          for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
+          for (let i = 0; i < pix.length - 1; i++) {
+            if (pix[i].x == null || pix[i + 1].x == null) continue;
+            if (pointToSegmentDist(px, py, pix[i].x, pix[i].y, pix[i + 1].x, pix[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "text":
+        case "note": {
           if (pix[0] == null || pix[0].x == null) return null;
           const box = d._lastBox;
           if (box && px >= box.x1 && px <= box.x2 && py >= box.y1 && py <= box.y2) return { id: d.id, handle: null };
           return handleAt(0) ? { id: d.id, handle: 0 } : null;
+        }
+        case "fib_retracement": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const x1 = Math.min(pix[0].x, pix[1].x);
+          const x2 = this.core.container.clientWidth;
+          for (const level of FIB_RETRACEMENT_LEVELS) {
+            const price = d.points[0].price + (d.points[1].price - d.points[0].price) * level;
+            const y = this.series.priceToCoordinate(price);
+            if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_extension": {
+          if (pix.length < 3 || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          const x1 = pix[2].x;
+          const x2 = this.core.container.clientWidth;
+          const base = d.points[1].price - d.points[0].price;
+          for (const level of FIB_EXTENSION_LEVELS) {
+            const price = d.points[2].price + base * level;
+            const y = this.series.priceToCoordinate(price);
+            if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
         }
         case "long_position":
         case "short_position": {
@@ -357,17 +474,30 @@
       ({ time, price } = this.snapPoint(time, price));
       this.draft = this.draft || { type: this.activeTool, points: [] };
       this.draft.points.push({ time, price });
-      if (this.draft.points.length >= def.pointsNeeded) {
-        const points = this.draft.points;
-        this.draft = null;
-        let properties;
-        if (this.activeTool === "long_position" || this.activeTool === "short_position") {
-          properties = defaultProperties(this.activeTool);
-        }
-        this.addDrawing(this.activeTool, points, properties);
-        this.activeTool = null;
+      // Unbounded tools (polyline, pointsNeeded === -1) never auto-finish on
+      // point count - only _finishDraft() (dblclick/Enter) closes them, so
+      // an arbitrary number of vertices can be placed first.
+      if (def.pointsNeeded > 0 && this.draft.points.length >= def.pointsNeeded) {
+        this._finishDraft();
       }
       this._emit();
+    }
+
+    /** Commits the in-progress draft as a real drawing. Used both by the
+     * fixed-point-count auto-finish in _placePoint() and by the explicit
+     * dblclick/Enter finish for unbounded tools (polyline) - requires at
+     * least 2 points there, since a single-point "polyline" isn't a line. */
+    _finishDraft() {
+      if (!this.draft) return;
+      const def = TOOL_DEFS[this.draft.type];
+      if (def.pointsNeeded < 0 && this.draft.points.length < 2) return;
+      const points = this.draft.points;
+      const type = this.draft.type;
+      this.draft = null;
+      let properties;
+      if (type === "long_position" || type === "short_position") properties = defaultProperties(type);
+      this.addDrawing(type, points, properties);
+      this.activeTool = null;
     }
 
     _onMouseMove(e) {
@@ -428,11 +558,19 @@
     }
 
     _onDblClick(e) {
+      // Mid-draft (polyline): double-click both places one last vertex at
+      // the cursor (matching the click that triggered it) and immediately
+      // finishes the shape, rather than requiring a separate confirm step.
+      if (this.activeTool && this.draft && TOOL_DEFS[this.draft.type].pointsNeeded < 0) {
+        this._finishDraft();
+        this._emit();
+        return;
+      }
       const { x, y } = this._relXY(e);
       const hit = this.hitTest(x, y);
       if (hit) {
         const d = this.drawings.find((dd) => dd.id === hit.id);
-        if (d && d.type === "text") {
+        if (d && (d.type === "text" || d.type === "note")) {
           const next = prompt("Текст заметки", d.properties.text || "");
           if (next != null) this.updateDrawing(d.id, { properties: { text: next } });
         }
@@ -442,6 +580,9 @@
     _onKeyDown(e) {
       if (!this._pointerInside && document.activeElement !== this.core.container) return;
       const meta = e.ctrlKey || e.metaKey;
+      if (e.key === "Enter" && this.draft && TOOL_DEFS[this.draft.type].pointsNeeded < 0) {
+        e.preventDefault(); this._finishDraft(); this._emit(); return;
+      }
       if (e.key === "Escape") { this.draft = null; this.activeTool = null; this._emit(); return; }
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedId) {
         e.preventDefault(); this.removeDrawing(this.selectedId); return;
@@ -537,20 +678,75 @@
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "segment", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         case "ray":
+        case "extended_line":
           if (pix[0]?.x != null && pix[1]?.x != null) {
             const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
             const scale = 4000 / Math.max(1, Math.hypot(dx, dy));
-            ops.push({ kind: "segment", x1: pix[0].x, y1: pix[0].y, x2: pix[0].x + dx * scale, y2: pix[0].y + dy * scale, color, width, alpha, handles: [pix[0], pix[1]] });
+            const x2 = pix[0].x + dx * scale, y2 = pix[0].y + dy * scale;
+            const x1 = d.type === "extended_line" ? pix[0].x - dx * scale : pix[0].x;
+            const y1 = d.type === "extended_line" ? pix[0].y - dy * scale : pix[0].y;
+            ops.push({ kind: "segment", x1, y1, x2, y2, color, width, alpha, handles: [pix[0], pix[1]] });
+          }
+          break;
+        case "parallel_channel":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
+            const offsetPrice = d.points[2].price - lerpPriceAtTime(d.points[0], d.points[1], d.points[2].time);
+            const q0 = { time: d.points[0].time, price: d.points[0].price + offsetPrice };
+            const q1 = { time: d.points[1].time, price: d.points[1].price + offsetPrice };
+            const [pq0, pq1] = toPixels(this.manager.core, [q0, q1]);
+            ops.push({
+              kind: "channel", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y,
+              ox1: pq0?.x, oy1: pq0?.y, ox2: pq1?.x, oy2: pq1?.y,
+              color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1], pix[2]],
+            });
           }
           break;
         case "rectangle":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "rect", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
           break;
+        case "circle":
+          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "ellipse", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
+          break;
+        case "polyline":
+          if (pix.length >= 2 && pix.every((p) => p.x != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
+          break;
         case "price_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
+        case "time_range":
+          if (pix[0]?.x != null && pix[1]?.x != null) {
+            ops.push({
+              kind: "timerange", d, x1: pix[0].x, x2: pix[1].x, color, width, alpha,
+              handles: [pix[0], pix[1]], h: this.manager.core.container.clientHeight,
+            });
+          }
+          break;
         case "text":
           if (pix[0]?.x != null) ops.push({ kind: "text", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
+        case "note":
+          if (pix[0]?.x != null) ops.push({ kind: "note", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
+        case "fib_retracement":
+          if (pix[0]?.x != null && pix[1]?.x != null) {
+            ops.push({
+              kind: "fib", d, x1: Math.min(pix[0].x, pix[1].x), color, width, alpha,
+              handles: [pix[0], pix[1]], levels: FIB_RETRACEMENT_LEVELS,
+              priceAt: (level) => d.points[0].price + (d.points[1].price - d.points[0].price) * level,
+              w: this.manager.core.container.clientWidth,
+            });
+          }
+          break;
+        case "fib_extension":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
+            const base = d.points[1].price - d.points[0].price;
+            ops.push({
+              kind: "fib", d, x1: pix[2].x, color, width, alpha,
+              handles: [pix[0], pix[1], pix[2]], levels: FIB_EXTENSION_LEVELS,
+              priceAt: (level) => d.points[2].price + base * level,
+              w: this.manager.core.container.clientWidth,
+            });
+          }
           break;
         case "long_position":
         case "short_position":
@@ -606,6 +802,74 @@
           const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
           if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = op.alpha ?? 1; }
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "channel": {
+          ctx.beginPath(); ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv); ctx.stroke();
+          if (op.ox1 != null && op.ox2 != null) {
+            if (op.fill) {
+              ctx.globalAlpha = (op.alpha ?? 1) * 0.14;
+              ctx.beginPath();
+              ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv);
+              ctx.lineTo(op.ox2 * r, op.oy2 * rv); ctx.lineTo(op.ox1 * r, op.oy1 * rv);
+              ctx.closePath(); ctx.fill();
+              ctx.globalAlpha = op.alpha ?? 1;
+            }
+            ctx.beginPath(); ctx.moveTo(op.ox1 * r, op.oy1 * rv); ctx.lineTo(op.ox2 * r, op.oy2 * rv); ctx.stroke();
+          }
+          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "ellipse": {
+          const cx = ((op.x1 + op.x2) / 2) * r, cy = ((op.y1 + op.y2) / 2) * rv;
+          const rx = Math.abs(op.x2 - op.x1) / 2 * r, ry = Math.abs(op.y2 - op.y1) / 2 * rv;
+          ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+          if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fill(); ctx.globalAlpha = op.alpha ?? 1; }
+          ctx.stroke();
+          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "polyline": {
+          ctx.beginPath();
+          op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "timerange": {
+          const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.12;
+          ctx.fillRect(x1, 0, x2 - x1, op.h * rv);
+          ctx.globalAlpha = op.alpha ?? 1;
+          ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1, op.h * rv); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(x2, 0); ctx.lineTo(x2, op.h * rv); ctx.stroke();
+          const t1 = op.d.points[0].time, t2 = op.d.points[1].time;
+          const seconds = Math.abs(t2 - t1);
+          const bars = this.manager.core.candles.filter((c) => c.time >= Math.min(t1, t2) && c.time <= Math.max(t1, t2)).length;
+          const label = `${fmtDuration(seconds)} · ${bars} бар.`;
+          this._text(ctx, label, (x1 + x2) / 2 - 30 * r, 16 * rv, op.color);
+          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, op.h * rv / 2, r));
+          break;
+        }
+        case "note": {
+          const px = op.x * r, py = op.y * rv;
+          ctx.beginPath(); ctx.arc(px, py, 4 * r, 0, Math.PI * 2); ctx.fillStyle = op.color; ctx.fill();
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          ctx.fillText(op.d.properties.text || "", px + 10 * r, py + 4 * rv);
+          op.d._lastBox = { x1: op.x - 6, y1: op.y - 10, x2: op.x + 10 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 10 };
+          this._handle(ctx, px, py, r);
+          break;
+        }
+        case "fib": {
+          const x2 = op.w * r;
+          op.levels.forEach((level) => {
+            const price = op.priceAt(level);
+            const y = this.manager.core.candleSeries.priceToCoordinate(price);
+            if (y == null) return;
+            ctx.beginPath(); ctx.moveTo(op.x1 * r, y * rv); ctx.lineTo(x2, y * rv); ctx.stroke();
+            this._text(ctx, `${(level * 100).toFixed(1)}% · ${price.toFixed(2)}`, op.x1 * r + 4 * r, y * rv - 4 * rv, op.color);
+          });
           op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
           break;
         }

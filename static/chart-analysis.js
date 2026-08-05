@@ -19,23 +19,25 @@
 
   const CE = global.ChartEngine;
 
-  /* Only tools DrawingManager (chart-engine/drawings.js) actually implements
-   * today - see its TOOL_DEFS. Stage 6 adds the rest (parallel channel,
-   * circle, polyline, Fibonacci, ray/extended-line variants, time range,
-   * note) together with their DrawingManager geometry/hit-testing/renderer
-   * support; listing them here first would be exactly the kind of
-   * decorative non-working button the spec prohibits. */
   const TOOL_BUTTONS = [
     { id: null, label: "Курсор", icon: "⇖" },
-    { id: "horizontal_line", label: "Горизонтальный уровень", icon: "—" },
-    { id: "vertical_line", label: "Вертикальная линия", icon: "❘" },
     { id: "trend_line", label: "Линия тренда", icon: "╱" },
+    { id: "horizontal_line", label: "Горизонтальная линия", icon: "—" },
+    { id: "vertical_line", label: "Вертикальная линия", icon: "❘" },
     { id: "ray", label: "Луч", icon: "↗" },
-    { id: "rectangle", label: "Прямоугольная зона", icon: "▭" },
-    { id: "price_range", label: "Измерение", icon: "↕" },
-    { id: "text", label: "Текстовая заметка", icon: "T" },
+    { id: "extended_line", label: "Расширенная линия", icon: "⟷" },
+    { id: "parallel_channel", label: "Параллельный канал", icon: "═" },
+    { id: "rectangle", label: "Прямоугольник", icon: "▭" },
+    { id: "circle", label: "Окружность", icon: "◯" },
+    { id: "polyline", label: "Полилиния (Enter/двойной клик — завершить)", icon: "⌁" },
+    { id: "text", label: "Текст", icon: "T" },
+    { id: "note", label: "Заметка", icon: "🗨" },
+    { id: "price_range", label: "Диапазон цены", icon: "↕" },
+    { id: "time_range", label: "Диапазон времени", icon: "↔" },
     { id: "long_position", label: "Long позиция", icon: "↑" },
     { id: "short_position", label: "Short позиция", icon: "↓" },
+    { id: "fib_retracement", label: "Коррекция Фибоначчи", icon: "F" },
+    { id: "fib_extension", label: "Расширение Фибоначчи", icon: "Fx" },
   ];
 
   const LAYOUTS = [
