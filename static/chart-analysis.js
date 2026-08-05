@@ -81,6 +81,7 @@
   };
 
   const WORKSPACE_STATE_KEY = "moexlab_chart_workspace";
+  const WORKSPACE_TEMPLATES_KEY = "moexlab_workspace_templates";
   const BOTTOM_HEIGHT_KEY = "moexlab_ca_bottom_height";
   const BOTTOM_COLLAPSED_KEY = "moexlab_ca_bottom_collapsed";
   const WATCHLIST_WIDTH_KEY = "moexlab_ca_watchlist_width";
@@ -204,7 +205,7 @@
             </div>
             <div class="gt-menu" id="gtTemplatesMenu" data-key="templates" data-priority="10" data-label="Шаблоны" data-icon="🗂">
               <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">🗂 <span class="gt-btn-label">Шаблоны</span></button>
-              <div class="ca-popover hidden" id="gtTemplatesPop"></div>
+              <div class="ca-popover ca-popover-wide hidden" id="gtTemplatesPop"></div>
             </div>
             <div class="gt-menu" id="gtAlertsMenu" data-key="alerts" data-priority="9" data-label="Оповещения" data-icon="🔔">
               <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">🔔<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
@@ -522,23 +523,149 @@
     async _renderTemplatesInto(container) {
       const tile = this.activeTile;
       if (!tile) { container.innerHTML = ""; return; }
-      container.innerHTML = `<div class="muted-note">Загрузка…</div>`;
+      container.innerHTML = `
+        <div class="ca-more-heading">Рабочее пространство</div>
+        <div id="caWsTemplates"></div>
+        <div class="ca-more-sep"></div>
+        <div class="ca-more-heading">График «${tile.symbol}»</div>
+        <div id="caTileTemplates"><div class="muted-note">Загрузка…</div></div>
+      `;
+      this._renderWorkspaceTemplates(container.querySelector("#caWsTemplates"));
+      const tileContainer = container.querySelector("#caTileTemplates");
       const layouts = await tile.listTemplates();
-      container.innerHTML = layouts.length
+      tileContainer.innerHTML = layouts.length
         ? layouts.map((l) => `
             <div class="ca-template-row">
               <button class="link-btn ca-template-load" data-id="${l.id}">${l.name}${l.is_default ? " ★" : ""}</button>
               <button class="icon-btn" data-del="${l.id}" title="Удалить">🗑</button>
             </div>`).join("")
         : `<div class="muted-note">Нет сохранённых шаблонов для ${tile.symbol}</div>`;
-      container.querySelectorAll(".ca-template-load").forEach((b) => (b.onclick = async () => {
+      tileContainer.querySelectorAll(".ca-template-load").forEach((b) => (b.onclick = async () => {
         await tile.loadTemplate(b.dataset.id);
         this.root.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
       }));
-      container.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async (e) => {
+      tileContainer.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async (e) => {
         e.stopPropagation();
         await tile.deleteTemplate(b.dataset.del);
         b.closest(".ca-template-row").remove();
+      }));
+    },
+
+    // ---------------------------------------------- workspace templates ---
+    // (Stage 12: the whole multi-tile layout as one named unit - distinct
+    // from the per-tile "график «X»" templates above, which only ever
+    // covered a single tile's symbol/range/indicators/drawings. Stored in
+    // localStorage, same persistence tier as the always-on auto-save
+    // session snapshot (WORKSPACE_STATE_KEY) - this is the *named, manual*
+    // counterpart to that, not a replacement for it.)
+
+    _listWorkspaceTemplates() {
+      try { return JSON.parse(localStorage.getItem(WORKSPACE_TEMPLATES_KEY) || "{}"); } catch (e) { return {}; }
+    },
+    _saveWorkspaceTemplatesMap(map) {
+      try { localStorage.setItem(WORKSPACE_TEMPLATES_KEY, JSON.stringify(map)); } catch (e) { /* ignore */ }
+    },
+
+    /** Everything Stage 12 lists: layout, every tile's full data (symbol/
+     * timeframe/type/indicators/settings - drawings persist separately via
+     * the DB per-tile layout system, unaffected by this), panel sizes,
+     * sync flags, and open/collapsed panel state. Watchlist favorites/
+     * custom lists are deliberately NOT part of this snapshot - those are
+     * user-wide reference data (like browser bookmarks), not something a
+     * "workspace template" should overwrite when someone loads a
+     * colleague's saved layout. */
+    _snapshotWorkspace() {
+      const watchlist = this.root.querySelector("#caWatchlist");
+      return {
+        layoutMode: this.layoutMode,
+        tiles: this.tiles.map((t) => t.toConfig()),
+        activeIndex: this.tiles.findIndex((t) => t.id === this.activeTileId),
+        syncFlags: this.syncFlags,
+        bottomHeight: this._bottomHeight,
+        bottomCollapsed: this._bottomCollapsed,
+        watchlistWidth: watchlist ? Math.round(watchlist.getBoundingClientRect().width) : null,
+        watchlistCollapsed: watchlist ? watchlist.classList.contains("wl-collapsed") : false,
+        savedAt: Date.now(),
+      };
+    },
+
+    _applyWorkspaceSnapshot(snap) {
+      if (!snap || !Array.isArray(snap.tiles) || !snap.tiles.length) return;
+      this.tiles.forEach((t) => { t.stopRealtime(); t.destroy(); });
+      this.layoutMode = LAYOUT_TILE_COUNT[snap.layoutMode] ? snap.layoutMode : "1";
+      const count = LAYOUT_TILE_COUNT[this.layoutMode];
+      this.tiles = snap.tiles.slice(0, count).map((cfg) => new CE.ChartTile(cfg));
+      while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
+      const activeIdx = Number.isInteger(snap.activeIndex) && snap.activeIndex >= 0 && snap.activeIndex < this.tiles.length ? snap.activeIndex : 0;
+      this.activeTileId = this.tiles[activeIdx].id;
+      if (snap.syncFlags) this.syncFlags = Object.assign({}, this.syncFlags, snap.syncFlags);
+      this.tiles.forEach((t) => t.startRealtime());
+      this._syncTileGrid();
+      if (snap.bottomHeight) {
+        this._bottomHeight = clamp(snap.bottomHeight, BOTTOM_HEIGHT_MIN, BOTTOM_HEIGHT_MAX);
+        this.root.querySelector("#caBottom").style.height = this._bottomHeight + "px";
+      }
+      this._setBottomCollapsed(!!snap.bottomCollapsed);
+      const watchlist = this.root.querySelector("#caWatchlist");
+      if (snap.watchlistWidth) watchlist.style.width = clamp(snap.watchlistWidth, WATCHLIST_WIDTH_MIN, WATCHLIST_WIDTH_MAX) + "px";
+      if (this.watchlist) this.watchlist.setCollapsed(!!snap.watchlistCollapsed);
+      this._syncCollapseRightButton();
+      this._refreshGlobalHeader();
+      this._renderTickerOptions();
+      this._saveWorkspaceState();
+    },
+
+    _renderWorkspaceTemplates(container) {
+      const templates = this._listWorkspaceTemplates();
+      const names = Object.keys(templates);
+      container.innerHTML = `
+        <div class="ca-ws-save-row">
+          <input type="text" id="wsName" placeholder="Название пространства…" aria-label="Название рабочего пространства">
+          <button class="secondary" id="wsSave">Сохранить</button>
+        </div>
+        ${names.length ? names.map((name) => `
+          <div class="ca-template-row">
+            <button class="link-btn ca-ws-load" data-name="${escapeAttr(name)}">${escapeAttr(name)}</button>
+            <span class="ca-ws-actions">
+              <button class="icon-btn" data-ws-rename="${escapeAttr(name)}" title="Переименовать">✎</button>
+              <button class="icon-btn" data-ws-del="${escapeAttr(name)}" title="Удалить">🗑</button>
+            </span>
+          </div>`).join("") : `<div class="muted-note">Нет сохранённых рабочих пространств.</div>`}
+      `;
+      container.querySelector("#wsSave").onclick = () => {
+        const input = container.querySelector("#wsName");
+        const name = input.value.trim();
+        if (!name) return;
+        const map = this._listWorkspaceTemplates();
+        map[name] = this._snapshotWorkspace();
+        this._saveWorkspaceTemplatesMap(map);
+        input.value = "";
+        this._renderWorkspaceTemplates(container);
+      };
+      container.querySelectorAll(".ca-ws-load").forEach((b) => (b.onclick = () => {
+        const map = this._listWorkspaceTemplates();
+        this._applyWorkspaceSnapshot(map[b.dataset.name]);
+        this.root.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
+      }));
+      container.querySelectorAll("[data-ws-rename]").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        const oldName = b.dataset.wsRename;
+        const newName = prompt("Новое название", oldName);
+        if (!newName || !newName.trim() || newName === oldName) return;
+        const map = this._listWorkspaceTemplates();
+        map[newName.trim()] = map[oldName];
+        delete map[oldName];
+        this._saveWorkspaceTemplatesMap(map);
+        this._renderWorkspaceTemplates(container);
+      }));
+      container.querySelectorAll("[data-ws-del]").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        const name = b.dataset.wsDel;
+        if (!confirm(`Удалить рабочее пространство «${name}»?`)) return;
+        const map = this._listWorkspaceTemplates();
+        delete map[name];
+        this._saveWorkspaceTemplatesMap(map);
+        this._renderWorkspaceTemplates(container);
       }));
     },
 

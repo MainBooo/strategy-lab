@@ -534,6 +534,12 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 .ca-ind-settings input[type=color] { width: 50px; height: 26px; padding: 1px; }
 .ca-ind-settings select { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 4px 6px; }
 .ca-template-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 2px; }
+.ca-ws-save-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.ca-ws-save-row input {
+  flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 6px 8px; font-size: 12px;
+}
+.ca-ws-actions { display: flex; gap: 2px; flex: 0 0 auto; }
 
 .ca-modal-backdrop {
   position: fixed; inset: 0; background: rgba(5,7,12,.72); display: flex; align-items: center; justify-content: center;
