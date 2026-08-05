@@ -48,6 +48,10 @@ function activateTab(name){
   document.querySelectorAll(".tab-page").forEach(x=>x.classList.add("hidden"));
   $("tab-"+name).classList.remove("hidden");
   localStorage.setItem("moexlab_active_tab",name);
+  // The charts terminal is a full-bleed workspace (no room for the hero/
+  // ticker-tape chrome the rest of the app uses) - see styles.css
+  // "charts terminal full-bleed" section.
+  document.body.classList.toggle("charts-active",name==="charts");
   // Realtime polling (chart-analysis.js) only runs while its own tab is the
   // one on screen - leaving it stops the poller, and re-entering below
   // resumes it and fetches immediately instead of waiting for the next tick.

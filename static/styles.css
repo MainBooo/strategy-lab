@@ -300,6 +300,27 @@ pre {
 }
 
 
+/* --------------------------------------------- charts terminal full-bleed -- */
+/* "Анализ графиков" is a self-contained trading terminal, not another card
+ * on the page - it needs the full viewport below the tab bar, not the
+ * ~1180px centered .shell every other tab uses. The hero banner and ticker
+ * tape are hidden (not just visually secondary) so their height is actually
+ * reclaimed, and the page itself stops scrolling - only the terminal's own
+ * panels (watchlist, bottom panel) scroll internally past this point. */
+body.charts-active { overflow: hidden; }
+body.charts-active .hero,
+body.charts-active .ticker-tape { display: none; }
+body.charts-active .shell {
+  width: 100%; max-width: none; margin: 0; padding: 0;
+  height: 100dvh; display: flex; flex-direction: column;
+}
+body.charts-active .tabs {
+  flex: 0 0 auto; margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line);
+}
+body.charts-active #tab-charts {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 8px 12px 10px;
+}
+
 .mode-tabs{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap}
 .mode-tab{background:rgba(255,255,255,.04);color:var(--muted);border:1px solid var(--line)}
 .mode-tab.active{color:white;background:linear-gradient(135deg,var(--accent),#5b68e6)}

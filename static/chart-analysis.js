@@ -35,12 +35,30 @@
     { id: "1", label: "1 график", rows: 1, cols: 1 },
     { id: "2v", label: "2 графика вертикально", rows: 2, cols: 1 },
     { id: "2h", label: "2 графика горизонтально", rows: 1, cols: 2 },
+    { id: "3", label: "3 графика (1 большой + 2)", asym: true },
     { id: "4", label: "4 графика", rows: 2, cols: 2 },
     { id: "6", label: "6 графиков (3×2)", rows: 2, cols: 3 },
   ];
-  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "4": 4, "6": 6 };
-  const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "4", 4: "4", 5: "6", 6: "6" };
+  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "3": 3, "4": 4, "6": 6 };
+  const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "3", 4: "4", 5: "6", 6: "6" };
   const WORKSPACE_STATE_KEY = "moexlab_chart_workspace";
+  const BOTTOM_HEIGHT_KEY = "moexlab_ca_bottom_height";
+  const BOTTOM_COLLAPSED_KEY = "moexlab_ca_bottom_collapsed";
+  const WATCHLIST_WIDTH_KEY = "moexlab_ca_watchlist_width";
+  const BOTTOM_HEIGHT_DEFAULT = 220, BOTTOM_HEIGHT_MIN = 120, BOTTOM_HEIGHT_MAX = 560;
+  const WATCHLIST_WIDTH_DEFAULT = 280, WATCHLIST_WIDTH_MIN = 220, WATCHLIST_WIDTH_MAX = 480;
+
+  /** Mini schematic shown on each layout button: a uniform rows×cols grid of
+   * cells for the symmetric layouts, or a hand-built 1-big+2-small shape for
+   * "3" (grid-template's repeat() can't express that asymmetry). */
+  function layoutIcon(l) {
+    if (l.asym) {
+      return `<span class="ca-layout-icon ca-layout-icon-3"><i class="ca-li-big"></i><span class="ca-li-col"><i></i><i></i></span></span>`;
+    }
+    return `<span class="ca-layout-icon" style="grid-template-columns:repeat(${l.cols},1fr);grid-template-rows:repeat(${l.rows},1fr)">
+      ${Array.from({ length: l.rows * l.cols }).map(() => "<i></i>").join("")}
+    </span>`;
+  }
 
   const Page = {
     root: null,
@@ -98,15 +116,14 @@
           <div class="ca-layout-switch" id="caLayoutSwitch">
             ${LAYOUTS.map((l) => `
               <button class="ca-layout-btn ${l.id === this.layoutMode ? "active" : ""}" data-layout="${l.id}" title="${l.label}" aria-label="${l.label}">
-                <span class="ca-layout-icon" style="grid-template-columns:repeat(${l.cols},1fr);grid-template-rows:repeat(${l.rows},1fr)">
-                  ${Array.from({ length: l.rows * l.cols }).map(() => "<i></i>").join("")}
-                </span>
+                ${layoutIcon(l)}
               </button>`).join("")}
           </div>
           <span class="ca-toolbar-spacer"></span>
           <button class="icon-btn" id="caUndoBtn" title="Отменить (Ctrl+Z)">↶</button>
           <button class="icon-btn" id="caRedoBtn" title="Повторить (Ctrl+Shift+Z)">↷</button>
           <button class="icon-btn" id="caSyncBtn" title="Синхронизировать время, масштаб и перекрестие между графиками" aria-label="Синхронизация графиков">🔗</button>
+          <button class="icon-btn" id="caSnapshotBtn" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">📷</button>
           <button class="icon-btn" id="caWatchlistToggleBtn" title="Список тикеров">☰</button>
           <button class="icon-btn" id="caFullscreenBtn" title="Полноэкранный режим рабочего пространства">⛶</button>
         </div>
@@ -115,17 +132,27 @@
             ${TOOL_BUTTONS.map((t) => `<button class="ca-tool-btn ${t.id === null ? "active" : ""}" data-tool="${t.id || ""}" title="${t.label}" aria-label="${t.label}">${t.icon}</button>`).join("")}
             <button class="ca-tool-btn ca-tool-danger" id="caDeleteBtn" title="Удалить объект (Delete)" aria-label="Удалить объект">🗑</button>
           </div>
-          <div class="ca-chart-col">
-            <div class="ca-tile-grid" id="caTileGrid"></div>
+          <div class="ca-center" id="caCenter">
+            <div class="ca-chart-col">
+              <div class="ca-tile-grid" id="caTileGrid"></div>
+            </div>
+            <div class="ca-resize-h" id="caResizeH" title="Изменить высоту панели"></div>
+            <div class="ca-bottom" id="caBottom">
+              <div class="ca-bottom-head">
+                <nav class="ca-side-tabs">
+                  <button class="ca-side-tab active" data-side="props">Свойства</button>
+                  <button class="ca-side-tab" data-side="objects">Объекты</button>
+                </nav>
+                <span class="ca-toolbar-spacer"></span>
+                <button class="icon-btn" id="caBottomCollapseBtn" title="Свернуть панель" aria-label="Свернуть/развернуть панель свойств и объектов">︿</button>
+              </div>
+              <div class="ca-bottom-body">
+                <div id="caProps" class="ca-side-panel"></div>
+                <div id="caObjects" class="ca-side-panel hidden"></div>
+              </div>
+            </div>
           </div>
-          <div class="ca-side" id="caSide">
-            <nav class="ca-side-tabs">
-              <button class="ca-side-tab active" data-side="props">Свойства</button>
-              <button class="ca-side-tab" data-side="objects">Объекты</button>
-            </nav>
-            <div id="caProps" class="ca-side-panel"></div>
-            <div id="caObjects" class="ca-side-panel hidden"></div>
-          </div>
+          <div class="ca-resize-v" id="caResizeV" title="Изменить ширину списка инструментов"></div>
           <div class="ca-watchlist" id="caWatchlist"></div>
         </div>
         <div class="wl-mobile-backdrop" id="caWatchlistBackdrop"></div>
@@ -147,6 +174,7 @@
         e.target.classList.toggle("active", this.syncEnabled);
         this._saveWorkspaceState();
       };
+      this.root.querySelector("#caSnapshotBtn").onclick = () => this._downloadSnapshot();
       this._fsCtrl = new CE.Fullscreen.FullscreenController(this.root, {
         className: "is-fullscreen",
         onChange: (active) => this._onFullscreenChange(active),
@@ -174,6 +202,109 @@
           this.root.querySelector("#caObjects").classList.toggle("hidden", b.dataset.side !== "objects");
         };
       });
+
+      this._buildPanelChrome();
+    },
+
+    // --------------------------------------------------- resizable chrome --
+
+    /** Wires the bottom panel's collapse toggle and the two drag handles
+     * (bottom-panel height, watchlist width), restoring persisted sizes.
+     * Kept deliberately separate from tile/drawing state (WORKSPACE_STATE_KEY):
+     * these are chrome dimensions, not chart content, and should survive
+     * independently of layout/tile changes. */
+    _buildPanelChrome() {
+      const bottom = this.root.querySelector("#caBottom");
+      const watchlist = this.root.querySelector("#caWatchlist");
+
+      let collapsed = false, height = BOTTOM_HEIGHT_DEFAULT, wlWidth = WATCHLIST_WIDTH_DEFAULT;
+      try {
+        collapsed = localStorage.getItem(BOTTOM_COLLAPSED_KEY) === "1";
+        const h = Number(localStorage.getItem(BOTTOM_HEIGHT_KEY));
+        if (Number.isFinite(h) && h > 0) height = h;
+        const w = Number(localStorage.getItem(WATCHLIST_WIDTH_KEY));
+        if (Number.isFinite(w) && w > 0) wlWidth = w;
+      } catch (e) { /* ignore */ }
+
+      this._bottomHeight = clamp(height, BOTTOM_HEIGHT_MIN, BOTTOM_HEIGHT_MAX);
+      bottom.style.height = this._bottomHeight + "px";
+      this._setBottomCollapsed(collapsed, { skipSave: true });
+      this.root.querySelector("#caBottomCollapseBtn").onclick = () => this._setBottomCollapsed(!this._bottomCollapsed);
+
+      watchlist.style.width = clamp(wlWidth, WATCHLIST_WIDTH_MIN, WATCHLIST_WIDTH_MAX) + "px";
+
+      this._wireDrag(this.root.querySelector("#caResizeH"), (dy) => {
+        if (this._bottomCollapsed) return;
+        this._bottomHeight = clamp(this._bottomHeight + dy, BOTTOM_HEIGHT_MIN, BOTTOM_HEIGHT_MAX);
+        bottom.style.height = this._bottomHeight + "px";
+      }, () => { try { localStorage.setItem(BOTTOM_HEIGHT_KEY, String(this._bottomHeight)); } catch (e) { /* ignore */ } });
+
+      this._wireDrag(this.root.querySelector("#caResizeV"), (dx) => {
+        if (watchlist.classList.contains("wl-collapsed")) return;
+        const next = clamp(watchlist.getBoundingClientRect().width + dx, WATCHLIST_WIDTH_MIN, WATCHLIST_WIDTH_MAX);
+        watchlist.style.width = next + "px";
+      }, () => { try { localStorage.setItem(WATCHLIST_WIDTH_KEY, String(watchlist.getBoundingClientRect().width)); } catch (e) { /* ignore */ } }, "x");
+    },
+
+    /** Generic drag-to-resize: `onDrag(deltaSincePrevFrame)` fires on every
+     * mousemove with the delta since the LAST call (not since drag start),
+     * so callers can just add it to their current size - simpler than every
+     * caller re-deriving from a start snapshot. `axis` picks clientX vs
+     * clientY; defaults to vertical (row-resize handles). */
+    _wireDrag(handle, onDrag, onDone, axis) {
+      if (!handle) return;
+      handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        handle.classList.add("dragging");
+        document.body.classList.add("ca-resizing");
+        let last = axis === "x" ? e.clientX : e.clientY;
+        const onMove = (ev) => {
+          const pos = axis === "x" ? ev.clientX : ev.clientY;
+          const delta = last - pos; // dragging the handle up/left grows the panel it's attached to
+          last = pos;
+          onDrag(delta);
+          this.tiles.forEach((t) => t.core && t.core._onResize());
+        };
+        const onUp = () => {
+          handle.classList.remove("dragging");
+          document.body.classList.remove("ca-resizing");
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+          if (onDone) onDone();
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      });
+    },
+
+    _setBottomCollapsed(collapsed, { skipSave } = {}) {
+      this._bottomCollapsed = collapsed;
+      const bottom = this.root.querySelector("#caBottom");
+      bottom.classList.toggle("collapsed", collapsed);
+      const btn = this.root.querySelector("#caBottomCollapseBtn");
+      if (btn) {
+        btn.textContent = collapsed ? "﹀" : "︿";
+        btn.title = collapsed ? "Развернуть панель" : "Свернуть панель";
+      }
+      if (!skipSave) {
+        try { localStorage.setItem(BOTTOM_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (e) { /* ignore */ }
+      }
+      requestAnimationFrame(() => this.tiles.forEach((t) => t.core && t.core._onResize()));
+    },
+
+    /** Downloads a PNG of the active tile's chart via lightweight-charts'
+     * own canvas compositing (chart.takeScreenshot()) - the same mechanism
+     * already used for the "order strategy" attachment, just exposed as a
+     * direct, real action instead of only firing implicitly inside that
+     * other flow. */
+    _downloadSnapshot() {
+      if (!this.core) return;
+      const canvas = this.core.chart.takeScreenshot();
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      a.download = `${this.activeTile.symbol}_${this.activeTile.timeframe}_${stamp}.png`;
+      a.click();
     },
 
     // ------------------------------------------------------------- tiles --
@@ -396,6 +527,9 @@
   }
   function escapeAttr(s) {
     return String(s).replace(/"/g, "&quot;");
+  }
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
   }
 
   global.ChartAnalysisPage = Page;

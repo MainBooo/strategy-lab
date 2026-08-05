@@ -85,7 +85,34 @@
 .star-btn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
 .star-btn:hover { color: #ffce54; }
 
-.ca-workspace { display: grid; grid-template-columns: 52px 1fr 260px auto; gap: 12px; align-items: start; }
+/* #chartsRoot is a full-height flex column (toolbar, then the workspace
+ * filling everything else) - the charts tab gives it the full viewport
+ * below the app's tab bar (see styles.css "charts terminal full-bleed"),
+ * so this never depends on any fixed pixel height. */
+#chartsRoot { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+
+/* Left tool rail | center column (chart + bottom panel) | watchlist, with
+ * two thin drag handles for the resizable dimensions (bottom panel height,
+ * watchlist width). Plain flexbox, not CSS grid - the resizable sizes are
+ * plain inline styles set by chart-analysis.js's _wireDrag, which is far
+ * simpler to reason about than smuggling them through custom properties in
+ * a grid-template. */
+.ca-workspace { display: flex; flex-direction: row; gap: 8px; flex: 1 1 auto; min-height: 0; }
+body.ca-resizing { cursor: grabbing; user-select: none; }
+
+.ca-center { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+.ca-resize-h {
+  flex: 0 0 auto; height: 9px; margin: -1px 0; cursor: row-resize; position: relative; z-index: 2;
+}
+.ca-resize-h::after { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 2px; background: var(--line); border-radius: 2px; }
+.ca-resize-h:hover::after, .ca-resize-h.dragging::after { background: var(--accent); }
+
+.ca-resize-v {
+  flex: 0 0 auto; width: 9px; margin: 0 -1px; cursor: col-resize; position: relative; z-index: 2;
+}
+.ca-resize-v::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: var(--line); border-radius: 2px; }
+.ca-resize-v:hover::after, .ca-resize-v.dragging::after { background: var(--accent); }
 
 /* Real Fullscreen API target is #chartsRoot itself (see FullscreenController
  * in chart-engine/fullscreen.js) - only ONE element in the chain gets
@@ -95,18 +122,16 @@
  * toolbar above it, permanently hiding the exit-fullscreen button. */
 #chartsRoot.is-fullscreen {
   position: fixed; inset: 0; z-index: 9999; background: var(--bg);
-  padding: 12px; margin: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px; margin: 0;
 }
-#chartsRoot.is-fullscreen .ca-workspace { flex: 1 1 auto; min-height: 0; }
-#chartsRoot.is-fullscreen .ca-chart-col { height: 100%; }
-#chartsRoot.is-fullscreen .ca-tile-grid { flex: 1 1 auto; min-height: 0; height: auto !important; }
 /* The browser already renders :fullscreen elements filling the viewport;
  * this mirrors the same box for the no-Fullscreen-API CSS fallback path. */
 #chartsRoot:fullscreen { width: 100vw; height: 100vh; }
 
 .ca-tools {
-  display: flex; flex-direction: column; gap: 6px; padding: 8px 4px;
+  flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 4px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+  overflow-y: auto;
 }
 .ca-tool-btn {
   width: 42px; height: 38px; border-radius: 8px; border: 1px solid transparent; background: transparent;
@@ -116,7 +141,7 @@
 .ca-tool-btn.active { background: rgba(124,140,255,.16); border-color: var(--accent); color: var(--accent); }
 .ca-tool-danger { color: var(--danger); margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
 
-.ca-chart-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ca-chart-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1 1 auto; min-height: 0; }
 
 /* -------------------------------------------------------- multi-chart grid -- */
 
@@ -130,11 +155,26 @@
 .ca-layout-icon { display: grid; gap: 2px; width: 16px; height: 12px; }
 .ca-layout-icon i { background: var(--muted); border-radius: 1px; }
 .ca-layout-btn.active .ca-layout-icon i { background: var(--accent); }
+/* Asymmetric "1 big + 2 small" layout icon - grid-template's repeat() can't
+ * express this, so it's a small flex shape instead of the generic <i> grid. */
+.ca-layout-icon-3 { display: flex; gap: 2px; width: 16px; height: 12px; }
+.ca-layout-icon-3 .ca-li-big { flex: 2 0 0; background: var(--muted); border-radius: 1px; }
+.ca-layout-icon-3 .ca-li-col { flex: 1 0 0; display: flex; flex-direction: column; gap: 2px; }
+.ca-layout-icon-3 .ca-li-col i { flex: 1; background: var(--muted); border-radius: 1px; }
+.ca-layout-btn.active .ca-layout-icon-3 .ca-li-big,
+.ca-layout-btn.active .ca-layout-icon-3 .ca-li-col i { background: var(--accent); }
 
-.ca-tile-grid { display: grid; gap: 8px; min-height: 560px; }
+.ca-tile-grid { display: grid; gap: 8px; flex: 1 1 auto; min-height: 0; }
 .ca-tile-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
 .ca-tile-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
 .ca-tile-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.ca-tile-grid.layout-3 {
+  grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr;
+  grid-template-areas: "big top" "big bottom";
+}
+.ca-tile-grid.layout-3 .ca-tile:nth-child(1) { grid-area: big; }
+.ca-tile-grid.layout-3 .ca-tile:nth-child(2) { grid-area: top; }
+.ca-tile-grid.layout-3 .ca-tile:nth-child(3) { grid-area: bottom; }
 .ca-tile-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .ca-tile-grid.layout-6 { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; }
 /* Only one chart on screen: the close button would have nothing to close
@@ -235,19 +275,18 @@
 
 @media (max-width: 980px) {
   .ca-tile-grid.layout-2h,
+  .ca-tile-grid.layout-3,
   .ca-tile-grid.layout-4,
   .ca-tile-grid.layout-6 { grid-template-columns: 1fr; }
+  .ca-tile-grid.layout-3 { grid-template-rows: repeat(3, minmax(220px, 1fr)); grid-template-areas: "big" "top" "bottom"; }
   .ca-tile-grid.layout-4 { grid-template-rows: repeat(4, minmax(220px, 1fr)); }
   .ca-tile-grid.layout-6 { grid-template-rows: repeat(6, minmax(220px, 1fr)); }
   .ca-tile-grid.layout-2v { grid-template-rows: repeat(2, minmax(220px, 1fr)); }
-  /* Was `min-height: unset`, which - combined with .ca-workspace's
-   * align-items:start - collapsed this container to its header row's
-   * height (~35px) with nothing to give the chart canvas any height at
-   * all: a near-0px-tall canvas renders as a black sliver ("black screen"
-   * on the Анализ графиков tab below the 980px breakpoint). Multi-tile
-   * layouts already get real row heights from the minmax(220px,1fr) rules
-   * above; layout-1's `grid-template-rows:1fr` still needs a definite
-   * container height to resolve against, same as it does above 980px. */
+  /* .ca-tile-grid normally stretches to fill .ca-chart-col via flex (see
+   * above #chartsRoot/.ca-workspace/.ca-center chain) - this is just a
+   * floor for the rare case that chain doesn't resolve to a definite
+   * height (e.g. JS failed to add body.charts-active), so the chart canvas
+   * never collapses to a near-0px sliver ("black screen" regression). */
   .ca-tile-grid { min-height: 440px; }
   .ca-tile-ohlc { display: none; }
 }
@@ -262,23 +301,38 @@
 }
 .range-preset:hover { color: var(--text); border-color: var(--accent); }
 
-.ca-side {
+/* -------------------------------------------- bottom "Свойства/Объекты" -- */
+/* Lives under the chart grid (not between the chart and the watchlist, which
+ * used to steal width from the chart itself) - resizable via .ca-resize-h
+ * above it, collapsible to just its tab header via .collapsed. */
+.ca-bottom {
+  flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
-  padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 300px;
 }
+.ca-bottom.collapsed { height: 38px !important; }
+.ca-bottom.collapsed .ca-bottom-body { display: none; }
+.ca-bottom-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.ca-bottom.collapsed .ca-bottom-head { border-bottom: none; }
+.ca-bottom-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px; }
+
 .ca-side-tabs { display: flex; gap: 6px; }
-.ca-side-tab { flex: 1; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 6px 0; font-size: 12px; cursor: pointer; }
+.ca-side-tab { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 6px 14px; font-size: 12px; cursor: pointer; }
 .ca-side-tab.active { color: var(--text); border-color: var(--accent); background: rgba(124,140,255,.12); }
-.ca-side-panel { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.ca-side-panel { display: flex; flex-flow: row wrap; align-items: flex-start; gap: 10px 16px; font-size: 13px; }
 .ca-side-panel.hidden { display: none; }
-.ca-side-panel h4 { margin: 0; font-size: 13px; color: var(--text); }
-.ca-side-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.ca-side-panel h4 { margin: 0; font-size: 13px; color: var(--text); flex-basis: 100%; }
+.ca-side-panel > .muted-note { flex-basis: 100%; }
+.ca-side-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); width: 160px; }
+.ca-side-panel label.toggle { flex-direction: row; align-items: center; width: auto; }
 .ca-side-panel input[type=text], .ca-side-panel input[type=number], .ca-side-panel textarea {
   background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 8px;
 }
 .ca-side-panel input[type=color] { width: 100%; height: 30px; padding: 2px; }
+.ca-side-panel > button { flex: 0 0 auto; align-self: flex-end; }
 
-.ca-object-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+/* Objects list: a real list (not label/row wrap), so it always spans full width. */
+#caObjects.ca-side-panel { flex-direction: column; flex-wrap: nowrap; }
+.ca-object-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; width: 100%; }
 .ca-object-row:hover { background: rgba(255,255,255,.04); }
 .ca-object-row.active { background: rgba(124,140,255,.14); }
 .ca-object-actions button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 3px; }
@@ -288,11 +342,14 @@
 #caWatchlistToggleBtn { display: none; }
 
 .ca-watchlist {
-  width: 280px; justify-self: end; transition: width .15s ease;
+  flex: 0 0 auto; width: 280px; min-width: 200px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
-  display: flex; flex-direction: column; overflow: hidden; min-height: 300px; max-height: 640px;
+  display: flex; flex-direction: column; overflow: hidden; min-height: 0;
 }
-.ca-watchlist.wl-collapsed { width: 44px; }
+/* !important: chart-analysis.js sets an inline width (the resize handle,
+ * and the persisted saved width) which would otherwise always beat this
+ * class rule regardless of selector specificity. */
+.ca-watchlist.wl-collapsed { width: 44px !important; min-width: 0; }
 .ca-watchlist.wl-collapsed .wl-header input,
 .ca-watchlist.wl-collapsed .wl-tabs,
 .ca-watchlist.wl-collapsed .wl-list { display: none; }
@@ -362,8 +419,9 @@
 .ca-warning { background: rgba(255,180,84,.12); border: 1px solid rgba(255,180,84,.35); color: #ffb454; border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
 
 @media (max-width: 980px) {
-  .ca-workspace { grid-template-columns: 44px 1fr; }
-  .ca-side { grid-column: 1 / -1; }
+  /* Watchlist becomes the off-canvas drawer above (#caWatchlistToggleBtn) -
+   * nothing left to drag it against. */
+  .ca-resize-v { display: none; }
 }
 
 /* ---------------------------------------------------------- Market Replay -- */
