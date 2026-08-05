@@ -1,16 +1,19 @@
 /* One independent chart pane ("tile") for the multi-chart grid in
  * "Анализ графиков". Each tile owns its own ChartCore, IndicatorPaneManager,
- * DrawingManager, RealtimeIndicator, per-tile FullscreenController, AND (as
- * of this rewrite) its own complete settings header - symbol/board/
- * timeframe/chart type/range/indicators/templates/save/order-strategy -
- * instead of those living in one shared toolbar above the whole workspace.
- * A tile's state (ticker/board/timeframe/chartType/rangeMode/fromDate/
- * toDate/layout/drawings/live subscription) is entirely its own; nothing
- * here reads or writes another tile. The one thing that stays workspace-
- * level (chart-analysis.js's Page) is the *drawing toolbar* (tool palette,
- * undo/redo/snap, properties/objects side panel) and the layout switch -
- * those act on whichever tile is "active", a concept this file exposes via
- * setActiveVisual()/the onActivate callback but never tracks itself. */
+ * DrawingManager, RealtimeIndicator, per-tile FullscreenController, and its
+ * own full state (ticker/board/timeframe/chartType/rangeMode/fromDate/
+ * toDate/indicators/drawings/zoom/displayOptions/live subscription) -
+ * nothing here reads or writes another tile.
+ *
+ * As of the Stage-2 toolbar unification, a tile's own header is
+ * deliberately minimal (identity tag + per-tile fullscreen + close) - every
+ * *command* (ticker/timeframe/chart type/indicators/templates/save/
+ * settings/range/board/snapshot/order-strategy) now lives in the single
+ * workspace toolbar (chart-analysis.js) and is applied to whichever tile is
+ * "active" via the public methods below (setTimeframe/setChartType/
+ * selectSymbol/applyQuickRange/setBoard/saveAsTemplate/...). This file still
+ * owns all of that state and logic - only the *chrome that triggers it*
+ * moved up a level, so multiple disconnected control rows don't exist. */
 (function (global) {
   "use strict";
 
@@ -25,6 +28,7 @@
   const CHART_TYPES = [
     { id: "candles", label: "Свечи" }, { id: "bars", label: "Бары" },
     { id: "line", label: "Линия" }, { id: "area", label: "Область" },
+    { id: "baseline", label: "Базовая линия" }, { id: "heikin_ashi", label: "Heikin Ashi" },
   ];
   /* Live-ticking the current candle (see _onRealtimeUpdate below) only
    * covers timeframes with a fixed bucket width in seconds. A calendar day
@@ -44,7 +48,6 @@
     { label: "1Д", days: 1 }, { label: "5Д", days: 5 }, { label: "1М", days: 30 }, { label: "3М", days: 90 },
     { label: "6М", days: 182 }, { label: "1Г", days: 365 }, { label: "5Л", days: 365 * 5 },
   ];
-  const COMPACT_WIDTH = 640; // px - below this a tile's own header switches to the mobile/compact layout
 
   let _seq = 0;
 
@@ -57,21 +60,15 @@
     return d.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "short" });
   }
   function todayISO() { return new Date().toISOString().slice(0, 10); }
-  function escapeAttr(s) { return String(s).replace(/"/g, "&quot;"); }
-  function toHex(color) {
-    if (!color || color[0] === "#") return color || "#7c8cff";
-    const m = color.match(/rgba?\((\d+),(\d+),(\d+)/);
-    if (!m) return "#7c8cff";
-    return "#" + m.slice(1, 4).map((x) => Number(x).toString(16).padStart(2, "0")).join("");
-  }
 
   class ChartTile {
-    constructor({ symbol = "SBER", board = "TQBR", timeframe = "1d", chartType = "candles" } = {}) {
+    constructor({ symbol = "SBER", board = "TQBR", timeframe = "1d", chartType = "candles", displayOptions = null } = {}) {
       this.id = "tile" + ++_seq;
       this.symbol = symbol;
       this.board = board;
       this.timeframe = timeframe;
       this._initialChartType = chartType;
+      this._initialDisplayOptions = displayOptions || null;
       // Full-history-by-default (see docs): a fresh tile never starts with
       // fromDate/toDate filled in - see also toConfig()/ChartAnalysisPage's
       // workspace-state restore, which deliberately never persists these
@@ -87,10 +84,11 @@
       this.indicator = null; // RealtimeIndicator, own instance per tile
       this.fsCtrl = null;
       this.el = null;
-      this._compact = false;
       this._saveTimers = {};
       this._rangeChangeCbs = [];
       this._crosshairCbs = [];
+      this._priceUpdateCbs = [];
+      this._liveTickCbs = [];
       this._applyingRange = false;
       this._applyingCrosshair = false;
     }
@@ -99,6 +97,18 @@
 
     onRangeChange(cb) { this._rangeChangeCbs.push(cb); }
     onCrosshairMove(cb) { this._crosshairCbs.push(cb); }
+    /** Fires on every price header refresh (live tick, crosshair hover, new
+     * data) with {price, diff, pct, bar} - the workspace toolbar's price/
+     * change display subscribes to this on every tile and only renders it
+     * when the tile is the active one. */
+    onPriceUpdate(cb) { this._priceUpdateCbs.push(cb); }
+    /** Fires only on a genuine realtime feed tick (symbol, lastPrice) -
+     * unlike onPriceUpdate(), never on crosshair hover. This is the correct
+     * hook for anything that must react to an actual price change, e.g. the
+     * alerts service (see alert-service.js): evaluating price-cross
+     * conditions on mouse movement would fire alerts just from a user
+     * scrubbing the chart with their cursor. */
+    onLiveTick(cb) { this._liveTickCbs.push(cb); }
 
     applyLogicalRange(range) {
       if (!this.core || !range) return;
@@ -118,64 +128,26 @@
 
     setSecurities(list) {
       this.securities = list || [];
-      const sel = this.el && this.el.querySelector('[data-role="symbol"]');
-      if (!sel) return;
-      sel.innerHTML = this.securities.map((s) => `<option value="${s.SECID}">${s.SECID} · ${s.SHORTNAME || ""}</option>`).join("");
-      sel.value = this.symbol;
     }
 
     // ----------------------------------------------------------- mount ----
 
-    /** Builds the DOM (header + chart host) inside `container` and creates
-     * the chart engine instances. `onActivate(tile)` fires on any pointer
-     * interaction with the tile (so the workspace can make it the active
-     * one). The close button is always rendered - the workspace hides it
-     * via CSS (`.ca-tile-grid.layout-1 .ca-tile-close`) when only one tile
-     * exists, rather than us tracking tile count here. */
+    /** Builds the DOM (minimal identity header + chart host) inside
+     * `container` and creates the chart engine instances. `onActivate(tile)`
+     * fires on any pointer interaction with the tile (so the workspace can
+     * make it the active one). The close button is always rendered - the
+     * workspace hides it via CSS (`.ca-tile-grid.layout-1 .ca-tile-close`)
+     * when only one tile exists, rather than us tracking tile count here. */
     mount(container, { onActivate, onClose } = {}) {
       this.el = container;
       container.className = "ca-tile";
       container.innerHTML = `
         <div class="ca-tile-header" data-role="header">
-          <div class="ca-tile-row1">
-            <select class="ca-tile-select ca-tile-select-symbol" data-role="symbol" aria-label="Инструмент"></select>
-            <select class="ca-tile-select ca-tile-select-tf" data-role="timeframe" aria-label="Таймфрейм">
-              ${TIMEFRAMES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
-            </select>
-            <span class="ca-tile-price" data-role="price"></span>
-            <span class="ca-tile-change" data-role="change"></span>
-            <span class="ca-tile-spacer"></span>
-            <div class="ca-tile-realtime-slot" data-role="realtimeSlot"></div>
-            <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки">⛶</button>
-            <button class="ca-tile-btn ca-tile-close" data-role="close" title="Закрыть плитку" aria-label="Закрыть плитку">✕</button>
-          </div>
-          <div class="ca-tile-row2" data-role="row2">
-            <select class="ca-tile-select ca-tile-select-type" data-role="chartType" aria-label="Тип графика">
-              ${CHART_TYPES.map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
-            </select>
-            <div class="ca-tile-menu" data-role="rangeMenu">
-              <button class="ca-tile-btn2 ca-tile-range-btn" data-role="rangeBtn" aria-haspopup="true">Диапазон: Все ▾</button>
-              <div class="ca-popover hidden" data-role="rangePopover"></div>
-            </div>
-            <div class="ca-tile-overflow" data-role="overflowGroup">
-              <select class="ca-tile-select ca-tile-select-board" data-role="board" aria-label="Рынок"><option value="TQBR">TQBR</option></select>
-              <div class="ca-tile-menu" data-role="indicatorsMenu">
-                <button class="ca-tile-btn2" data-role="indicatorsBtn" aria-haspopup="true">Индикаторы</button>
-                <div class="ca-popover hidden" data-role="indicatorsPopover"></div>
-              </div>
-              <div class="ca-tile-menu" data-role="templatesMenu">
-                <button class="ca-tile-btn2" data-role="templatesBtn" aria-haspopup="true">Шаблоны</button>
-                <div class="ca-popover hidden" data-role="templatesPopover"></div>
-              </div>
-              <button class="ca-tile-btn2" data-role="saveBtn">Сохранить</button>
-            </div>
-            <span class="ca-tile-spacer"></span>
-            <div class="ca-tile-menu" data-role="moreMenu">
-              <button class="ca-tile-btn icon-btn" data-role="moreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">⋯</button>
-              <div class="ca-popover ca-popover-right hidden" data-role="morePopover"></div>
-            </div>
-          </div>
-          <button class="ca-tile-settings-btn hidden" data-role="settingsBtn" aria-label="Настройки графика">⚙ Настройки</button>
+          <span class="ca-tile-tag" data-role="tag"></span>
+          <div class="ca-tile-realtime-slot" data-role="realtimeSlot"></div>
+          <span class="ca-tile-spacer"></span>
+          <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки">⛶</button>
+          <button class="ca-tile-btn ca-tile-close" data-role="close" title="Закрыть плитку" aria-label="Закрыть плитку">✕</button>
         </div>
         <div class="ca-tile-chart-host" data-role="chartHost">
           <button class="ca-tile-live-btn hidden" data-role="live" type="button">К последней цене</button>
@@ -184,6 +156,7 @@
 
       const host = container.querySelector('[data-role="chartHost"]');
       this.core = new CE.ChartCore(host, { showVolume: true });
+      if (this._initialDisplayOptions) this.core.setDisplayOptions(this._initialDisplayOptions);
       if (this._initialChartType && this._initialChartType !== "candles") this.core.setSeriesType(this._initialChartType);
       this.indicatorMgr = new CE.Indicators.PaneManager(this.core);
       this.drawingMgr = new CE.Drawings.DrawingManager(this.core);
@@ -223,87 +196,100 @@
       container.querySelector('[data-role="close"]').onclick = (e) => { e.stopPropagation(); if (onClose) onClose(this); };
       if (onActivate) container.addEventListener("mousedown", () => onActivate(this));
 
-      this._bindHeaderControls();
-      this._buildRangePopover();
-      this._buildIndicatorPopover();
-      this._buildTemplatePopover();
-      this._buildMorePopover();
-      this.setSecurities(this.securities);
+      this.updateHeader();
+      this._loadOrInit();
 
       if (global.RealtimeIndicator) {
         this.indicator = new global.RealtimeIndicator(container.querySelector('[data-role="realtimeSlot"]'), {
-          compact: () => this._compact,
+          compact: () => true,
           onUpdate: (data) => this._onRealtimeUpdate(data),
         });
       }
-
-      this._resizeObserver = new ResizeObserver((entries) => {
-        const w = entries[0].contentRect.width;
-        this._setCompact(w < COMPACT_WIDTH);
-      });
-      this._resizeObserver.observe(container);
-
-      this.updateHeader();
-      this._loadOrInit();
     }
 
     // ------------------------------------------------------------ header --
 
-    _bindHeaderControls() {
-      const el = this.el;
-      el.querySelector('[data-role="symbol"]').onchange = (e) => this._setSymbol(e.target.value);
-      el.querySelector('[data-role="timeframe"]').value = this.timeframe;
-      el.querySelector('[data-role="timeframe"]').onchange = (e) => {
-        this.timeframe = e.target.value;
-        this.updateHeader();
-        this._reload();
-        this._notifyStateChanged();
+    updateHeader() {
+      if (!this.el) return;
+      const tag = this.el.querySelector('[data-role="tag"]');
+      if (tag) tag.textContent = `${this.symbol} · ${TF_LABEL[this.timeframe] || this.timeframe}`;
+    }
+
+    /** Shows the hovered bar's OHLC while the crosshair is over it (called
+     * with `bar`), falling back to the latest bar otherwise (called with no
+     * argument, e.g. from onDataChanged). Change % is always vs the bar
+     * immediately before whichever bar is currently shown. Fires
+     * onPriceUpdate() instead of writing to its own DOM - the global
+     * toolbar owns the price/change display now. */
+    _updatePriceHeader(bar) {
+      if (!this.core) return;
+      const candles = this.core.candles;
+      if (!candles.length) { this._priceUpdateCbs.forEach((cb) => cb(this, null)); return; }
+      const target = bar || candles[candles.length - 1];
+      const idx = candles.indexOf(target);
+      const prev = idx > 0 ? candles[idx - 1] : null;
+      const diff = prev ? target.close - prev.close : null;
+      const pct = prev && prev.close ? (diff / prev.close) * 100 : null;
+      this._priceUpdateCbs.forEach((cb) => cb(this, { price: target.close, diff, pct }));
+    }
+
+    setActiveVisual(active) {
+      if (this.el) this.el.classList.toggle("active", active);
+    }
+
+    /** A plain-data snapshot for archiving a tile that's removed from the
+     * grid by a layout change, so growing the layout back can restore it -
+     * and for workspace-state localStorage persistence. Deliberately does
+     * NOT include rangeMode/fromDate/toDate: a restored/resized tile always
+     * comes back in "full history" mode, never a stale custom range from a
+     * previous session (see the constructor's docstring). displayOptions
+     * (per-tile chart-appearance settings) DOES persist - it's a display
+     * preference, not a transient viewport range. */
+    toConfig() {
+      return {
+        symbol: this.symbol, board: this.board, timeframe: this.timeframe,
+        chartType: this.core ? this.core.seriesType : this._initialChartType,
+        displayOptions: this.core ? this.core.displayOptions : this._initialDisplayOptions,
       };
-      el.querySelector('[data-role="chartType"]').onchange = (e) => {
-        if (this.core) this.core.setSeriesType(e.target.value);
-        this._notifyStateChanged();
-      };
-      el.querySelector('[data-role="board"]').onchange = (e) => { this.board = e.target.value; this._reload(); this._notifyStateChanged(); };
-      el.querySelector('[data-role="saveBtn"]').onclick = () => this._saveAsTemplate();
-      el.querySelector('[data-role="settingsBtn"]').onclick = () => this._openSettingsSheet();
     }
 
-    _setCompact(compact) {
-      if (compact === this._compact) return;
-      this._compact = compact;
-      this.el.querySelector('[data-role="header"]').classList.toggle("compact", compact);
-      this.el.querySelector('[data-role="settingsBtn"]').classList.toggle("hidden", !compact);
-      if (!compact) this._closeSettingsSheet();
+    destroy() {
+      if (this.indicator) this.indicator.destroy();
+      if (this.fsCtrl) this.fsCtrl.destroy();
+      if (this.core) this.core.destroy();
+      this.core = null;
+      this.indicatorMgr = null;
+      this.drawingMgr = null;
+      this.el = null;
     }
 
-    /** Mobile/narrow-tile settings: moves the overflow controls (board,
-     * indicators, templates, save) that don't fit inline into a bottom
-     * sheet instead of hiding them - chart type and range stay visible
-     * inline even when compact (spec: row2 keeps "тип графика; режим;
-     * статус"). Same real <select>s and buttons, not a duplicated second
-     * set of controls, so there is only ever one source of truth for tile
-     * state regardless of viewport. */
-    _openSettingsSheet() {
-      this._closeSettingsSheet();
-      const group = this.el.querySelector('[data-role="overflowGroup"]');
-      const sheet = document.createElement("div");
-      sheet.className = "ca-sheet-backdrop";
-      sheet.innerHTML = `<div class="ca-sheet"><div class="ca-sheet-handle"></div><h4>Настройки графика · ${this.symbol}</h4><div class="ca-sheet-body"></div></div>`;
-      document.body.appendChild(sheet);
-      sheet.querySelector(".ca-sheet-body").appendChild(group);
-      group.classList.add("in-sheet");
-      sheet.onclick = (e) => { if (e.target === sheet) this._closeSettingsSheet(); };
-      this._sheet = sheet;
+    // ------------------------------------------------ public commands -----
+    // (called by the workspace toolbar on whichever tile is active)
+
+    setTimeframe(tf) {
+      if (tf === this.timeframe) return;
+      this.timeframe = tf;
+      this.updateHeader();
+      this._reload();
+      this._notifyStateChanged();
     }
 
-    _closeSettingsSheet() {
-      if (!this._sheet) return;
-      const row2 = this.el.querySelector('[data-role="row2"]');
-      const group = this._sheet.querySelector('[data-role="overflowGroup"]');
-      group.classList.remove("in-sheet");
-      row2.insertBefore(group, row2.querySelector(".ca-tile-spacer"));
-      this._sheet.remove();
-      this._sheet = null;
+    setChartType(type) {
+      if (this.core) this.core.setSeriesType(type);
+      this._notifyStateChanged();
+    }
+
+    setBoard(board) {
+      if (board === this.board) return;
+      this.board = board;
+      this._reload();
+      this._notifyStateChanged();
+    }
+
+    /** Programmatic symbol change (watchlist click, global ticker select,
+     * template load). */
+    selectSymbol(ticker) {
+      this._setSymbol(ticker);
     }
 
     _setSymbol(ticker) {
@@ -318,196 +304,11 @@
       this._notifyStateChanged({ symbolChanged: true });
     }
 
-    /** Programmatic symbol change (watchlist click, template load) - same
-     * effect as picking it from the select, kept separate so callers don't
-     * have to reach into the DOM. */
-    selectSymbol(ticker) {
-      const sel = this.el && this.el.querySelector('[data-role="symbol"]');
-      if (sel) sel.value = ticker;
-      this._setSymbol(ticker);
-    }
-
-    updateHeader() {
-      if (!this.el) return;
-      const sym = this.el.querySelector('[data-role="symbol"]'); if (sym) sym.value = this.symbol;
-      const tf = this.el.querySelector('[data-role="timeframe"]'); if (tf) tf.value = this.timeframe;
-      const ct = this.el.querySelector('[data-role="chartType"]'); if (ct) ct.value = this.core ? this.core.seriesType : this._initialChartType;
-      const board = this.el.querySelector('[data-role="board"]'); if (board) board.value = this.board;
-      this._updateRangeButtonLabel();
-    }
-
-    /** Shows the hovered bar's OHLC while the crosshair is over it (called
-     * with `bar`), falling back to the latest bar otherwise (called with no
-     * argument, e.g. from onDataChanged). Change % is always vs the bar
-     * immediately before whichever bar is currently shown. */
-    _updatePriceHeader(bar) {
-      if (!this.el || !this.core) return;
-      const candles = this.core.candles;
-      const priceEl = this.el.querySelector('[data-role="price"]');
-      const changeEl = this.el.querySelector('[data-role="change"]');
-      if (!candles.length) { priceEl.textContent = ""; changeEl.textContent = ""; return; }
-      const target = bar || candles[candles.length - 1];
-      const idx = candles.indexOf(target);
-      const prev = idx > 0 ? candles[idx - 1] : null;
-      priceEl.textContent = fmtPrice(target.close);
-      if (prev) {
-        const diff = target.close - prev.close;
-        const pct = prev.close ? (diff / prev.close) * 100 : 0;
-        changeEl.textContent = `${diff >= 0 ? "+" : ""}${fmtPrice(diff)} (${diff >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
-        changeEl.className = `ca-tile-change ${diff >= 0 ? "pnl-pos" : "pnl-neg"}`;
-      } else {
-        changeEl.textContent = "";
-        changeEl.className = "ca-tile-change";
-      }
-    }
-
-    setActiveVisual(active) {
-      if (this.el) this.el.classList.toggle("active", active);
-    }
-
-    /** A plain-data snapshot for archiving a tile that's removed from the
-     * grid by a layout change, so growing the layout back can restore it -
-     * and for workspace-state localStorage persistence. Deliberately does
-     * NOT include rangeMode/fromDate/toDate: a restored/resized tile always
-     * comes back in "full history" mode, never a stale custom range from a
-     * previous session (see the constructor's docstring). */
-    toConfig() {
-      return { symbol: this.symbol, board: this.board, timeframe: this.timeframe, chartType: this.core ? this.core.seriesType : this._initialChartType };
-    }
-
-    destroy() {
-      this._closeSettingsSheet();
-      if (this._resizeObserver) this._resizeObserver.disconnect();
-      if (this.indicator) this.indicator.destroy();
-      if (this.fsCtrl) this.fsCtrl.destroy();
-      if (this.core) this.core.destroy();
-      this.core = null;
-      this.indicatorMgr = null;
-      this.drawingMgr = null;
-      this.el = null;
-    }
-
-    // ------------------------------------------------------- popovers -----
-
-    _wirePopover(btn, pop, onOpen) {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const willOpen = pop.classList.contains("hidden");
-        this.el.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
-        if (willOpen) {
-          pop.classList.remove("hidden");
-          if (onOpen) onOpen();
-        }
-      };
-      document.addEventListener("click", (e) => { if (!pop.contains(e.target) && e.target !== btn) pop.classList.add("hidden"); });
-    }
-
-    _buildIndicatorPopover() {
-      const pop = this.el.querySelector('[data-role="indicatorsPopover"]');
-      pop.innerHTML = CE.Indicators.registry.map((def) => `
-        <label class="ca-indicator-row">
-          <input type="checkbox" data-ind="${def.id}">
-          <span>${def.label}</span>
-        </label>`).join("");
-      pop.querySelectorAll("input[data-ind]").forEach((cb) => {
-        cb.onchange = () => {
-          const id = cb.dataset.ind;
-          const key = "_ind_" + id;
-          if (cb.checked) this[key] = this.indicatorMgr.add(id, {});
-          else if (this[key]) { this.indicatorMgr.remove(this[key]); this[key] = null; }
-        };
-      });
-      this._wirePopover(this.el.querySelector('[data-role="indicatorsBtn"]'), pop);
-    }
-
-    _buildTemplatePopover() {
-      const pop = this.el.querySelector('[data-role="templatesPopover"]');
-      this._wirePopover(this.el.querySelector('[data-role="templatesBtn"]'), pop, async () => {
-        pop.innerHTML = `<div class="muted-note">Загрузка…</div>`;
-        const layouts = await CE.api.listLayouts("analysis", this.symbol).catch(() => []);
-        pop.innerHTML = layouts.length
-          ? layouts.map((l) => `
-              <div class="ca-template-row">
-                <button class="link-btn ca-template-load" data-id="${l.id}">${l.name}${l.is_default ? " ★" : ""}</button>
-                <button class="icon-btn" data-del="${l.id}" title="Удалить">🗑</button>
-              </div>`).join("")
-          : `<div class="muted-note">Нет сохранённых шаблонов для ${this.symbol}</div>`;
-        pop.querySelectorAll(".ca-template-load").forEach((b) => (b.onclick = async () => {
-          const l = await CE.api.getLayout(b.dataset.id);
-          await this._applyLayout(l);
-          pop.classList.add("hidden");
-        }));
-        pop.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async (e) => {
-          e.stopPropagation();
-          await CE.api.deleteLayout(b.dataset.del);
-          b.closest(".ca-template-row").remove();
-        }));
-      });
-    }
-
-    _buildMorePopover() {
-      const pop = this.el.querySelector('[data-role="morePopover"]');
-      pop.innerHTML = `
-        <button class="link-btn ca-more-item" data-action="order">⚙ Заказать стратегию по разметке</button>
-        <button class="link-btn ca-more-item" data-action="snap">🧲 Прилипание к свечам</button>
-        <button class="link-btn ca-more-item" data-action="reset-layout">↺ Сбросить график</button>
-      `;
-      pop.querySelector('[data-action="order"]').onclick = () => { pop.classList.add("hidden"); this._openOrderModal(); };
-      pop.querySelector('[data-action="snap"]').onclick = (e) => {
-        if (!this.drawingMgr) return;
-        this.drawingMgr.snapEnabled = !this.drawingMgr.snapEnabled;
-        e.target.classList.toggle("active", this.drawingMgr.snapEnabled);
-      };
-      pop.querySelector('[data-action="reset-layout"]').onclick = () => { pop.classList.add("hidden"); this.core && this.core.fitContent(); };
-      this._wirePopover(this.el.querySelector('[data-role="moreBtn"]'), pop);
-    }
+    listTimeframes() { return TIMEFRAMES; }
+    listChartTypes() { return CHART_TYPES; }
+    listRangePresets() { return RANGE_PRESETS; }
 
     // ---------------------------------------------------------- range -----
-
-    _buildRangePopover() {
-      const pop = this.el.querySelector('[data-role="rangePopover"]');
-      this._wirePopover(this.el.querySelector('[data-role="rangeBtn"]'), pop, () => this._renderRangePopover());
-      this._renderRangePopover();
-    }
-
-    _renderRangePopover() {
-      const pop = this.el.querySelector('[data-role="rangePopover"]');
-      const isCustom = this.rangeMode === "custom";
-      pop.innerHTML = `
-        <div class="ca-range-presets">
-          ${RANGE_PRESETS.map((p) => `<button class="range-preset" data-days="${p.days}">${p.label}</button>`).join("")}
-          <button class="range-preset ${!isCustom ? "active" : ""}" data-all="1">Все</button>
-        </div>
-        <button class="link-btn ca-range-custom-toggle" data-action="custom">Выбрать период…</button>
-        <div class="ca-range-custom hidden" data-role="customForm">
-          <label>С <input type="date" data-role="rangeFrom" value="${this.fromDate || ""}"></label>
-          <label>По <input type="date" data-role="rangeTo" value="${this.toDate || todayISO()}"></label>
-          <button class="secondary ca-range-apply" data-action="apply">Применить</button>
-        </div>
-        ${isCustom ? `<button class="link-btn ca-range-reset" data-action="reset">Сбросить период</button>` : ""}
-      `;
-      pop.querySelectorAll(".range-preset[data-days]").forEach((b) => (b.onclick = () => { this._applyQuickRange(Number(b.dataset.days)); pop.classList.add("hidden"); }));
-      const allBtn = pop.querySelector(".range-preset[data-all]");
-      if (allBtn) allBtn.onclick = () => { this._resetRange(); pop.classList.add("hidden"); };
-      pop.querySelector('[data-action="custom"]').onclick = (e) => { e.stopPropagation(); pop.querySelector('[data-role="customForm"]').classList.toggle("hidden"); };
-      pop.querySelector('[data-action="apply"]').onclick = () => {
-        const from = pop.querySelector('[data-role="rangeFrom"]').value;
-        const to = pop.querySelector('[data-role="rangeTo"]').value || todayISO();
-        if (!from) return;
-        this._applyCustomRange(from, to);
-        pop.classList.add("hidden");
-      };
-      const resetBtn = pop.querySelector('[data-action="reset"]');
-      if (resetBtn) resetBtn.onclick = () => { this._resetRange(); pop.classList.add("hidden"); };
-    }
-
-    _updateRangeButtonLabel() {
-      const btn = this.el && this.el.querySelector('[data-role="rangeBtn"]');
-      if (!btn) return;
-      btn.textContent = this.rangeMode === "custom"
-        ? `${fmtDateShort(this.fromDate)} — ${fmtDateShort(this.toDate) || "сегодня"} ▾`
-        : "Диапазон: Все ▾";
-    }
 
     /** Quick preset (1Д…5Л): a pure *visual zoom* shortcut, per spec - it
      * never touches rangeMode/fromDate/toDate or stops live updates. If the
@@ -515,7 +316,7 @@
      * ensureCoverageBack() lazily pages in the missing older bars first
      * (same mechanism as scrolling left) so the zoom doesn't land on empty
      * space. */
-    async _applyQuickRange(days) {
+    async applyQuickRange(days) {
       if (!this.core || !this.core.candles.length) return;
       const toTs = this.core.candles[this.core.candles.length - 1].time;
       const fromTs = toTs - days * 86400;
@@ -526,30 +327,32 @@
       this.core.setVisibleBarCount(Math.round(days * barsPerDay));
     }
 
-    /** Explicit custom period (the "Выбрать период" form): this DOES set
-     * rangeMode/fromDate/toDate and reloads from the API with that window -
-     * unlike the quick presets, which only re-zoom already-tail-loaded
-     * data. Live ticking keeps working unless `to` is a genuinely past date
-     * (see _onRealtimeUpdate) - picking "today" as `to` (the form's own
-     * default) behaves exactly like "all" except the loaded window is
-     * bounded, per the spec's "custom range doesn't permanently disable
-     * new candles" rule. */
-    _applyCustomRange(from, to) {
+    /** Explicit custom period: this DOES set rangeMode/fromDate/toDate and
+     * reloads from the API with that window - unlike the quick presets,
+     * which only re-zoom already-tail-loaded data. Live ticking keeps
+     * working unless `to` is a genuinely past date (see _onRealtimeUpdate) -
+     * picking "today" as `to` behaves exactly like "all" except the loaded
+     * window is bounded. */
+    applyCustomRange(from, to) {
       this.rangeMode = "custom";
       this.fromDate = from;
-      this.toDate = to;
-      this.updateHeader();
+      this.toDate = to || todayISO();
       this._reload();
       this._notifyStateChanged();
     }
 
-    _resetRange() {
+    resetRange() {
       this.rangeMode = "all";
       this.fromDate = null;
       this.toDate = null;
-      this.updateHeader();
       this._reload();
       this._notifyStateChanged();
+    }
+
+    rangeLabel() {
+      return this.rangeMode === "custom"
+        ? `${fmtDateShort(this.fromDate)} — ${fmtDateShort(this.toDate) || "сегодня"}`
+        : "Все";
     }
 
     // ------------------------------------------------------- data load ----
@@ -615,15 +418,15 @@
       this._notifyStateChanged({ layoutApplied: true });
     }
 
-    async _saveAsTemplate() {
-      const name = prompt("Название шаблона", this.layout ? this.layout.name : `${this.symbol} · ${new Date().toLocaleDateString("ru-RU")}`);
-      if (!name) return;
+    async saveAsTemplate(name) {
+      name = name || prompt("Название шаблона", this.layout ? this.layout.name : `${this.symbol} · ${new Date().toLocaleDateString("ru-RU")}`);
+      if (!name) return null;
       const payload = {
         context: "analysis", name, symbol: this.symbol, board: this.board, timeframe: this.timeframe,
         visibleFrom: this.rangeMode === "custom" ? this.fromDate : null,
         visibleTo: this.rangeMode === "custom" ? this.toDate : null,
         chartType: this.core ? this.core.seriesType : "candles",
-        settings: {}, indicators: this.indicatorMgr.list().map((i) => ({ type: i.type, params: i.params })),
+        settings: this.core ? this.core.displayOptions : {}, indicators: this.indicatorMgr.list().map((i) => ({ type: i.type, params: i.params })),
       };
       const layout = this.layout && this.layout.name === name
         ? await CE.api.updateLayout(this.layout.id, payload)
@@ -631,6 +434,20 @@
       this.layout = layout;
       for (const d of this.drawingMgr.drawings) await this._persistDrawing(d);
       this._flashStatus("Шаблон сохранён.");
+      return layout;
+    }
+
+    async listTemplates() {
+      return CE.api.listLayouts("analysis", this.symbol).catch(() => []);
+    }
+
+    async loadTemplate(id) {
+      const l = await CE.api.getLayout(id);
+      await this._applyLayout(l);
+    }
+
+    async deleteTemplate(id) {
+      await CE.api.deleteLayout(id);
     }
 
     async _ensureLayout() {
@@ -695,6 +512,7 @@
      * the present. */
     _onRealtimeUpdate(data) {
       if (!this.core || data.last == null || data.ticker !== this.symbol) return;
+      this._liveTickCbs.forEach((cb) => cb(this.symbol, data.last));
       if (this.rangeMode === "custom" && this.toDate && this.toDate < todayISO()) return;
       const bucketSeconds = LIVE_TICK_BUCKET_SECONDS[this.timeframe];
       if (!bucketSeconds || !data.market_timestamp) return;
@@ -715,8 +533,10 @@
     }
 
     // -------------------------------------------------------- more menu ---
+    // (order-strategy request, snapshot-attached idea submission - reached
+    // from the workspace toolbar's overflow menu, acts on this tile)
 
-    async _openOrderModal() {
+    async openOrderModal() {
       let overlay = document.getElementById("caOrderModal");
       if (!overlay) {
         overlay = document.createElement("div");

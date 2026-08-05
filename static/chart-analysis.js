@@ -7,18 +7,24 @@
  *
  * The page is a workspace of one or more independent chart tiles
  * (ChartEngine.ChartTile, chart-engine/chart-tile.js) laid out in a grid.
- * Each tile now owns its OWN full settings header (symbol/board/timeframe/
- * chart type/range/indicators/templates/save/live subscription) - this file
- * only owns what's genuinely workspace-level: the layout switch, the
- * watchlist sidebar, the drawing tool palette + undo/redo/snap + the
- * properties/objects side panel (all of which act on whichever tile is
- * *active*), the optional cross-tile range/crosshair sync, and workspace
- * fullscreen. */
+ * As of the Stage-2/3 toolbar unification, this file owns ONE single-row
+ * top toolbar (ticker/name/price/change/interval/type/indicators/
+ * templates/alerts/replay/undo/redo/layout/save/settings/snapshot/
+ * fullscreen/collapse-bottom/collapse-right/overflow) whose every command
+ * acts on whichever tile is *active* - plus the drawing tool palette,
+ * properties/objects side panel, watchlist sidebar, optional cross-tile
+ * sync, and workspace fullscreen. */
 (function (global) {
   "use strict";
 
   const CE = global.ChartEngine;
 
+  /* Only tools DrawingManager (chart-engine/drawings.js) actually implements
+   * today - see its TOOL_DEFS. Stage 6 adds the rest (parallel channel,
+   * circle, polyline, Fibonacci, ray/extended-line variants, time range,
+   * note) together with their DrawingManager geometry/hit-testing/renderer
+   * support; listing them here first would be exactly the kind of
+   * decorative non-working button the spec prohibits. */
   const TOOL_BUTTONS = [
     { id: null, label: "Курсор", icon: "⇖" },
     { id: "horizontal_line", label: "Горизонтальный уровень", icon: "—" },
@@ -31,16 +37,39 @@
     { id: "long_position", label: "Long позиция", icon: "↑" },
     { id: "short_position", label: "Short позиция", icon: "↓" },
   ];
+
   const LAYOUTS = [
-    { id: "1", label: "1 график", rows: 1, cols: 1 },
-    { id: "2v", label: "2 графика вертикально", rows: 2, cols: 1 },
-    { id: "2h", label: "2 графика горизонтально", rows: 1, cols: 2 },
-    { id: "3", label: "3 графика (1 большой + 2)", asym: true },
-    { id: "4", label: "4 графика", rows: 2, cols: 2 },
-    { id: "6", label: "6 графиков (3×2)", rows: 2, cols: 3 },
+    { id: "1", label: "Один график", rows: 1, cols: 1 },
+    { id: "2v", label: "Два графика вертикально", rows: 2, cols: 1 },
+    { id: "2h", label: "Два графика горизонтально", rows: 1, cols: 2 },
+    { id: "3", label: "Три графика: один большой слева", asym: "left" },
+    { id: "3b", label: "Три графика: один большой справа", asym: "right" },
+    { id: "4", label: "Четыре графика", rows: 2, cols: 2 },
+    { id: "6", label: "Шесть графиков", rows: 2, cols: 3 },
   ];
-  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "3": 3, "4": 4, "6": 6 };
+  const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "3": 3, "3b": 3, "4": 4, "6": 6 };
   const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "3", 4: "4", 5: "6", 6: "6" };
+
+  const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", timescale: "Временная шкала", range: "Диапазон отображения" };
+
+  /* Ascending order = collapses first into the "Ещё" overflow menu when the
+   * toolbar doesn't fit its own width - see _recalcToolbarOverflow(). Core
+   * identity (ticker/name/price/change/interval/type), the layout picker,
+   * fullscreen and the overflow button itself are never collapsible. */
+  const TOOLBAR_META = {
+    collapseRight: { label: "Список инструментов", icon: "▤", priority: 1 },
+    collapseBottom: { label: "Панель свойств", icon: "︿", priority: 2 },
+    save: { label: "Сохранить шаблон", icon: "💾", priority: 3 },
+    settings: { label: "Настройки графика", icon: "⚙", priority: 4 },
+    snapshot: { label: "Снимок графика", icon: "📷", priority: 5 },
+    replay: { label: "Market Replay", icon: "⏮", priority: 6 },
+    redo: { label: "Повторить", icon: "↷", priority: 7 },
+    undo: { label: "Отменить", icon: "↶", priority: 8 },
+    alerts: { label: "Оповещения", icon: "🔔", priority: 9 },
+    templates: { label: "Шаблоны", icon: "🗂", priority: 10 },
+    indicators: { label: "Индикаторы", icon: "📈", priority: 11 },
+  };
+
   const WORKSPACE_STATE_KEY = "moexlab_chart_workspace";
   const BOTTOM_HEIGHT_KEY = "moexlab_ca_bottom_height";
   const BOTTOM_COLLAPSED_KEY = "moexlab_ca_bottom_collapsed";
@@ -48,16 +77,36 @@
   const BOTTOM_HEIGHT_DEFAULT = 220, BOTTOM_HEIGHT_MIN = 120, BOTTOM_HEIGHT_MAX = 560;
   const WATCHLIST_WIDTH_DEFAULT = 280, WATCHLIST_WIDTH_MIN = 220, WATCHLIST_WIDTH_MAX = 480;
 
-  /** Mini schematic shown on each layout button: a uniform rows×cols grid of
-   * cells for the symmetric layouts, or a hand-built 1-big+2-small shape for
-   * "3" (grid-template's repeat() can't express that asymmetry). */
+  /** Mini schematic shown on each layout thumbnail: a uniform rows×cols grid
+   * of cells for the symmetric layouts, or a hand-built 1-big+2-small shape
+   * (mirrored via CSS row-reverse for "3b") for the asymmetric ones -
+   * grid-template's repeat() can't express that asymmetry. */
   function layoutIcon(l) {
-    if (l.asym) {
+    if (l.asym === "left") {
       return `<span class="ca-layout-icon ca-layout-icon-3"><i class="ca-li-big"></i><span class="ca-li-col"><i></i><i></i></span></span>`;
+    }
+    if (l.asym === "right") {
+      return `<span class="ca-layout-icon ca-layout-icon-3 ca-layout-icon-3-rev"><i class="ca-li-big"></i><span class="ca-li-col"><i></i><i></i></span></span>`;
     }
     return `<span class="ca-layout-icon" style="grid-template-columns:repeat(${l.cols},1fr);grid-template-rows:repeat(${l.rows},1fr)">
       ${Array.from({ length: l.rows * l.cols }).map(() => "<i></i>").join("")}
     </span>`;
+  }
+
+  function fmtPrice(n) {
+    return n == null ? "—" : n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function toHex(color) {
+    if (!color || color[0] === "#") return color || "#7c8cff";
+    const m = color.match(/rgba?\((\d+),(\d+),(\d+)/);
+    if (!m) return "#7c8cff";
+    return "#" + m.slice(1, 4).map((x) => Number(x).toString(16).padStart(2, "0")).join("");
+  }
+  function escapeAttr(s) {
+    return String(s).replace(/"/g, "&quot;");
+  }
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
   }
 
   const Page = {
@@ -66,6 +115,7 @@
     tiles: [],
     activeTileId: null,
     layoutMode: "1",
+    syncFlags: { ticker: false, interval: false, crosshair: false, timescale: false, range: false },
     _archivedTiles: [],
     _built: false,
 
@@ -73,8 +123,7 @@
       return this.tiles.find((t) => t.id === this.activeTileId) || this.tiles[0] || null;
     },
     // Kept for the drawing toolbar / side panel below, which act on
-    // whichever tile is active - everything else (symbol, timeframe, range,
-    // indicators, templates, save, live) now lives on ChartTile itself.
+    // whichever tile is active.
     get core() { return this.activeTile ? this.activeTile.core : null; },
     get indicatorMgr() { return this.activeTile ? this.activeTile.indicatorMgr : null; },
     get drawingMgr() { return this.activeTile ? this.activeTile.drawingMgr : null; },
@@ -92,10 +141,8 @@
         this._build();
         this._syncTileGrid();
         this._loadSecurities();
+        if (global.AlertService) global.AlertService.onTriggered(() => this._refreshAlertBadge());
       }
-      // Runs every time this tab becomes active (not just the first build) -
-      // see onTabLeave() below and activateTab() in app.js, which calls
-      // init() on every visit but only stops polling on the way out.
       this.tiles.forEach((t) => t.startRealtime());
     },
 
@@ -107,25 +154,62 @@
       try {
         this.securities = await fetch("/api/securities").then((r) => r.json());
         this.tiles.forEach((t) => t.setSecurities(this.securities));
+        this._renderTickerOptions();
       } catch (e) { /* securities catalog is optional here - manual ticker entry still works via prompt fallback */ }
     },
 
+    _instrumentName(ticker) {
+      const s = this.securities.find((x) => x.SECID === ticker);
+      return s ? (s.SHORTNAME || "") : "";
+    },
+
+    // ----------------------------------------------------------- build ----
+
     _build() {
+      const tile = this.activeTile;
       this.root.innerHTML = `
-        <div class="ca-toolbar">
-          <div class="ca-layout-switch" id="caLayoutSwitch">
-            ${LAYOUTS.map((l) => `
-              <button class="ca-layout-btn ${l.id === this.layoutMode ? "active" : ""}" data-layout="${l.id}" title="${l.label}" aria-label="${l.label}">
-                ${layoutIcon(l)}
-              </button>`).join("")}
+        <div class="ca-toolbar ca-toolbar-unified" id="caToolbar">
+          <div class="gt-scroll" id="gtScroll">
+            <select class="gt-select gt-ticker" id="gtTicker" aria-label="Инструмент"></select>
+            <span class="gt-name" id="gtName" data-priority-exempt></span>
+            <span class="gt-price" id="gtPrice">—</span>
+            <span class="gt-change" id="gtChange"></span>
+            <select class="gt-select gt-tf" id="gtTimeframe" aria-label="Таймфрейм">
+              ${tile.listTimeframes().map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
+            </select>
+            <select class="gt-select gt-type" id="gtChartType" aria-label="Тип графика">
+              ${tile.listChartTypes().map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
+            </select>
+            <div class="gt-menu" id="gtIndicatorsMenu" data-key="indicators" data-priority="11" data-label="Индикаторы" data-icon="📈">
+              <button class="gt-btn" id="gtIndicatorsBtn" aria-haspopup="true" title="Индикаторы" aria-label="Индикаторы">📈 <span class="gt-btn-label">Индикаторы</span></button>
+              <div class="ca-popover hidden" id="gtIndicatorsPop"></div>
+            </div>
+            <div class="gt-menu" id="gtTemplatesMenu" data-key="templates" data-priority="10" data-label="Шаблоны" data-icon="🗂">
+              <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">🗂 <span class="gt-btn-label">Шаблоны</span></button>
+              <div class="ca-popover hidden" id="gtTemplatesPop"></div>
+            </div>
+            <div class="gt-menu" id="gtAlertsMenu" data-key="alerts" data-priority="9" data-label="Оповещения" data-icon="🔔">
+              <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">🔔<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
+              <div class="ca-popover ca-popover-wide hidden" id="gtAlertsPop"></div>
+            </div>
+            <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">⏮</button>
+            <button class="icon-btn" id="caUndoBtn" data-key="undo" data-priority="8" data-label="Отменить" data-icon="↶" title="Отменить (Ctrl+Z)" aria-label="Отменить">↶</button>
+            <button class="icon-btn" id="caRedoBtn" data-key="redo" data-priority="7" data-label="Повторить" data-icon="↷" title="Повторить (Ctrl+Shift+Z)" aria-label="Повторить">↷</button>
+            <div class="gt-menu" id="gtLayoutMenu" data-priority-exempt>
+              <button class="icon-btn" id="gtLayoutBtn" title="Раскладка графиков" aria-label="Выбор раскладки графиков" aria-haspopup="true">▦</button>
+              <div class="ca-popover ca-popover-layouts hidden" id="gtLayoutPop"></div>
+            </div>
+            <button class="icon-btn" id="gtSaveBtn" data-key="save" data-priority="3" data-label="Сохранить шаблон" data-icon="💾" title="Сохранить шаблон" aria-label="Сохранить шаблон">💾</button>
+            <button class="icon-btn" id="gtSettingsBtn" data-key="settings" data-priority="4" data-label="Настройки графика" data-icon="⚙" title="Настройки графика" aria-label="Настройки графика">⚙</button>
+            <button class="icon-btn" id="caSnapshotBtn" data-key="snapshot" data-priority="5" data-label="Снимок графика" data-icon="📷" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">📷</button>
+            <button class="icon-btn" id="caFullscreenBtn" data-priority-exempt title="Полноэкранный режим рабочего пространства" aria-label="Полноэкранный режим рабочего пространства">⛶</button>
+            <button class="icon-btn" id="gtCollapseBottomBtn" data-key="collapseBottom" data-priority="2" data-label="Свернуть панель свойств" data-icon="︿" title="Свернуть панель свойств" aria-label="Свернуть/развернуть панель свойств и объектов">︿</button>
+            <button class="icon-btn" id="gtCollapseRightBtn" data-key="collapseRight" data-priority="1" data-label="Свернуть список инструментов" data-icon="▤" title="Свернуть список инструментов" aria-label="Свернуть/развернуть список инструментов">▤</button>
           </div>
-          <span class="ca-toolbar-spacer"></span>
-          <button class="icon-btn" id="caUndoBtn" title="Отменить (Ctrl+Z)">↶</button>
-          <button class="icon-btn" id="caRedoBtn" title="Повторить (Ctrl+Shift+Z)">↷</button>
-          <button class="icon-btn" id="caSyncBtn" title="Синхронизировать время, масштаб и перекрестие между графиками" aria-label="Синхронизация графиков">🔗</button>
-          <button class="icon-btn" id="caSnapshotBtn" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">📷</button>
-          <button class="icon-btn" id="caWatchlistToggleBtn" title="Список тикеров">☰</button>
-          <button class="icon-btn" id="caFullscreenBtn" title="Полноэкранный режим рабочего пространства">⛶</button>
+          <div class="gt-menu gt-more" id="gtMoreMenu">
+            <button class="icon-btn" id="gtMoreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">⋯</button>
+            <div class="ca-popover ca-popover-right ca-popover-wide hidden" id="gtMorePop"></div>
+          </div>
         </div>
         <div class="ca-workspace" id="caWorkspace">
           <div class="ca-tools" id="caTools">
@@ -143,8 +227,6 @@
                   <button class="ca-side-tab active" data-side="props">Свойства</button>
                   <button class="ca-side-tab" data-side="objects">Объекты</button>
                 </nav>
-                <span class="ca-toolbar-spacer"></span>
-                <button class="icon-btn" id="caBottomCollapseBtn" title="Свернуть панель" aria-label="Свернуть/развернуть панель свойств и объектов">︿</button>
               </div>
               <div class="ca-bottom-body">
                 <div id="caProps" class="ca-side-panel"></div>
@@ -158,6 +240,16 @@
         <div class="wl-mobile-backdrop" id="caWatchlistBackdrop"></div>
       `;
 
+      this._wireToolTools();
+      this._wireGlobalToolbar();
+      this._wireWatchlist();
+      this._wireSideTabs();
+      this._buildPanelChrome();
+      this._wireToolbarOverflow();
+      this._syncCollapseRightButton();
+    },
+
+    _wireToolTools() {
       this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => {
         b.onclick = () => {
           this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((x) => x.classList.remove("active"));
@@ -166,34 +258,9 @@
         };
       });
       this.root.querySelector("#caDeleteBtn").onclick = () => { if (this.drawingMgr && this.drawingMgr.selectedId) this.drawingMgr.removeDrawing(this.drawingMgr.selectedId); };
-      this.root.querySelector("#caUndoBtn").onclick = () => this.drawingMgr && this.drawingMgr.undo();
-      this.root.querySelector("#caRedoBtn").onclick = () => this.drawingMgr && this.drawingMgr.redo();
-      this.root.querySelector("#caSyncBtn").classList.toggle("active", !!this.syncEnabled);
-      this.root.querySelector("#caSyncBtn").onclick = (e) => {
-        this.syncEnabled = !this.syncEnabled;
-        e.target.classList.toggle("active", this.syncEnabled);
-        this._saveWorkspaceState();
-      };
-      this.root.querySelector("#caSnapshotBtn").onclick = () => this._downloadSnapshot();
-      this._fsCtrl = new CE.Fullscreen.FullscreenController(this.root, {
-        className: "is-fullscreen",
-        onChange: (active) => this._onFullscreenChange(active),
-      });
-      this.root.querySelector("#caFullscreenBtn").onclick = () => this._fsCtrl.toggle();
+    },
 
-      this.root.querySelectorAll(".ca-layout-btn").forEach((b) => (b.onclick = () => this._setLayout(b.dataset.layout)));
-
-      let watchlistCollapsed = false;
-      try { watchlistCollapsed = localStorage.getItem("moexlab_watchlist_collapsed") === "1"; } catch (e) { /* ignore */ }
-      this.watchlist = new global.WatchlistSidebar(this.root.querySelector("#caWatchlist"), {
-        collapsed: watchlistCollapsed,
-        onSelect: (ticker) => { if (this.activeTile) this.activeTile.selectSymbol(ticker); },
-        mobileBackdrop: this.root.querySelector("#caWatchlistBackdrop"),
-      });
-      if (this.activeTile) this.watchlist.setActive(this.activeTile.symbol);
-      this.root.querySelector("#caWatchlistToggleBtn").onclick = () => this.watchlist.openMobileDrawer();
-      this.root.querySelector("#caWatchlistBackdrop").onclick = () => this.watchlist.closeMobileDrawer();
-
+    _wireSideTabs() {
       this.root.querySelectorAll(".ca-side-tab").forEach((b) => {
         b.onclick = () => {
           this.root.querySelectorAll(".ca-side-tab").forEach((x) => x.classList.remove("active"));
@@ -202,17 +269,366 @@
           this.root.querySelector("#caObjects").classList.toggle("hidden", b.dataset.side !== "objects");
         };
       });
+    },
 
-      this._buildPanelChrome();
+    _wireWatchlist() {
+      let watchlistCollapsed = false;
+      try { watchlistCollapsed = localStorage.getItem("moexlab_watchlist_collapsed") === "1"; } catch (e) { /* ignore */ }
+      this.watchlist = new global.WatchlistSidebar(this.root.querySelector("#caWatchlist"), {
+        collapsed: watchlistCollapsed,
+        onSelect: (ticker) => this._commandSelectTicker(ticker),
+        mobileBackdrop: this.root.querySelector("#caWatchlistBackdrop"),
+      });
+      if (this.activeTile) this.watchlist.setActive(this.activeTile.symbol);
+    },
+
+    // ------------------------------------------------- unified toolbar ----
+
+    _wireGlobalToolbar() {
+      const $ = (sel) => this.root.querySelector(sel);
+      const tile = this.activeTile;
+
+      $("#gtTicker").onchange = (e) => this._commandSelectTicker(e.target.value);
+      $("#gtTimeframe").value = tile.timeframe;
+      $("#gtTimeframe").onchange = (e) => this._commandSetTimeframe(e.target.value);
+      $("#gtChartType").value = tile.core ? tile.core.seriesType : "candles";
+      $("#gtChartType").onchange = (e) => { if (this.activeTile) this.activeTile.setChartType(e.target.value); };
+
+      this._wireGlobalPopover($("#gtIndicatorsBtn"), $("#gtIndicatorsPop"), () => this._renderIndicatorsInto($("#gtIndicatorsPop")));
+      this._wireGlobalPopover($("#gtTemplatesBtn"), $("#gtTemplatesPop"), () => this._renderTemplatesInto($("#gtTemplatesPop")));
+      this._wireGlobalPopover($("#gtAlertBtn"), $("#gtAlertsPop"), () => this._renderAlertsInto($("#gtAlertsPop")));
+      this._wireGlobalPopover($("#gtLayoutBtn"), $("#gtLayoutPop"), () => this._renderLayoutPopover());
+      this._wireGlobalPopover($("#gtMoreBtn"), $("#gtMorePop"), () => this._renderMorePopover());
+
+      this._toolbarActions = {
+        replay: () => this._commandOpenReplay(),
+        undo: () => this.drawingMgr && this.drawingMgr.undo(),
+        redo: () => this.drawingMgr && this.drawingMgr.redo(),
+        save: () => this._commandSaveTemplate(),
+        settings: () => this._openSettingsDialog(),
+        snapshot: () => this._downloadSnapshot(),
+        collapseBottom: () => this._setBottomCollapsed(!this._bottomCollapsed),
+        collapseRight: () => {
+          // Below 980px the watchlist is a full off-canvas drawer (display:none
+          // until opened), not just a narrow column - see chart.css's mobile
+          // block - so this button's job is "open the drawer" there instead
+          // of "toggle collapsed width".
+          if (global.matchMedia && global.matchMedia("(max-width: 980px)").matches) { this.watchlist.openMobileDrawer(); return; }
+          this.watchlist.setCollapsed(!this.root.querySelector("#caWatchlist").classList.contains("wl-collapsed"));
+          this._syncCollapseRightButton();
+        },
+        indicators: () => $("#gtIndicatorsBtn").click(),
+        templates: () => $("#gtTemplatesBtn").click(),
+        alerts: () => $("#gtAlertBtn").click(),
+      };
+      Object.keys(this._toolbarActions).forEach((key) => {
+        const btn = this.root.querySelector(`[data-key="${key}"]`);
+        if (btn && btn.tagName === "BUTTON") btn.onclick = this._toolbarActions[key];
+      });
+
+      $("#caFullscreenBtn").onclick = () => this._fsCtrl.toggle();
+      this._fsCtrl = new CE.Fullscreen.FullscreenController(this.root, {
+        className: "is-fullscreen",
+        onChange: (active) => this._onFullscreenChange(active),
+      });
+
+      this.root.querySelector("#caWatchlistBackdrop").onclick = () => this.watchlist.closeMobileDrawer();
+
+      this._renderTickerOptions();
+      this._refreshGlobalHeader();
+    },
+
+    _wireGlobalPopover(btn, pop, onOpen) {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const willOpen = pop.classList.contains("hidden");
+        this.root.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
+        if (willOpen) { pop.classList.remove("hidden"); if (onOpen) onOpen(); }
+      };
+      document.addEventListener("click", (e) => { if (!pop.contains(e.target) && e.target !== btn) pop.classList.add("hidden"); });
+    },
+
+    _renderTickerOptions() {
+      const sel = this.root.querySelector("#gtTicker");
+      if (!sel || !this.securities.length) return;
+      const current = this.activeTile ? this.activeTile.symbol : null;
+      sel.innerHTML = this.securities.map((s) => `<option value="${s.SECID}">${s.SECID} · ${s.SHORTNAME || ""}</option>`).join("");
+      if (current) sel.value = current;
+    },
+
+    /** Refreshes the toolbar's ticker/name/price/change/timeframe/chartType
+     * display from whichever tile is active - called on activation, symbol/
+     * timeframe/chart-type change, and every price tick for the active
+     * tile. */
+    _refreshGlobalHeader() {
+      const tile = this.activeTile;
+      const $ = (sel) => this.root.querySelector(sel);
+      if (!tile) return;
+      const tickerSel = $("#gtTicker");
+      if (tickerSel) tickerSel.value = tile.symbol;
+      $("#gtName").textContent = this._instrumentName(tile.symbol);
+      $("#gtTimeframe").value = tile.timeframe;
+      $("#gtChartType").value = tile.core ? tile.core.seriesType : "candles";
+      const info = tile._lastPriceInfo;
+      $("#gtPrice").textContent = info ? fmtPrice(info.price) : "—";
+      const changeEl = $("#gtChange");
+      if (info && info.diff != null) {
+        changeEl.textContent = `${info.diff >= 0 ? "+" : ""}${fmtPrice(info.diff)} (${info.diff >= 0 ? "+" : ""}${info.pct.toFixed(2)}%)`;
+        changeEl.className = `gt-change ${info.diff >= 0 ? "pnl-pos" : "pnl-neg"}`;
+      } else {
+        changeEl.textContent = "";
+        changeEl.className = "gt-change";
+      }
+    },
+
+    // --------------------------------------------------- toolbar commands --
+
+    _commandSelectTicker(ticker) {
+      if (!this.activeTile) return;
+      this.activeTile.selectSymbol(ticker);
+      if (this.syncFlags.ticker) this.tiles.forEach((t) => { if (t !== this.activeTile) t.selectSymbol(ticker); });
+    },
+
+    _commandSetTimeframe(tf) {
+      if (!this.activeTile) return;
+      this.activeTile.setTimeframe(tf);
+      if (this.syncFlags.interval) this.tiles.forEach((t) => { if (t !== this.activeTile) t.setTimeframe(tf); });
+    },
+
+    async _commandSaveTemplate() {
+      if (!this.activeTile) return;
+      await this.activeTile.saveAsTemplate();
+    },
+
+    /** Switches to the Market Replay tab and preselects the active tile's
+     * ticker in its setup form - Market Replay itself (a separate, already
+     * fully-implemented full-screen mode with its own transport panel,
+     * speed control, Space-to-play/pause and future-candle blocking - see
+     * market-replay.js) stays a distinct workspace from live multi-chart
+     * analysis, matching how the rest of the app already separates the two
+     * (Stage 10's "нельзя увидеть будущие свечи" is enforced server-side
+     * there, not re-implemented here). */
+    _commandOpenReplay() {
+      const ticker = this.activeTile ? this.activeTile.symbol : null;
+      if (global.activateTab) global.activateTab("replay");
+      if (ticker) {
+        setTimeout(() => {
+          const inp = document.getElementById("mrTicker");
+          if (inp) inp.value = ticker;
+        }, 0);
+      }
+    },
+
+    // ------------------------------------------------- indicators popover --
+
+    _renderIndicatorsInto(container) {
+      const tile = this.activeTile;
+      if (!tile) { container.innerHTML = ""; return; }
+      const active = new Set(tile.indicatorMgr.list().map((i) => i.type));
+      container.innerHTML = CE.Indicators.registry.map((def) => `
+        <label class="ca-indicator-row">
+          <input type="checkbox" data-ind="${def.id}" ${active.has(def.id) ? "checked" : ""}>
+          <span>${def.label}</span>
+        </label>`).join("");
+      container.querySelectorAll("input[data-ind]").forEach((cb) => {
+        cb.onchange = () => {
+          const id = cb.dataset.ind;
+          if (cb.checked) {
+            tile.indicatorMgr.add(id, {});
+          } else {
+            const existing = tile.indicatorMgr.list().find((i) => i.type === id);
+            if (existing) tile.indicatorMgr.remove(existing.id);
+          }
+          this._saveWorkspaceState();
+          this._renderObjects();
+        };
+      });
+    },
+
+    // -------------------------------------------------- templates popover --
+
+    async _renderTemplatesInto(container) {
+      const tile = this.activeTile;
+      if (!tile) { container.innerHTML = ""; return; }
+      container.innerHTML = `<div class="muted-note">Загрузка…</div>`;
+      const layouts = await tile.listTemplates();
+      container.innerHTML = layouts.length
+        ? layouts.map((l) => `
+            <div class="ca-template-row">
+              <button class="link-btn ca-template-load" data-id="${l.id}">${l.name}${l.is_default ? " ★" : ""}</button>
+              <button class="icon-btn" data-del="${l.id}" title="Удалить">🗑</button>
+            </div>`).join("")
+        : `<div class="muted-note">Нет сохранённых шаблонов для ${tile.symbol}</div>`;
+      container.querySelectorAll(".ca-template-load").forEach((b) => (b.onclick = async () => {
+        await tile.loadTemplate(b.dataset.id);
+        this.root.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
+      }));
+      container.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async (e) => {
+        e.stopPropagation();
+        await tile.deleteTemplate(b.dataset.del);
+        b.closest(".ca-template-row").remove();
+      }));
+    },
+
+    // ----------------------------------------------------- alerts popover --
+
+    _renderAlertsInto(container) {
+      const AS = global.AlertService;
+      if (!AS) { container.innerHTML = `<div class="muted-note">Сервис оповещений недоступен.</div>`; return; }
+      const tile = this.activeTile;
+      const list = AS.list();
+      const soundOn = AS.isSoundEnabled();
+      container.innerHTML = `
+        <div class="alert-form">
+          <input type="text" id="alSymbol" value="${tile ? tile.symbol : ""}" placeholder="Тикер" aria-label="Тикер оповещения">
+          <select id="alCondition" aria-label="Условие">
+            ${Object.entries(AS.CONDITION_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
+          </select>
+          <input type="number" id="alValue" step="0.01" placeholder="Цена" aria-label="Пороговая цена">
+          <select id="alRepeat" aria-label="Повтор">
+            <option value="once">Один раз</option>
+            <option value="repeat">Повторять</option>
+          </select>
+          <button class="secondary" id="alAdd">Добавить</button>
+        </div>
+        <label class="ca-more-toggle alert-sound-toggle"><input type="checkbox" id="alSound" ${soundOn ? "checked" : ""}><span>Звуковой сигнал</span></label>
+        <div class="alert-list" id="alList">
+          ${list.length ? list.map((a) => `
+            <div class="alert-row ${a.enabled ? "" : "alert-row-off"}">
+              <div class="alert-row-main">
+                <strong>${a.symbol}</strong>
+                <span>${AS.CONDITION_LABELS[a.condition]} ${fmtPrice(a.value)}</span>
+                <span class="muted">${a.repeat === "repeat" ? "повторно" : "однократно"}${a.triggerCount ? ` · срабатывало ${a.triggerCount}×` : ""}</span>
+              </div>
+              <div class="alert-row-actions">
+                <button data-al-toggle="${a.id}" title="${a.enabled ? "Отключить" : "Включить"}">${a.enabled ? "🔔" : "🔕"}</button>
+                <button data-al-del="${a.id}" title="Удалить">🗑</button>
+              </div>
+            </div>`).join("") : `<div class="muted-note">Нет созданных оповещений.</div>`}
+        </div>
+      `;
+      container.querySelector("#alAdd").onclick = () => {
+        const symbol = container.querySelector("#alSymbol").value.trim().toUpperCase();
+        const value = Number(container.querySelector("#alValue").value);
+        if (!symbol || !Number.isFinite(value)) return;
+        AS.create({
+          symbol, value,
+          condition: container.querySelector("#alCondition").value,
+          repeat: container.querySelector("#alRepeat").value,
+        });
+        this._renderAlertsInto(container);
+      };
+      container.querySelector("#alSound").onchange = (e) => AS.setSoundEnabled(e.target.checked);
+      container.querySelectorAll("[data-al-toggle]").forEach((b) => (b.onclick = () => {
+        const a = list.find((x) => x.id === b.dataset.alToggle);
+        AS.setEnabled(a.id, !a.enabled);
+        this._renderAlertsInto(container);
+      }));
+      container.querySelectorAll("[data-al-del]").forEach((b) => (b.onclick = () => {
+        AS.remove(b.dataset.alDel);
+        this._renderAlertsInto(container);
+      }));
+    },
+
+    _refreshAlertBadge() {
+      const badge = this.root.querySelector("#gtAlertBadge");
+      if (!badge) return;
+      badge.classList.remove("hidden");
+      setTimeout(() => badge.classList.add("hidden"), 4000);
+    },
+
+    // ------------------------------------------------------ more menu -----
+
+    _renderMorePopover() {
+      const pop = this.root.querySelector("#gtMorePop");
+      const tile = this.activeTile;
+      if (!tile) { pop.innerHTML = ""; return; }
+      const hidden = [...this.root.querySelectorAll("#gtScroll [data-key].gt-hidden")]
+        .sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
+      const overflowRows = hidden.map((el) => `<button class="ca-more-item" data-act="${el.dataset.key}">${el.dataset.icon} ${el.dataset.label}</button>`).join("");
+      pop.innerHTML = `
+        ${overflowRows ? `<div class="ca-more-group">${overflowRows}</div><div class="ca-more-sep"></div>` : ""}
+        <div class="ca-more-group">
+          <div class="ca-more-heading">Диапазон</div>
+          <div class="ca-range-presets">
+            ${tile.listRangePresets().map((p) => `<button class="range-preset" data-range-days="${p.days}">${p.label}</button>`).join("")}
+            <button class="range-preset ${tile.rangeMode !== "custom" ? "active" : ""}" data-range-all="1">Все</button>
+          </div>
+        </div>
+        <div class="ca-more-sep"></div>
+        <div class="ca-more-group">
+          <div class="ca-more-heading">Рынок</div>
+          <select class="gt-select" id="moreBoardSelect"><option value="TQBR" ${tile.board === "TQBR" ? "selected" : ""}>TQBR</option></select>
+        </div>
+        <div class="ca-more-sep"></div>
+        <div class="ca-more-group">
+          <div class="ca-more-heading">Синхронизация графиков</div>
+          ${Object.keys(SYNC_LABELS).map((k) => `<label class="ca-more-toggle"><input type="checkbox" data-sync="${k}" ${this.syncFlags[k] ? "checked" : ""}><span>${SYNC_LABELS[k]}</span></label>`).join("")}
+        </div>
+        <div class="ca-more-sep"></div>
+        <button class="ca-more-item" data-act="order">⚙ Заказать стратегию по разметке</button>
+        <button class="ca-more-item" data-act="snap">🧲 Прилипание к свечам</button>
+        <button class="ca-more-item" data-act="reset">↺ Сбросить масштаб</button>
+      `;
+      pop.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
+        pop.classList.add("hidden");
+        const act = b.dataset.act;
+        if (this._toolbarActions[act]) this._toolbarActions[act]();
+        else if (act === "order") tile.openOrderModal();
+        else if (act === "snap") { if (this.drawingMgr) this.drawingMgr.snapEnabled = !this.drawingMgr.snapEnabled; }
+        else if (act === "reset") { if (tile.core) tile.core.fitContent(); }
+      }));
+      pop.querySelectorAll(".range-preset[data-range-days]").forEach((b) => (b.onclick = () => {
+        tile.applyQuickRange(Number(b.dataset.rangeDays));
+        if (this.syncFlags.range) this.tiles.forEach((t) => { if (t !== tile) t.applyQuickRange(Number(b.dataset.rangeDays)); });
+        pop.classList.add("hidden");
+      }));
+      const allBtn = pop.querySelector("[data-range-all]");
+      if (allBtn) allBtn.onclick = () => {
+        tile.resetRange();
+        if (this.syncFlags.range) this.tiles.forEach((t) => { if (t !== tile) t.resetRange(); });
+        pop.classList.add("hidden");
+      };
+      const boardSel = pop.querySelector("#moreBoardSelect");
+      if (boardSel) boardSel.onchange = (e) => tile.setBoard(e.target.value);
+      pop.querySelectorAll("[data-sync]").forEach((cb) => (cb.onchange = () => {
+        this.syncFlags[cb.dataset.sync] = cb.checked;
+        this._saveWorkspaceState();
+      }));
+    },
+
+    // ----------------------------------------------------- responsive -----
+
+    _wireToolbarOverflow() {
+      const scroll = this.root.querySelector("#gtScroll");
+      const ro = new ResizeObserver(() => this._recalcToolbarOverflow());
+      ro.observe(this.root.querySelector("#caToolbar"));
+      this._toolbarResizeObserver = ro;
+      this._recalcToolbarOverflow();
+    },
+
+    /** Keeps the toolbar a single visual row (spec: "нельзя оставлять
+     * элементы в нескольких несвязанных строках") by hiding the lowest-
+     * priority collapsible items (see TOOLBAR_META) while the row's content
+     * is wider than the row itself, and showing them again as space frees
+     * up. Hidden items' actions stay reachable through the "Ещё" menu,
+     * rendered by _renderMorePopover() from the same .gt-hidden markers. */
+    _recalcToolbarOverflow() {
+      const scroll = this.root.querySelector("#gtScroll");
+      if (!scroll) return;
+      const items = [...scroll.querySelectorAll("[data-key]")].sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
+      items.forEach((el) => el.classList.remove("gt-hidden"));
+      let guard = 0;
+      while (scroll.scrollWidth > scroll.clientWidth + 1 && guard < items.length) {
+        const next = items.find((el) => !el.classList.contains("gt-hidden"));
+        if (!next) break;
+        next.classList.add("gt-hidden");
+        guard++;
+      }
     },
 
     // --------------------------------------------------- resizable chrome --
 
-    /** Wires the bottom panel's collapse toggle and the two drag handles
-     * (bottom-panel height, watchlist width), restoring persisted sizes.
-     * Kept deliberately separate from tile/drawing state (WORKSPACE_STATE_KEY):
-     * these are chrome dimensions, not chart content, and should survive
-     * independently of layout/tile changes. */
     _buildPanelChrome() {
       const bottom = this.root.querySelector("#caBottom");
       const watchlist = this.root.querySelector("#caWatchlist");
@@ -229,7 +645,6 @@
       this._bottomHeight = clamp(height, BOTTOM_HEIGHT_MIN, BOTTOM_HEIGHT_MAX);
       bottom.style.height = this._bottomHeight + "px";
       this._setBottomCollapsed(collapsed, { skipSave: true });
-      this.root.querySelector("#caBottomCollapseBtn").onclick = () => this._setBottomCollapsed(!this._bottomCollapsed);
 
       watchlist.style.width = clamp(wlWidth, WATCHLIST_WIDTH_MIN, WATCHLIST_WIDTH_MAX) + "px";
 
@@ -246,11 +661,6 @@
       }, () => { try { localStorage.setItem(WATCHLIST_WIDTH_KEY, String(watchlist.getBoundingClientRect().width)); } catch (e) { /* ignore */ } }, "x");
     },
 
-    /** Generic drag-to-resize: `onDrag(deltaSincePrevFrame)` fires on every
-     * mousemove with the delta since the LAST call (not since drag start),
-     * so callers can just add it to their current size - simpler than every
-     * caller re-deriving from a start snapshot. `axis` picks clientX vs
-     * clientY; defaults to vertical (row-resize handles). */
     _wireDrag(handle, onDrag, onDone, axis) {
       if (!handle) return;
       handle.addEventListener("mousedown", (e) => {
@@ -260,7 +670,7 @@
         let last = axis === "x" ? e.clientX : e.clientY;
         const onMove = (ev) => {
           const pos = axis === "x" ? ev.clientX : ev.clientY;
-          const delta = last - pos; // dragging the handle up/left grows the panel it's attached to
+          const delta = last - pos;
           last = pos;
           onDrag(delta);
           this.tiles.forEach((t) => t.core && t.core._onResize());
@@ -281,10 +691,11 @@
       this._bottomCollapsed = collapsed;
       const bottom = this.root.querySelector("#caBottom");
       bottom.classList.toggle("collapsed", collapsed);
-      const btn = this.root.querySelector("#caBottomCollapseBtn");
+      const btn = this.root.querySelector("#gtCollapseBottomBtn");
       if (btn) {
         btn.textContent = collapsed ? "﹀" : "︿";
-        btn.title = collapsed ? "Развернуть панель" : "Свернуть панель";
+        btn.title = collapsed ? "Развернуть панель свойств" : "Свернуть панель свойств";
+        btn.classList.toggle("active", collapsed);
       }
       if (!skipSave) {
         try { localStorage.setItem(BOTTOM_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (e) { /* ignore */ }
@@ -292,11 +703,15 @@
       requestAnimationFrame(() => this.tiles.forEach((t) => t.core && t.core._onResize()));
     },
 
-    /** Downloads a PNG of the active tile's chart via lightweight-charts'
-     * own canvas compositing (chart.takeScreenshot()) - the same mechanism
-     * already used for the "order strategy" attachment, just exposed as a
-     * direct, real action instead of only firing implicitly inside that
-     * other flow. */
+    _syncCollapseRightButton() {
+      const btn = this.root.querySelector("#gtCollapseRightBtn");
+      const collapsed = this.root.querySelector("#caWatchlist").classList.contains("wl-collapsed");
+      if (!btn) return;
+      btn.title = collapsed ? "Развернуть список инструментов" : "Свернуть список инструментов";
+      btn.setAttribute("aria-label", "Свернуть/развернуть список инструментов");
+      btn.classList.toggle("active", collapsed);
+    },
+
     _downloadSnapshot() {
       if (!this.core) return;
       const canvas = this.core.chart.takeScreenshot();
@@ -307,7 +722,22 @@
       a.click();
     },
 
-    // ------------------------------------------------------------- tiles --
+    // ---------------------------------------------------- layout popover --
+
+    _renderLayoutPopover() {
+      const pop = this.root.querySelector("#gtLayoutPop");
+      pop.innerHTML = LAYOUTS.map((l) => `
+        <button class="ca-layout-thumb ${l.id === this.layoutMode ? "active" : ""}" data-layout="${l.id}" title="${l.label}" aria-label="${l.label}">
+          ${layoutIcon(l)}
+          <span class="ca-layout-thumb-label">${l.label}</span>
+        </button>`).join("");
+      pop.querySelectorAll(".ca-layout-thumb").forEach((b) => (b.onclick = () => {
+        this._setLayout(b.dataset.layout);
+        pop.classList.add("hidden");
+      }));
+    },
+
+    // ------------------------------------------------------------ tiles --
 
     _syncTileGrid() {
       const grid = this.root.querySelector("#caTileGrid");
@@ -326,11 +756,19 @@
           tile.drawingMgr.onChange(() => {
             if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
           });
-          tile.onRangeChange((range) => { if (this.syncEnabled) this._broadcastRange(tile, range); });
-          tile.onCrosshairMove((time, price) => { if (this.syncEnabled) this._broadcastCrosshair(tile, time, price); });
+          tile.onRangeChange((range) => { if (this.syncFlags.timescale) this._broadcastRange(tile, range); });
+          tile.onCrosshairMove((time, price) => { if (this.syncFlags.crosshair) this._broadcastCrosshair(tile, time, price); });
+          tile.onPriceUpdate((t, info) => {
+            t._lastPriceInfo = info;
+            if (t.id === this.activeTileId) this._refreshGlobalHeader();
+          });
+          tile.onLiveTick((symbol, price) => { if (global.AlertService) global.AlertService.evaluate(symbol, price); });
           tile.onStateChanged((t, detail) => {
             this._saveWorkspaceState();
-            if (t.id === this.activeTileId && this.watchlist) this.watchlist.setActive(t.symbol);
+            if (t.id === this.activeTileId) {
+              if (this.watchlist) this.watchlist.setActive(t.symbol);
+              this._refreshGlobalHeader();
+            }
           });
         } else if (tile.el.parentElement !== grid) {
           grid.appendChild(tile.el);
@@ -339,11 +777,6 @@
       });
     },
 
-    /** Optional sync toggle (🔗 button): mirrors visible range and crosshair
-     * position across every tile so panning/zooming/hovering one chart
-     * moves the others the same way - each tile's own applyLogicalRange/
-     * applyCrosshair sets an internal flag while applying, so this never
-     * loops back into another broadcast. */
     _broadcastRange(source, range) {
       this.tiles.forEach((t) => { if (t !== source) t.applyLogicalRange(range); });
     },
@@ -356,7 +789,6 @@
       this.layoutMode = mode;
       this._resizeTiles(LAYOUT_TILE_COUNT[mode]);
       this._syncTileGrid();
-      this._syncActiveLayoutButton();
       this._saveWorkspaceState();
     },
 
@@ -387,9 +819,9 @@
       tile.destroy();
       this.layoutMode = COUNT_TO_LAYOUT[this.tiles.length] || this.layoutMode;
       if (wasActive) this.activeTileId = this.tiles[Math.max(0, idx - 1)].id;
-      this._syncActiveLayoutButton();
       this._syncTileGrid();
       this._saveWorkspaceState();
+      this._refreshGlobalHeader();
     },
 
     _setActiveTile(id) {
@@ -403,13 +835,11 @@
       // tool it never picked.
       this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => b.classList.toggle("active", !b.dataset.tool));
       if (this.drawingMgr) this.drawingMgr.setTool(null);
+      this._refreshGlobalHeader();
+      this._renderTickerOptions();
       this._renderProps();
       this._renderObjects();
       this._saveWorkspaceState();
-    },
-
-    _syncActiveLayoutButton() {
-      this.root.querySelectorAll(".ca-layout-btn").forEach((b) => b.classList.toggle("active", b.dataset.layout === this.layoutMode));
     },
 
     // ------------------------------------------------------- persistence --
@@ -420,7 +850,7 @@
           layoutMode: this.layoutMode,
           tiles: this.tiles.map((t) => t.toConfig()),
           activeIndex: this.tiles.findIndex((t) => t.id === this.activeTileId),
-          syncEnabled: !!this.syncEnabled,
+          syncFlags: this.syncFlags,
         }));
       } catch (e) { /* localStorage unavailable - workspace just won't restore next visit */ }
     },
@@ -437,7 +867,8 @@
         while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
         const activeIdx = Number.isInteger(state.activeIndex) && state.activeIndex >= 0 && state.activeIndex < this.tiles.length ? state.activeIndex : 0;
         this.activeTileId = this.tiles[activeIdx].id;
-        this.syncEnabled = !!state.syncEnabled;
+        if (state.syncFlags) this.syncFlags = Object.assign({}, this.syncFlags, state.syncFlags);
+        else if (state.syncEnabled) this.syncFlags = { ticker: false, interval: false, crosshair: true, timescale: true, range: false }; // migrate old single toggle
         return true;
       } catch (e) {
         return false;
@@ -453,12 +884,70 @@
       btn.title = active ? "Выйти из полноэкранного режима (Esc)" : "Полноэкранный режим рабочего пространства";
       btn.setAttribute("aria-label", btn.title);
       btn.classList.toggle("active", active);
-      // The container's box size changes on the fullscreen transition; each
-      // tile's own ResizeObserver picks this up, but nudging every tile
-      // explicitly avoids a one-frame stale layout on browsers that defer
-      // the ResizeObserver callback until the next paint.
       requestAnimationFrame(() => this.tiles.forEach((t) => t.core && t.core._onResize()));
     },
+
+    // ------------------------------------------------------ settings UI ---
+
+    _openSettingsDialog() {
+      const tile = this.activeTile;
+      if (!tile || !tile.core) return;
+      let overlay = document.getElementById("caSettingsModal");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "caSettingsModal";
+        overlay.className = "ca-modal-backdrop";
+        document.body.appendChild(overlay);
+      }
+      const o = tile.core.displayOptions || {};
+      const theme = CE.theme;
+      overlay.innerHTML = `
+        <div class="ca-modal ca-settings-modal">
+          <button class="close-btn" id="csClose" aria-label="Закрыть">×</button>
+          <h3>Настройки графика · ${tile.symbol}</h3>
+          <div class="ca-settings-grid">
+            <label>Цвет роста <input type="color" id="csUp" value="${toHex(o.upColor || theme.up)}"></label>
+            <label>Цвет падения <input type="color" id="csDown" value="${toHex(o.downColor || theme.down)}"></label>
+            <label>Цвет границ <input type="color" id="csBorder" value="${toHex(o.borderColor || theme.up)}"></label>
+            <label>Цвет фитилей <input type="color" id="csWick" value="${toHex(o.wickColor || theme.up)}"></label>
+            <label class="toggle"><input type="checkbox" id="csShowWicks" ${o.showWicks !== false ? "checked" : ""}><span>Показывать фитили</span></label>
+            <label class="toggle"><input type="checkbox" id="csShowBorders" ${o.showBorders !== false ? "checked" : ""}><span>Показывать границы</span></label>
+            <label class="toggle"><input type="checkbox" id="csPriceLine" ${o.priceLineVisible !== false ? "checked" : ""}><span>Линия текущей цены</span></label>
+            <label class="toggle"><input type="checkbox" id="csGrid" ${o.showGrid !== false ? "checked" : ""}><span>Сетка</span></label>
+            <label class="toggle"><input type="checkbox" id="csVolume" ${o.showVolume !== false ? "checked" : ""}><span>Объёмы</span></label>
+            <label class="toggle"><input type="checkbox" id="csAutoScale" ${o.autoScale !== false ? "checked" : ""}><span>Автомасштаб</span></label>
+            <label>Фон <input type="color" id="csBg" value="${toHex(o.background || "#0c1019")}"></label>
+            <label>Точность цены <input type="number" id="csPrecision" min="0" max="6" value="${o.priceFormatPrecision != null ? o.priceFormatPrecision : 2}"></label>
+            <label>Часовой пояс
+              <select id="csTz">
+                <option value="0" ${(tile.core._tzOffsetHours || 0) === 0 ? "selected" : ""}>МСК (UTC+3)</option>
+                <option value="-3" ${(tile.core._tzOffsetHours || 0) === -3 ? "selected" : ""}>UTC</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted-note">Настройки применяются сразу и сохраняются для этой плитки.</p>
+        </div>`;
+      overlay.classList.remove("hidden");
+      overlay.querySelector("#csClose").onclick = () => overlay.classList.add("hidden");
+      overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.add("hidden"); };
+
+      const apply = (patch) => { tile.core.setDisplayOptions(patch); this._saveWorkspaceState(); };
+      overlay.querySelector("#csUp").oninput = (e) => apply({ upColor: e.target.value });
+      overlay.querySelector("#csDown").oninput = (e) => apply({ downColor: e.target.value });
+      overlay.querySelector("#csBorder").oninput = (e) => apply({ borderColor: e.target.value });
+      overlay.querySelector("#csWick").oninput = (e) => apply({ wickColor: e.target.value });
+      overlay.querySelector("#csShowWicks").onchange = (e) => apply({ showWicks: e.target.checked });
+      overlay.querySelector("#csShowBorders").onchange = (e) => apply({ showBorders: e.target.checked });
+      overlay.querySelector("#csPriceLine").onchange = (e) => apply({ priceLineVisible: e.target.checked });
+      overlay.querySelector("#csGrid").onchange = (e) => apply({ showGrid: e.target.checked });
+      overlay.querySelector("#csVolume").onchange = (e) => apply({ showVolume: e.target.checked });
+      overlay.querySelector("#csAutoScale").onchange = (e) => apply({ autoScale: e.target.checked });
+      overlay.querySelector("#csBg").oninput = (e) => apply({ background: e.target.value });
+      overlay.querySelector("#csPrecision").onchange = (e) => apply({ priceFormatPrecision: Number(e.target.value) });
+      overlay.querySelector("#csTz").onchange = (e) => tile.core.setTimezoneOffset(Number(e.target.value));
+    },
+
+    // ------------------------------------------------ properties/objects --
 
     _renderProps() {
       const panel = this.root.querySelector("#caProps");
@@ -472,6 +961,7 @@
         <label>Толщина <input type="number" id="propWidth" min="1" max="6" value="${d.properties.width || 1}"></label>
         <label class="toggle"><input type="checkbox" id="propLocked" ${d.locked ? "checked" : ""}><span>Заблокировать</span></label>
         <label class="toggle"><input type="checkbox" id="propHidden" ${d.hidden ? "checked" : ""}><span>Скрыть</span></label>
+        <label>Подпись (для списка объектов) <input type="text" id="propLabel" value="${escapeAttr(d.properties.label || "")}"></label>
         ${d.type === "text" ? `<label>Текст <input type="text" id="propText" value="${escapeAttr(d.properties.text || "")}"></label>` : ""}
         ${isPosition ? `
           <label>Кол-во <input type="number" id="propQty" value="${d.properties.quantity || 0}"></label>
@@ -485,6 +975,7 @@
       panel.querySelector("#propWidth").oninput = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
       panel.querySelector("#propLocked").onchange = (e) => dm.updateDrawing(d.id, { locked: e.target.checked });
       panel.querySelector("#propHidden").onchange = (e) => dm.updateDrawing(d.id, { hidden: e.target.checked });
+      panel.querySelector("#propLabel").oninput = (e) => { dm.updateDrawing(d.id, { properties: { label: e.target.value } }); this._renderObjects(); };
       const textInput = panel.querySelector("#propText");
       if (textInput) textInput.oninput = (e) => dm.updateDrawing(d.id, { properties: { text: e.target.value } });
       if (isPosition) {
@@ -504,33 +995,27 @@
       panel.innerHTML = drawings.length
         ? drawings.map((d) => `
             <div class="ca-object-row ${d.id === dm.selectedId ? "active" : ""}" data-obj="${d.id}">
-              <span>${CE.Drawings.TOOL_DEFS[d.type].label}</span>
+              <span>${d.properties.label ? escapeAttr(d.properties.label) : CE.Drawings.TOOL_DEFS[d.type].label}</span>
               <span class="ca-object-actions">
                 <button data-toggle-hidden="${d.id}" title="Показать/скрыть">${d.hidden ? "🙈" : "👁"}</button>
                 <button data-toggle-locked="${d.id}" title="Заблокировать">${d.locked ? "🔒" : "🔓"}</button>
+                <button data-rename="${d.id}" title="Переименовать">✎</button>
                 <button data-remove="${d.id}" title="Удалить">🗑</button>
               </span>
             </div>`).join("")
         : `<div class="muted-note">Пока нет объектов разметки.</div>`;
       panel.querySelectorAll("[data-obj]").forEach((row) => (row.onclick = (e) => { if (!e.target.closest("button")) dm.select(row.dataset.obj); }));
-      panel.querySelectorAll("[data-toggle-hidden]").forEach((b) => (b.onclick = () => { const d = dm.drawings.find((x) => x.id === b.dataset.toggleHidden); dm.updateDrawing(d.id, { hidden: !d.hidden }); }));
-      panel.querySelectorAll("[data-toggle-locked]").forEach((b) => (b.onclick = () => { const d = dm.drawings.find((x) => x.id === b.dataset.toggleLocked); dm.updateDrawing(d.id, { locked: !d.locked }); }));
-      panel.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => dm.removeDrawing(b.dataset.remove)));
+      panel.querySelectorAll("[data-toggle-hidden]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const d = dm.drawings.find((x) => x.id === b.dataset.toggleHidden); dm.updateDrawing(d.id, { hidden: !d.hidden }); }));
+      panel.querySelectorAll("[data-toggle-locked]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const d = dm.drawings.find((x) => x.id === b.dataset.toggleLocked); dm.updateDrawing(d.id, { locked: !d.locked }); }));
+      panel.querySelectorAll("[data-rename]").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        const d = dm.drawings.find((x) => x.id === b.dataset.rename);
+        const name = prompt("Название объекта", d.properties.label || "");
+        if (name != null) dm.updateDrawing(d.id, { properties: { label: name } });
+      }));
+      panel.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); dm.removeDrawing(b.dataset.remove); }));
     },
   };
-
-  function toHex(color) {
-    if (!color || color[0] === "#") return color || "#7c8cff";
-    const m = color.match(/rgba?\((\d+),(\d+),(\d+)/);
-    if (!m) return "#7c8cff";
-    return "#" + m.slice(1, 4).map((x) => Number(x).toString(16).padStart(2, "0")).join("");
-  }
-  function escapeAttr(s) {
-    return String(s).replace(/"/g, "&quot;");
-  }
-  function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-  }
 
   global.ChartAnalysisPage = Page;
 })(window);

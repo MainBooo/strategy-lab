@@ -22,6 +22,10 @@
       this.candleSeries = this._createPriceSeries("candles");
       this.volumeSeries = null;
       this._seriesChangeCbs = [];
+      this.displayOptions = {}; // last applied setDisplayOptions() payload - see toConfig()/restore
+      this._tzOffsetHours = 0; // 0 = MSK (data is already naive-MSK-as-UTC, see theme.js formatTime)
+      this._haPrev = null; // {open,close} of the last *finalized* Heikin-Ashi bar
+      this._haLast = null; // last computed HA point (finalized or still-live)
       if (this.opts.showVolume !== false) this._addVolumeSeries();
 
       this._resizeObserver = new ResizeObserver(() => this._onResize());
@@ -66,14 +70,63 @@
       if (type === "line") return this.chart.addSeries(LWC.LineSeries, { color: theme.accent, lineWidth: 2 });
       if (type === "area") return this.chart.addSeries(LWC.AreaSeries, { lineColor: theme.accent, topColor: "rgba(124,140,255,.28)", bottomColor: "rgba(124,140,255,.02)", lineWidth: 2 });
       if (type === "bars") return this.chart.addSeries(LWC.BarSeries, { upColor: theme.up, downColor: theme.down });
+      if (type === "baseline") {
+        const baseValue = this._candles && this._candles.length ? this._candles[0].close : 0;
+        return this.chart.addSeries(LWC.BaselineSeries, {
+          baseValue: { type: "price", price: baseValue },
+          topLineColor: theme.up, bottomLineColor: theme.down,
+          topFillColor1: "rgba(77,212,172,.25)", topFillColor2: "rgba(77,212,172,.02)",
+          bottomFillColor1: "rgba(255,112,129,.02)", bottomFillColor2: "rgba(255,112,129,.25)",
+          lineWidth: 2,
+        });
+      }
+      // Heikin Ashi renders as candlesticks - only the plotted OHLC values differ
+      // (computed by _computeHeikinAshi/_haPoint below), not the series kind.
       return this.chart.addSeries(LWC.CandlestickSeries, global.ChartEngine.candlestickOptions());
     }
 
-    /** Candles/bars keep full OHLC; line/area only ever plot the close. */
+    /** Candles/bars/Heikin-Ashi keep full OHLC; line/area/baseline only ever
+     * plot the close. (Heikin-Ashi bypasses this - see _computeHeikinAshi/
+     * _haPoint, which derive their own synthetic OHLC.) */
     _seriesPoint(candle, type) {
-      return type === "line" || type === "area"
+      return type === "line" || type === "area" || type === "baseline"
         ? { time: candle.time, value: candle.close }
         : { time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close };
+    }
+
+    /** Heikin-Ashi transform (full recompute - used on load/page/reset, not
+     * per live tick): haClose is the average of the bar's own OHLC; haOpen
+     * is the midpoint of the *previous* HA bar's open/close (first bar
+     * falls back to its own raw open/close); haHigh/haLow extend the raw
+     * high/low to also cover the HA open/close so the synthetic body never
+     * pokes outside its own wick. */
+    _computeHeikinAshi(candles) {
+      const out = [];
+      let prevOpen = null, prevClose = null;
+      for (const c of candles) {
+        const haOpen = prevOpen == null ? (c.open + c.close) / 2 : (prevOpen + prevClose) / 2;
+        const haClose = (c.open + c.high + c.low + c.close) / 4;
+        const haHigh = Math.max(c.high, haOpen, haClose);
+        const haLow = Math.min(c.low, haOpen, haClose);
+        out.push({ time: c.time, open: haOpen, high: haHigh, low: haLow, close: haClose });
+        prevOpen = haOpen; prevClose = haClose;
+      }
+      return out;
+    }
+
+    /** Incremental Heikin-Ashi point for the live-ticking bar: haOpen stays
+     * fixed at the midpoint of the last *finalized* bar's HA open/close
+     * (this._haPrev) for as long as the current bar keeps re-ticking; only
+     * haClose/High/Low move each tick. appendCandle() below advances
+     * _haPrev exactly once, on the tick where a genuinely new bar starts. */
+    _haPoint(candle) {
+      const prevOpen = this._haPrev ? this._haPrev.open : candle.open;
+      const prevClose = this._haPrev ? this._haPrev.close : candle.close;
+      const haOpen = (prevOpen + prevClose) / 2;
+      const haClose = (candle.open + candle.high + candle.low + candle.close) / 4;
+      const haHigh = Math.max(candle.high, haOpen, haClose);
+      const haLow = Math.min(candle.low, haOpen, haClose);
+      return { time: candle.time, open: haOpen, high: haHigh, low: haLow, close: haClose };
     }
 
     onSeriesChange(cb) {
@@ -89,13 +142,87 @@
      * pan position and drawings' own stored price/time coordinates are
      * untouched - only the series object identity changes. */
     setSeriesType(type) {
-      if (type === this.seriesType || !["candles", "line", "bars", "area"].includes(type)) return;
+      if (type === this.seriesType || !["candles", "line", "bars", "area", "baseline", "heikin_ashi"].includes(type)) return;
       this.chart.removeSeries(this.candleSeries);
       this.seriesType = type;
       this.candleSeries = this._createPriceSeries(type);
-      this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, type)));
+      if (type === "heikin_ashi") {
+        const ha = this._computeHeikinAshi(this._candles);
+        this._haLast = ha.length ? ha[ha.length - 1] : null;
+        this._haPrev = ha.length > 1 ? { open: ha[ha.length - 2].open, close: ha[ha.length - 2].close } : null;
+        this.candleSeries.setData(ha);
+      } else {
+        this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, type)));
+      }
+      this._applyDisplayOptions();
       this._seriesChangeCbs.forEach((cb) => {
         try { cb(this.candleSeries); } catch (e) { console.error(e); }
+      });
+    }
+
+    /** Chart-appearance settings (Stage 5): colors, wick/border visibility,
+     * price line, grid, background, volume visibility, price precision,
+     * autoscale - applied via series/chart applyOptions(), never by
+     * recreating the chart or series instance. Persists in this.displayOptions
+     * so ChartTile.toConfig() can save/restore it per tile. */
+    setDisplayOptions(opts) {
+      this.displayOptions = Object.assign({}, this.displayOptions, opts);
+      this._applyDisplayOptions();
+    }
+
+    _applyDisplayOptions() {
+      const o = this.displayOptions || {};
+      if (this.seriesType === "candles" || this.seriesType === "heikin_ashi") {
+        const opts = {};
+        if (o.upColor) opts.upColor = o.upColor;
+        if (o.downColor) opts.downColor = o.downColor;
+        if (o.borderColor) { opts.borderUpColor = o.borderColor; opts.borderDownColor = o.borderColor; }
+        if (o.wickColor) { opts.wickUpColor = o.wickColor; opts.wickDownColor = o.wickColor; }
+        if (o.showBorders != null) opts.borderVisible = !!o.showBorders;
+        if (o.showWicks != null) opts.wickVisible = !!o.showWicks;
+        if (Object.keys(opts).length) this.candleSeries.applyOptions(opts);
+      }
+      const commonOpts = {};
+      if (o.priceLineVisible != null) commonOpts.priceLineVisible = !!o.priceLineVisible;
+      if (o.priceFormatPrecision != null) {
+        commonOpts.priceFormat = { type: "price", precision: o.priceFormatPrecision, minMove: 1 / Math.pow(10, o.priceFormatPrecision) };
+      }
+      if (Object.keys(commonOpts).length) this.candleSeries.applyOptions(commonOpts);
+      if (this.volumeSeries) this.volumeSeries.applyOptions({ visible: o.showVolume !== false });
+      const chartOpts = {};
+      if (o.showGrid != null) chartOpts.grid = { vertLines: { visible: !!o.showGrid }, horzLines: { visible: !!o.showGrid } };
+      if (o.background) chartOpts.layout = { background: { color: o.background } };
+      if (Object.keys(chartOpts).length) this.chart.applyOptions(chartOpts);
+      if (o.autoScale != null) this.chart.priceScale("right").applyOptions({ autoScale: !!o.autoScale });
+    }
+
+    /** Fixed-offset timezone display (Stage 5's "часовой пояс"): every
+     * timestamp in this app is a naive MOEX exchange-local (MSK) datetime
+     * encoded as if it were UTC (see theme.js's formatTime docstring/
+     * parseNaiveDatetime) - there is no per-viewer IANA timezone to convert
+     * *from*, only a single fixed exchange timezone. So "timezone" here
+     * genuinely means "displayed as MSK wall-clock (offset 0, the default -
+     * UTC-formatting already shows the naive MSK digits as-is) or shifted to
+     * true UTC (offset -3h, since MSK is UTC+3 with no DST)" - a real,
+     * working, correctly-scoped feature, not a stand-in for full tz support
+     * this data model has no room for. */
+    setTimezoneOffset(hours) {
+      this._tzOffsetHours = hours;
+      const offsetSec = hours * 3600;
+      this.chart.applyOptions({
+        localization: { timeFormatter: (t) => global.ChartEngine.formatTime(t + offsetSec) },
+        timeScale: {
+          tickMarkFormatter: (time, tickMarkType) => {
+            const d = new Date((time + offsetSec) * 1000);
+            const get = (opt) => d.toLocaleString("ru-RU", Object.assign({ timeZone: "UTC" }, opt));
+            switch (tickMarkType) {
+              case 0: return get({ year: "numeric" });
+              case 1: return get({ month: "short" });
+              case 2: return get({ day: "2-digit", month: "short" });
+              default: return get({ hour: "2-digit", minute: "2-digit" });
+            }
+          },
+        },
       });
     }
 
@@ -221,7 +348,14 @@
         this._candles.push(candle);
       }
       this._candlesByTime.set(candle.time, candle);
-      this.candleSeries.update(this._seriesPoint(candle, this.seriesType));
+      if (this.seriesType === "heikin_ashi") {
+        if (isNewBar && this._haLast) this._haPrev = { open: this._haLast.open, close: this._haLast.close };
+        const haPoint = this._haPoint(candle);
+        this._haLast = haPoint;
+        this.candleSeries.update(haPoint);
+      } else {
+        this.candleSeries.update(this._seriesPoint(candle, this.seriesType));
+      }
       if (this.volumeSeries) {
         this.volumeSeries.update({ time: candle.time, value: candle.volume || 0, color: candle.close >= candle.open ? theme.upSoft : theme.downSoft });
       }
@@ -275,7 +409,14 @@
     _setCandles(candles) {
       this._candles = candles.slice().sort((a, b) => a.time - b.time);
       this._candlesByTime = new Map(this._candles.map((c) => [c.time, c]));
-      this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, this.seriesType)));
+      if (this.seriesType === "heikin_ashi") {
+        const ha = this._computeHeikinAshi(this._candles);
+        this._haLast = ha.length ? ha[ha.length - 1] : null;
+        this._haPrev = ha.length > 1 ? { open: ha[ha.length - 2].open, close: ha[ha.length - 2].close } : null;
+        this.candleSeries.setData(ha);
+      } else {
+        this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, this.seriesType)));
+      }
       if (this.volumeSeries) {
         this.volumeSeries.setData(
           this._candles.map((c) => ({

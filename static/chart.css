@@ -163,6 +163,7 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 .ca-layout-icon-3 .ca-li-col i { flex: 1; background: var(--muted); border-radius: 1px; }
 .ca-layout-btn.active .ca-layout-icon-3 .ca-li-big,
 .ca-layout-btn.active .ca-layout-icon-3 .ca-li-col i { background: var(--accent); }
+.ca-layout-icon-3-rev { flex-direction: row-reverse; }
 
 .ca-tile-grid { display: grid; gap: 8px; flex: 1 1 auto; min-height: 0; }
 .ca-tile-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
@@ -175,6 +176,13 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 .ca-tile-grid.layout-3 .ca-tile:nth-child(1) { grid-area: big; }
 .ca-tile-grid.layout-3 .ca-tile:nth-child(2) { grid-area: top; }
 .ca-tile-grid.layout-3 .ca-tile:nth-child(3) { grid-area: bottom; }
+.ca-tile-grid.layout-3b {
+  grid-template-columns: 1fr 2fr; grid-template-rows: 1fr 1fr;
+  grid-template-areas: "top big" "bottom big";
+}
+.ca-tile-grid.layout-3b .ca-tile:nth-child(1) { grid-area: big; }
+.ca-tile-grid.layout-3b .ca-tile:nth-child(2) { grid-area: top; }
+.ca-tile-grid.layout-3b .ca-tile:nth-child(3) { grid-area: bottom; }
 .ca-tile-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .ca-tile-grid.layout-6 { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; }
 /* Only one chart on screen: the close button would have nothing to close
@@ -190,29 +198,17 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 .ca-tile.is-fullscreen .ca-tile-chart-host { flex: 1 1 auto; height: auto !important; }
 .ca-tile:fullscreen { width: 100vw; height: 100vh; }
 
+/* Minimal per-tile identity header (Stage 2): every command control moved
+ * up to the single workspace toolbar (#caToolbar) - this is just enough to
+ * tell tiles apart in a multi-chart layout and to fullscreen/close one. */
 .ca-tile-header {
-  display: flex; flex-direction: column; gap: 6px; padding: 7px 10px; font-size: 12px;
-  background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: default; position: relative;
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: default; position: relative; min-width: 0;
 }
-.ca-tile-row1, .ca-tile-row2 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-.ca-tile-select {
-  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px;
-  padding: 5px 6px; font-size: 12px; height: 30px; min-width: 54px; max-width: 120px; flex: 0 1 auto;
-}
-.ca-tile-select-symbol { max-width: 130px; font-weight: 700; }
-.ca-tile-select-type { max-width: 90px; }
-.ca-tile-select-board { max-width: 80px; }
-.ca-tile-price { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ca-tile-change { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ca-tile-tag { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ca-tile-spacer { flex: 1; min-width: 4px; }
 .ca-tile-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 4px 6px; line-height: 1; border-radius: 6px; min-width: 30px; min-height: 30px; }
 .ca-tile-btn:hover { color: var(--text); background: rgba(255,255,255,.05); }
-.ca-tile-btn2 {
-  background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer;
-  font-size: 11.5px; padding: 5px 9px; border-radius: 6px; height: 30px; white-space: nowrap;
-}
-.ca-tile-btn2:hover { color: var(--text); border-color: var(--accent); }
-.ca-tile-range-btn { font-variant-numeric: tabular-nums; }
 .ca-tile-close:hover { color: var(--danger); }
 .ca-tile-realtime-slot .rt-indicator-btn { padding: 4px 8px; font-size: 11px; }
 .ca-tile-chart-host { flex: 1 1 auto; min-height: 0; position: relative; }
@@ -221,23 +217,102 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   background: rgba(12,16,25,.85); padding: 4px 10px; border-radius: 6px; pointer-events: none;
 }
 .ca-tile-status.hidden { display: none; }
-.ca-tile-menu { position: relative; }
-.ca-tile-overflow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ca-popover-right { left: auto; right: 0; }
 .ca-more-item {
   display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text);
   padding: 8px 6px; font-size: 13px; cursor: pointer; border-radius: 6px;
 }
 .ca-more-item:hover { background: rgba(255,255,255,.06); }
-.ca-tile-settings-btn {
-  display: none; align-self: flex-start; background: var(--panel); border: 1px solid var(--line); color: var(--text);
-  border-radius: 7px; padding: 6px 10px; font-size: 12px; cursor: pointer; min-height: 40px;
+.ca-more-group { display: flex; flex-direction: column; gap: 6px; }
+.ca-more-heading { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; }
+.ca-more-sep { height: 1px; background: var(--line); margin: 8px 0; }
+.ca-more-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); padding: 3px 0; cursor: pointer; }
+
+/* --------------------------------------------------- unified toolbar (Stage 2) -- */
+
+.ca-toolbar-unified {
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
 }
-.ca-tile-settings-btn.hidden { display: none !important; }
-.ca-tile-header.compact .ca-tile-settings-btn:not(.hidden) { display: inline-flex; align-items: center; }
-.ca-tile-header.compact .ca-tile-overflow:not(.in-sheet) { display: none; }
-.ca-tile-header.compact .ca-tile-select-symbol { max-width: 96px; }
-.ca-tile-header.compact .ca-tile-change { display: none; }
+/* overflow stays visible (not hidden) so popovers anchored to a child
+ * button (.ca-popover, position:absolute) never get clipped - items that
+ * don't fit are hidden proactively by _recalcToolbarOverflow() via
+ * .gt-hidden instead of relying on clipping, so nowrap alone is enough to
+ * keep this a single row. */
+.gt-scroll { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-width: 0; overflow: visible; flex: 1 1 auto; }
+.gt-hidden { display: none !important; }
+.gt-select {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 7px;
+  padding: 6px 8px; font-size: 12.5px; height: 32px; flex: 0 0 auto;
+}
+.gt-ticker { min-width: 90px; max-width: 150px; font-weight: 700; }
+.gt-tf { min-width: 56px; max-width: 76px; }
+.gt-type { min-width: 84px; max-width: 130px; }
+.gt-name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; flex: 0 1 auto; }
+.gt-price { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+.gt-change { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+.gt-menu { position: relative; flex: 0 0 auto; }
+.gt-btn {
+  background: transparent; border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 6px 10px; border-radius: 7px; height: 32px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+}
+.gt-btn:hover { color: var(--text); border-color: var(--accent); }
+.gt-btn:disabled { opacity: .4; cursor: not-allowed; }
+.gt-more { margin-left: auto; }
+.gt-badge {
+  position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger); box-shadow: 0 0 0 2px var(--panel-2);
+}
+.gt-badge.hidden { display: none; }
+
+/* ---------------------------------------------------- layout popover (Stage 3) -- */
+
+.ca-popover-layouts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; min-width: 260px; }
+.ca-popover-layouts.hidden { display: none; }
+.ca-layout-thumb {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; color: var(--muted);
+}
+.ca-layout-thumb:hover { border-color: var(--accent); color: var(--text); }
+.ca-layout-thumb.active { border-color: var(--accent); background: rgba(124,140,255,.12); color: var(--text); }
+.ca-layout-thumb .ca-layout-icon,
+.ca-layout-thumb .ca-layout-icon-3 { width: 34px; height: 24px; }
+.ca-layout-thumb-label { font-size: 10.5px; text-align: center; line-height: 1.25; }
+
+/* -------------------------------------------------- settings dialog (Stage 5) -- */
+
+.ca-settings-modal { width: min(560px, calc(100% - 32px)); }
+.ca-settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px 14px; }
+.ca-settings-grid input[type=color] { width: 100%; height: 32px; padding: 2px; }
+.ca-settings-grid input[type=number], .ca-settings-grid select {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 7px 8px; font-size: 13px;
+}
+
+/* -------------------------------------------------------- alerts (Stage 9) -- */
+
+.ca-popover-wide { min-width: 300px; max-width: 340px; }
+.alert-form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.alert-form input, .alert-form select {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 12px; flex: 1 1 100px;
+}
+.alert-form #alAdd { flex: 0 0 auto; }
+.alert-sound-toggle { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.alert-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.alert-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; background: var(--panel); font-size: 12px; }
+.alert-row-off { opacity: .5; }
+.alert-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.alert-row-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.alert-row-actions button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 4px; }
+.alert-row-actions button:hover { color: var(--text); }
+
+.alert-toast-host { position: fixed; top: 16px; right: 16px; z-index: 9998; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.alert-toast {
+  background: #16203a; border: 1px solid rgba(124,140,255,.4); border-radius: 10px; padding: 10px 14px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45); min-width: 220px; opacity: 0; transform: translateY(-8px); transition: opacity .25s, transform .25s;
+}
+.alert-toast.show { opacity: 1; transform: translateY(0); }
+.alert-toast-title { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+.alert-toast-body { font-size: 12px; color: var(--muted); }
 
 /* Range popover contents (quick presets + custom period form). */
 .ca-range-custom { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
