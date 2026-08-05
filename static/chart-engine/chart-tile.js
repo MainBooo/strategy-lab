@@ -62,13 +62,14 @@
   function todayISO() { return new Date().toISOString().slice(0, 10); }
 
   class ChartTile {
-    constructor({ symbol = "SBER", board = "TQBR", timeframe = "1d", chartType = "candles", displayOptions = null } = {}) {
+    constructor({ symbol = "SBER", board = "TQBR", timeframe = "1d", chartType = "candles", displayOptions = null, indicators = null } = {}) {
       this.id = "tile" + ++_seq;
       this.symbol = symbol;
       this.board = board;
       this.timeframe = timeframe;
       this._initialChartType = chartType;
       this._initialDisplayOptions = displayOptions || null;
+      this._initialIndicators = indicators || null;
       // Full-history-by-default (see docs): a fresh tile never starts with
       // fromDate/toDate filled in - see also toConfig()/ChartAnalysisPage's
       // workspace-state restore, which deliberately never persists these
@@ -251,6 +252,9 @@
         symbol: this.symbol, board: this.board, timeframe: this.timeframe,
         chartType: this.core ? this.core.seriesType : this._initialChartType,
         displayOptions: this.core ? this.core.displayOptions : this._initialDisplayOptions,
+        indicators: this.indicatorMgr
+          ? this.indicatorMgr.list().map((i) => ({ type: i.type, params: i.params, style: i.style }))
+          : this._initialIndicators,
       };
     }
 
@@ -391,8 +395,22 @@
     async _loadOrInit() {
       const layouts = await CE.api.listLayouts("analysis", this.symbol).catch(() => []);
       const def = layouts.find((l) => l.is_default) || layouts[0];
-      if (def) await this._applyLayout(def);
-      else await this._reload();
+      if (def) {
+        // An explicitly-saved template is the more intentional source -
+        // takes priority over the localStorage session snapshot below,
+        // same precedence rule the rest of this class already applies to
+        // rangeMode/fromDate/toDate.
+        await this._applyLayout(def);
+      } else {
+        await this._reload();
+        // Stage 12 "автоматическое сохранение": indicators added this
+        // session (never explicitly saved as a template) still survive a
+        // reload via the workspace-state localStorage snapshot - see
+        // toConfig()/ChartAnalysisPage._restoreWorkspaceState.
+        if (this._initialIndicators) {
+          this._initialIndicators.forEach((ind) => this.indicatorMgr.add(ind.type, ind.params, undefined, ind.style));
+        }
+      }
     }
 
     async _applyLayout(layout) {
@@ -415,7 +433,14 @@
       this.updateHeader();
       const full = await CE.api.getLayout(layout.id);
       this.drawingMgr.loadDrawings(full.drawings || []);
-      (layout.indicators || []).forEach((ind) => this.indicatorMgr.add(ind.type, ind.params));
+      // __style rides inside params (see saveAsTemplate below) rather than
+      // as its own backend column - the chart-layouts schema only has a
+      // type/params pair per indicator, and threading a per-instance color/
+      // width through there this way needs no backend change.
+      (layout.indicators || []).forEach((ind) => {
+        const { __style, ...params } = ind.params || {};
+        this.indicatorMgr.add(ind.type, params, undefined, __style);
+      });
       this._notifyStateChanged({ layoutApplied: true });
     }
 
@@ -427,7 +452,8 @@
         visibleFrom: this.rangeMode === "custom" ? this.fromDate : null,
         visibleTo: this.rangeMode === "custom" ? this.toDate : null,
         chartType: this.core ? this.core.seriesType : "candles",
-        settings: this.core ? this.core.displayOptions : {}, indicators: this.indicatorMgr.list().map((i) => ({ type: i.type, params: i.params })),
+        settings: this.core ? this.core.displayOptions : {},
+        indicators: this.indicatorMgr.list().map((i) => ({ type: i.type, params: Object.assign({}, i.params, { __style: i.style }) })),
       };
       const layout = this.layout && this.layout.name === name
         ? await CE.api.updateLayout(this.layout.id, payload)

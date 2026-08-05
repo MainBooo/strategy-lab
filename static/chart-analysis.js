@@ -54,6 +54,14 @@
 
   const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", timescale: "Временная шкала", range: "Диапазон отображения" };
 
+  const IND_PARAM_LABELS = { period: "Период", mult: "Множитель", fast: "Быстрая", slow: "Медленная", signal: "Сигнальная", kPeriod: "%K период", dPeriod: "%D период" };
+  const IND_LINE_LABELS = {
+    bollinger: ["Верхняя", "Средняя", "Нижняя"],
+    donchian: ["Верхняя", "Нижняя"],
+    macd: ["MACD", "Гистограмма", "Сигнальная"],
+    stochastic: ["%K", "%D"],
+  };
+
   /* Ascending order = collapses first into the "Ещё" overflow menu when the
    * toolbar doesn't fit its own width - see _recalcToolbarOverflow(). Core
    * identity (ticker/name/price/change/interval/type), the layout picker,
@@ -434,12 +442,22 @@
     _renderIndicatorsInto(container) {
       const tile = this.activeTile;
       if (!tile) { container.innerHTML = ""; return; }
-      const active = new Set(tile.indicatorMgr.list().map((i) => i.type));
-      container.innerHTML = CE.Indicators.registry.map((def) => `
-        <label class="ca-indicator-row">
-          <input type="checkbox" data-ind="${def.id}" ${active.has(def.id) ? "checked" : ""}>
-          <span>${def.label}</span>
-        </label>`).join("");
+      const instances = tile.indicatorMgr.list();
+      const activeTypes = new Set(instances.map((i) => i.type));
+      container.innerHTML = `
+        <div class="ca-ind-list">
+          ${CE.Indicators.registry.map((def) => {
+            const inst = instances.find((i) => i.type === def.id);
+            return `
+              <div class="ca-indicator-row">
+                <label><input type="checkbox" data-ind="${def.id}" ${inst ? "checked" : ""}><span>${def.label}</span></label>
+                ${inst ? `<button class="icon-btn" data-ind-gear="${inst.id}" title="Настройки индикатора" aria-label="Настройки ${def.label}">⚙</button>` : ""}
+              </div>
+              ${inst ? `<div class="ca-ind-settings hidden" data-ind-panel="${inst.id}"></div>` : ""}
+            `;
+          }).join("")}
+        </div>
+      `;
       container.querySelectorAll("input[data-ind]").forEach((cb) => {
         cb.onchange = () => {
           const id = cb.dataset.ind;
@@ -450,9 +468,53 @@
             if (existing) tile.indicatorMgr.remove(existing.id);
           }
           this._saveWorkspaceState();
-          this._renderObjects();
+          this._renderIndicatorsInto(container);
         };
       });
+      container.querySelectorAll("[data-ind-gear]").forEach((btn) => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const panel = container.querySelector(`[data-ind-panel="${btn.dataset.indGear}"]`);
+          const willOpen = panel.classList.contains("hidden");
+          container.querySelectorAll(".ca-ind-settings").forEach((p) => p.classList.add("hidden"));
+          if (willOpen) { panel.classList.remove("hidden"); this._renderIndicatorSettings(panel, tile, btn.dataset.indGear); }
+        };
+      });
+    },
+
+    _renderIndicatorSettings(panel, tile, instanceId) {
+      const inst = tile.indicatorMgr.list().find((i) => i.id === instanceId);
+      if (!inst) return;
+      const def = CE.Indicators.registry.find((d) => d.id === inst.type);
+      const paramKeys = Object.keys(def.defaultParams).filter((k) => k !== "source");
+      const colorsHtml = inst.style.colors
+        ? inst.style.colors.map((c, i) => `<label>${IND_LINE_LABELS[def.id]?.[i] || `Линия ${i + 1}`} <input type="color" data-ind-color="${i}" value="${toHex(c)}"></label>`).join("")
+        : `<label>Цвет <input type="color" data-ind-color="0" value="${toHex(inst.style.color)}"></label>`;
+      panel.innerHTML = `
+        ${paramKeys.map((k) => `<label>${IND_PARAM_LABELS[k] || k} <input type="number" step="${k === "mult" ? "0.1" : "1"}" data-ind-param="${k}" value="${inst.params[k]}"></label>`).join("")}
+        ${def.sourceParam ? `<label>Источник <select data-ind-source>${CE.Indicators.sources.map((s) => `<option value="${s.id}" ${inst.params.source === s.id ? "selected" : ""}>${s.label}</option>`).join("")}</select></label>` : ""}
+        ${colorsHtml}
+        <label>Толщина <input type="number" min="1" max="6" data-ind-width value="${inst.style.width || 1}"></label>
+        <button class="secondary" data-ind-remove>Удалить</button>
+      `;
+      panel.querySelectorAll("[data-ind-param]").forEach((inp) => (inp.onchange = () => {
+        tile.indicatorMgr.updateParams(instanceId, { [inp.dataset.indParam]: Number(inp.value) });
+        this._saveWorkspaceState();
+      }));
+      const sourceSel = panel.querySelector("[data-ind-source]");
+      if (sourceSel) sourceSel.onchange = () => { tile.indicatorMgr.updateParams(instanceId, { source: sourceSel.value }); this._saveWorkspaceState(); };
+      panel.querySelectorAll("[data-ind-color]").forEach((inp) => (inp.oninput = () => {
+        const idx = Number(inp.dataset.indColor);
+        if (inst.style.colors) { const colors = inst.style.colors.slice(); colors[idx] = inp.value; tile.indicatorMgr.updateStyle(instanceId, { colors }); }
+        else tile.indicatorMgr.updateStyle(instanceId, { color: inp.value });
+        this._saveWorkspaceState();
+      }));
+      panel.querySelector("[data-ind-width]").onchange = (e) => { tile.indicatorMgr.updateStyle(instanceId, { width: Number(e.target.value) }); this._saveWorkspaceState(); };
+      panel.querySelector("[data-ind-remove]").onclick = () => {
+        tile.indicatorMgr.remove(instanceId);
+        this._saveWorkspaceState();
+        this._renderIndicatorsInto(panel.closest("#gtIndicatorsPop") || panel.parentElement.parentElement);
+      };
     },
 
     // -------------------------------------------------- templates popover --
