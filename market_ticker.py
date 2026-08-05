@@ -119,10 +119,18 @@ def _fetch_snapshot() -> tuple[dict[str, dict], datetime]:
         if market_dt is not None:
             market_dt_utc = market_dt - timedelta(hours=3)
             delay_ms = max(0, round((server_received_at - market_dt_utc).total_seconds() * 1000))
+        last_price = float(item["LAST"])
+        change_pct = float(item["LASTTOPREVPRICE"]) if item.get("LASTTOPREVPRICE") is not None else None
+        # LASTTOPREVPRICE is MOEX's own "vs previous day's official close"
+        # percentage (not the tick-to-tick LASTCHANGEPRCNT) - deriving the
+        # absolute figure from it keeps both numbers referring to the same
+        # baseline instead of mixing two different MOEX change concepts.
+        change_abs = round(last_price - last_price / (1 + change_pct / 100), 2) if change_pct not in (None, -100) else None
         by_ticker[secid] = {
             "ticker": secid,
-            "last": round(float(item["LAST"]), 2),
-            "change_pct": round(float(item["LASTTOPREVPRICE"]), 2) if item.get("LASTTOPREVPRICE") is not None else None,
+            "last": round(last_price, 2),
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "change_abs": change_abs,
             "bid": item.get("BID"),
             "offer": item.get("OFFER"),
             "vol_today": item.get("VOLTODAY"),
@@ -246,4 +254,69 @@ def get_realtime(ticker: str) -> dict:
         "market_status": "open" if market_open else "closed",
         "error": snap["error"] if not quote else None,
         "config": cfg,
+    }
+
+
+_STATUS_LABELS = {"T": "Торги идут", "S": "Приостановлены", "N": "Торги закрыты", "C": "Закрытие"}
+
+
+def get_instrument_info(ticker: str, board: str = "TQBR") -> dict:
+    """Full per-instrument detail block for the watchlist's "Сведения об
+    инструменте" panel (Stage 11) - one MOEX ISS call to the per-security
+    board endpoint returns both the `securities` (name/lot/board) and
+    `marketdata` (day OHLC/volume/status) blocks together, so this never
+    needs the separate whole-board fetch _fetch_snapshot() uses for the
+    watchlist's bulk quotes. History range comes from the local candle
+    store (market_data_store.coverage) rather than another MOEX round trip -
+    it's already the source of truth for what this app can actually chart,
+    which is more useful here than MOEX's own listed-history dates. """
+    import market_data_store as mds
+
+    ticker = ticker.upper()
+    url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/{board}/securities/{ticker}.json"
+    try:
+        session = requests.Session()
+        session.headers.update({"User-Agent": "MOEX-Strategy-Lab/3.0"})
+        resp = session.get(url, params={"iss.meta": "off"}, timeout=10)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        return {"ticker": ticker, "board": board, "error": str(exc)}
+
+    sec_block = payload.get("securities") or {}
+    md_block = payload.get("marketdata") or {}
+    sec_rows = sec_block.get("data") or []
+    md_rows = md_block.get("data") or []
+    if not sec_rows:
+        return {"ticker": ticker, "board": board, "error": "Инструмент не найден"}
+    sec = dict(zip(sec_block["columns"], sec_rows[0]))
+    md = dict(zip(md_block["columns"], md_rows[0])) if md_rows else {}
+
+    lot_size = sec.get("LOTSIZE") or 1
+    last = md.get("LAST") or sec.get("PREVPRICE")
+    cov = mds.coverage(ticker, board, "1d")
+
+    return {
+        "ticker": ticker,
+        "board": board,
+        "name": sec.get("SECNAME") or sec.get("SHORTNAME") or ticker,
+        "shortname": sec.get("SHORTNAME"),
+        "isin": sec.get("ISIN"),
+        "board_title": sec.get("BOARDNAME"),
+        "currency": sec.get("CURRENCYID") or sec.get("FACEUNIT"),
+        "lot_size": lot_size,
+        "lot_value": round(last * lot_size, 2) if last is not None else None,
+        "price": last,
+        "open": md.get("OPEN"),
+        "high": md.get("HIGH"),
+        "low": md.get("LOW"),
+        "prev_price": sec.get("PREVPRICE"),
+        "volume": md.get("VOLTODAY"),
+        "value": md.get("VALTODAY"),
+        "change_pct": md.get("LASTCHANGEPRCNT"),
+        "trading_status": md.get("TRADINGSTATUS"),
+        "trading_status_label": _STATUS_LABELS.get(md.get("TRADINGSTATUS"), md.get("TRADINGSTATUS")),
+        "history_from": cov["earliest_ts"],
+        "history_to": cov["latest_ts"],
+        "history_candle_count": cov["candle_count"],
     }

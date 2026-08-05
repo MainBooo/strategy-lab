@@ -25,7 +25,7 @@ from candle_api import get_candles,tick_availability
 from feature_flags import has_feature
 from downloader import download_moex_candles
 from jobs import JobStore
-from market_ticker import get_market_ticker,get_prices,get_realtime,realtime_config
+from market_ticker import get_instrument_info,get_market_ticker,get_prices,get_realtime,realtime_config
 from moex_catalog import load_catalog,security_by_ticker
 from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
@@ -213,6 +213,11 @@ def market_realtime():
     ticker=(request.args.get("ticker") or request.args.get("symbol") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
     return jsonify(get_realtime(ticker))
+
+@app.get("/api/securities/<ticker>/info")
+def security_info(ticker):
+    board=(request.args.get("board") or "TQBR").strip().upper()
+    return jsonify(get_instrument_info(ticker.strip().upper(),board))
 
 @app.get("/api/strategies")
 def strategies(): return jsonify(STRATEGY_CATALOG)
