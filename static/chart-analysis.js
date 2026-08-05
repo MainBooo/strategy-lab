@@ -171,7 +171,7 @@
 
     async _loadSecurities() {
       try {
-        this.securities = await fetch("/api/securities").then((r) => r.json());
+        this.securities = await global.fetchSecuritiesShared();
         this.tiles.forEach((t) => t.setSecurities(this.securities));
         this._renderTickerOptions();
       } catch (e) { /* securities catalog is optional here - manual ticker entry still works via prompt fallback */ }

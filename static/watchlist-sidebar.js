@@ -21,6 +21,27 @@
   const PRICE_REFRESH_MS = 30000;
   const ROW_HEIGHT = 40;
   const ROW_BUFFER = 8;
+  const SECURITIES_DEDUP_MS = 5000;
+
+  /** Shared across every consumer of the securities catalog on this page
+   * (this sidebar and chart-analysis.js's own _loadSecurities both load on
+   * the charts tab at the same moment) - an in-flight-request dedup, same
+   * pattern as fetchRealtimeShared in realtime-indicator.js and
+   * fetchCandlesShared in chart-engine/core.js, so two modules opening the
+   * charts tab together never cost two /api/securities round trips.
+   * Exposed on `global` because this file loads before chart-analysis.js
+   * (see templates/index.html's script order) and there's no shared module
+   * scope between the two otherwise. */
+  function fetchSecuritiesShared() {
+    const now = Date.now();
+    const cached = global.__moexSecuritiesCache;
+    if (cached && now - cached.ts < SECURITIES_DEDUP_MS) return cached.promise;
+    const promise = fetch("/api/securities").then((r) => r.json());
+    global.__moexSecuritiesCache = { promise, ts: now };
+    promise.catch(() => { global.__moexSecuritiesCache = null; });
+    return promise;
+  }
+  global.fetchSecuritiesShared = fetchSecuritiesShared;
 
   function loadSet(key) {
     try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch (e) { return new Set(); }
@@ -156,7 +177,7 @@
     async _loadData() {
       try {
         const [securities, priceData] = await Promise.all([
-          fetch("/api/securities").then((r) => r.json()),
+          fetchSecuritiesShared(),
           fetch("/api/market/prices").then((r) => r.json()),
         ]);
         this.securities = Array.isArray(securities) ? securities : [];
