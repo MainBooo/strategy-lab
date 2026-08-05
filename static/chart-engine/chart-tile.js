@@ -210,6 +210,7 @@
     // ------------------------------------------------------------ header --
 
     updateHeader() {
+      if (this.drawingMgr) this.drawingMgr.currentTimeframe = this.timeframe;
       if (!this.el) return;
       const tag = this.el.querySelector('[data-role="tag"]');
       if (tag) tag.textContent = `${this.symbol} · ${TF_LABEL[this.timeframe] || this.timeframe}`;

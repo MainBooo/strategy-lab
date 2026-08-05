@@ -41,7 +41,7 @@
   const FIB_EXTENSION_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2.618];
 
   function defaultProperties(type) {
-    const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "" };
+    const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "", showPrice: false, visibleTimeframes: null };
     if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel") return Object.assign(base, { fill: true });
     if (type === "long_position") return Object.assign(base, { color: theme.up, riskDistance: null, rewardDistance: null, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
@@ -66,6 +66,17 @@
 
   function uid() {
     return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  }
+
+  /** Canvas setLineDash() pattern for the Properties panel's "стиль линии"
+   * field - values match what the panel's <select> writes to
+   * d.properties.dash ("solid" is the pre-existing default from
+   * defaultProperties() and was already being stored, just never read by
+   * the renderer until now). */
+  function dashPattern(style) {
+    if (style === "dashed") return [7, 5];
+    if (style === "dotted") return [2, 4];
+    return [];
   }
 
   /** Human-readable span for the time-range tool's label - picks the
@@ -111,6 +122,11 @@
       this.activeTool = null;
       this.draft = null;
       this.snapEnabled = false;
+      // Set by ChartTile whenever the tile's timeframe changes (see
+      // setTimeframe() in chart-tile.js) - read by _buildOp's "видимость на
+      // таймфреймах" filter above. null means "not tracked yet"; a drawing
+      // with no visibleTimeframes restriction still paints regardless.
+      this.currentTimeframe = null;
       this._undoStack = [];
       this._redoStack = [];
       this._listeners = new Set();
@@ -663,10 +679,19 @@
     }
 
     _buildOp(d, ops, selected, hovered, isDraft) {
+      // "Видимость на таймфреймах" (Stage 7): a drawing with a non-empty
+      // visibleTimeframes list only paints while the tile showing it is on
+      // one of those timeframes - null/empty means "all timeframes" (the
+      // default, matching every drawing created before this existed).
+      if (d.properties.visibleTimeframes && d.properties.visibleTimeframes.length
+        && !d.properties.visibleTimeframes.includes(this.manager.currentTimeframe)) return;
       const pix = toPixels(this.manager.core, d.points);
       const color = d.properties.color || theme.accent;
       const width = (selected ? 2 : d.properties.width || 1);
-      const alpha = isDraft ? 0.6 : 1;
+      const opacity = d.properties.opacity != null ? Number(d.properties.opacity) : 1;
+      const alpha = isDraft ? 0.6 : opacity;
+      const dash = dashPattern(d.properties.dash);
+      const startLen = ops.length;
       switch (d.type) {
         case "horizontal_line":
           if (pix[0]?.y != null) ops.push({ kind: "hline", y: pix[0].y, color, width, alpha, handle: pix[0], label: d.properties.label });
@@ -753,6 +778,11 @@
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "position", d, x1: Math.min(pix[0].x, pix[1].x), x2: Math.max(pix[0].x, pix[1].x), entryY: pix[0].y, alpha, long: d.type === "long_position" });
           break;
       }
+      // Applies to every op this call just pushed (almost always exactly
+      // one) without needing every individual ops.push() above to remember
+      // to include it - dash/d weren't set per-case, showPrice reads d
+      // directly at draw time.
+      for (let i = startLen; i < ops.length; i++) { ops[i].dash = dash; ops[i].d = ops[i].d || d; }
       if (ops.length && selected) ops[ops.length - 1].selected = true;
       if (ops.length && hovered) ops[ops.length - 1].hovered = true;
     }
@@ -779,8 +809,7 @@
       ctx.lineWidth = (op.width || 1) * r;
       ctx.strokeStyle = op.color;
       ctx.fillStyle = op.color;
-      const dash = op.selected ? [] : [];
-      ctx.setLineDash(dash);
+      ctx.setLineDash((op.dash || []).map((v) => v * r));
       if (op.hovered && !op.selected) { ctx.shadowColor = op.color; ctx.shadowBlur = 4 * r; }
 
       switch (op.kind) {
@@ -900,6 +929,19 @@
         case "position":
           this._drawPosition(ctx, op, r, rv);
           break;
+      }
+      // "Показ цены" (Stage 7 Properties toggle): kinds that already print
+      // their own price-derived label unconditionally (measure/fib/
+      // timerange/position) are skipped - this only adds one where nothing
+      // would otherwise show the object's price.
+      if (op.d && op.d.properties.showPrice && ["hline", "segment", "rect", "channel", "ellipse"].includes(op.kind)) {
+        const pts = op.d.points;
+        const lastPt = pts[pts.length - 1];
+        const y = lastPt && lastPt.price != null ? this.manager.core.candleSeries.priceToCoordinate(lastPt.price) : null;
+        if (y != null) {
+          const label = lastPt.price.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          this._text(ctx, label, w - 62 * r, y * rv - 6 * rv, op.color);
+        }
       }
       ctx.shadowBlur = 0;
     }

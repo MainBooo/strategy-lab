@@ -98,6 +98,14 @@
   function fmtPrice(n) {
     return n == null ? "—" : n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  /** Coordinate-panel time display for a drawing's anchor point - same
+   * naive-MSK-as-UTC convention as the rest of the app (see theme.js's
+   * formatTime docstring), so this shows the same wall-clock hour as the
+   * chart's own axis. */
+  function fmtCoordTime(t) {
+    if (t == null) return "—";
+    return CE.formatTime(t);
+  }
   function toHex(color) {
     if (!color || color[0] === "#") return color || "#7c8cff";
     const m = color.match(/rgba?\((\d+),(\d+),(\d+)/);
@@ -957,26 +965,52 @@
       const d = dm ? dm.drawings.find((x) => x.id === dm.selectedId) : null;
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
+      const tile = this.activeTile;
+      const tfList = tile ? tile.listTimeframes() : [];
+      const visibleTf = d.properties.visibleTimeframes || [];
       panel.innerHTML = `
         <h4>${CE.Drawings.TOOL_DEFS[d.type].label}</h4>
+        <div class="ca-prop-coords">
+          <span class="ca-more-heading">Координаты</span>
+          ${d.points.map((p, i) => `<div class="ca-coord-row">${d.points.length > 1 ? `#${i + 1}: ` : ""}${fmtCoordTime(p.time)}${p.price != null ? ` · ${fmtPrice(p.price)}` : ""}</div>`).join("")}
+        </div>
         <label>Цвет <input type="color" id="propColor" value="${toHex(d.properties.color)}"></label>
         <label>Толщина <input type="number" id="propWidth" min="1" max="6" value="${d.properties.width || 1}"></label>
+        <label>Стиль линии
+          <select id="propDash">
+            <option value="solid" ${d.properties.dash !== "dashed" && d.properties.dash !== "dotted" ? "selected" : ""}>Сплошная</option>
+            <option value="dashed" ${d.properties.dash === "dashed" ? "selected" : ""}>Штрихи</option>
+            <option value="dotted" ${d.properties.dash === "dotted" ? "selected" : ""}>Точки</option>
+          </select>
+        </label>
+        <label>Прозрачность <input type="range" id="propOpacity" min="10" max="100" value="${Math.round((d.properties.opacity != null ? d.properties.opacity : 1) * 100)}"></label>
         <label class="toggle"><input type="checkbox" id="propLocked" ${d.locked ? "checked" : ""}><span>Заблокировать</span></label>
         <label class="toggle"><input type="checkbox" id="propHidden" ${d.hidden ? "checked" : ""}><span>Скрыть</span></label>
+        <label class="toggle"><input type="checkbox" id="propShowPrice" ${d.properties.showPrice ? "checked" : ""}><span>Показывать цену</span></label>
         <label>Подпись (для списка объектов) <input type="text" id="propLabel" value="${escapeAttr(d.properties.label || "")}"></label>
-        ${d.type === "text" ? `<label>Текст <input type="text" id="propText" value="${escapeAttr(d.properties.text || "")}"></label>` : ""}
+        ${d.type === "text" || d.type === "note" ? `<label>Текст <input type="text" id="propText" value="${escapeAttr(d.properties.text || "")}"></label>` : ""}
         ${isPosition ? `
           <label>Кол-во <input type="number" id="propQty" value="${d.properties.quantity || 0}"></label>
           <label>Стоп, % <input type="number" step="0.1" id="propStopPct" value="${(d.properties.stopOffsetPct || 0).toFixed(2)}"></label>
           <label>Тейк, % <input type="number" step="0.1" id="propTakePct" value="${(d.properties.takeOffsetPct || 0).toFixed(2)}"></label>
         ` : ""}
+        <div class="ca-prop-tfvis">
+          <span class="ca-more-heading">Видимость на таймфреймах</span>
+          <label class="ca-more-toggle"><input type="checkbox" id="propTfAll" ${!visibleTf.length ? "checked" : ""}><span>Все таймфреймы</span></label>
+          <div class="ca-tf-grid ${!visibleTf.length ? "hidden" : ""}" id="propTfGrid">
+            ${tfList.map((t) => `<label class="ca-more-toggle"><input type="checkbox" data-tf="${t.id}" ${visibleTf.includes(t.id) ? "checked" : ""}><span>${t.label}</span></label>`).join("")}
+          </div>
+        </div>
         <button class="secondary" id="propDuplicate">Дублировать (Ctrl+D)</button>
         <button class="secondary" id="propDelete">Удалить</button>
       `;
       panel.querySelector("#propColor").oninput = (e) => dm.updateDrawing(d.id, { properties: { color: e.target.value } });
       panel.querySelector("#propWidth").oninput = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
+      panel.querySelector("#propDash").onchange = (e) => dm.updateDrawing(d.id, { properties: { dash: e.target.value } });
+      panel.querySelector("#propOpacity").oninput = (e) => dm.updateDrawing(d.id, { properties: { opacity: Number(e.target.value) / 100 } });
       panel.querySelector("#propLocked").onchange = (e) => dm.updateDrawing(d.id, { locked: e.target.checked });
       panel.querySelector("#propHidden").onchange = (e) => dm.updateDrawing(d.id, { hidden: e.target.checked });
+      panel.querySelector("#propShowPrice").onchange = (e) => dm.updateDrawing(d.id, { properties: { showPrice: e.target.checked } });
       panel.querySelector("#propLabel").oninput = (e) => { dm.updateDrawing(d.id, { properties: { label: e.target.value } }); this._renderObjects(); };
       const textInput = panel.querySelector("#propText");
       if (textInput) textInput.oninput = (e) => dm.updateDrawing(d.id, { properties: { text: e.target.value } });
@@ -985,6 +1019,16 @@
         panel.querySelector("#propStopPct").oninput = (e) => dm.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
         panel.querySelector("#propTakePct").oninput = (e) => dm.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
       }
+      const tfAll = panel.querySelector("#propTfAll");
+      const tfGrid = panel.querySelector("#propTfGrid");
+      tfAll.onchange = (e) => {
+        tfGrid.classList.toggle("hidden", e.target.checked);
+        if (e.target.checked) dm.updateDrawing(d.id, { properties: { visibleTimeframes: null } });
+      };
+      tfGrid.querySelectorAll("[data-tf]").forEach((cb) => (cb.onchange = () => {
+        const checked = [...tfGrid.querySelectorAll("[data-tf]")].filter((x) => x.checked).map((x) => x.dataset.tf);
+        dm.updateDrawing(d.id, { properties: { visibleTimeframes: checked } });
+      }));
       panel.querySelector("#propDuplicate").onclick = () => dm.duplicateDrawing(d.id);
       panel.querySelector("#propDelete").onclick = () => dm.removeDrawing(d.id);
     },
