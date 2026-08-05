@@ -12,6 +12,37 @@ BASE_URL = (
     "boards/{board}/securities/{ticker}/candles.json"
 )
 
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 30.0
+
+
+def _get_page(session, *, board, ticker, from_date, till_date, interval, start):
+    """Same retry-with-backoff policy as market_data_sync._fetch_page: MOEX
+    rate-limit (429) and 5xx responses are transient, worth retrying instead
+    of failing the whole portfolio build over one bad round trip."""
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = session.get(
+                BASE_URL.format(board=board, ticker=ticker),
+                params={
+                    "from": from_date, "till": till_date, "interval": interval,
+                    "start": start, "iss.only": "candles", "iss.meta": "off",
+                },
+                timeout=60,
+            )
+            if response.status_code == 429 or response.status_code >= 500:
+                raise requests.HTTPError(f"MOEX temporary error {response.status_code}", response=response)
+            response.raise_for_status()
+            return response.json().get("candles", {})
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt == MAX_RETRIES - 1:
+                raise
+            time.sleep(min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** attempt)))
+    raise last_exc  # pragma: no cover - unreachable, loop always returns or raises
+
 
 def download_moex_candles(
     ticker: str,
@@ -32,20 +63,8 @@ def download_moex_candles(
     start = 0
 
     while True:
-        response = session.get(
-            BASE_URL.format(board=board, ticker=ticker),
-            params={
-                "from": from_date,
-                "till": till_date,
-                "interval": interval,
-                "start": start,
-                "iss.only": "candles",
-                "iss.meta": "off",
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        candles = response.json().get("candles", {})
+        candles = _get_page(session, board=board, ticker=ticker, from_date=from_date,
+                             till_date=till_date, interval=interval, start=start)
 
         if columns is None:
             columns = candles.get("columns", [])

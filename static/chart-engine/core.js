@@ -18,8 +18,10 @@
       this.container = container;
       this.opts = opts || {};
       this.chart = LWC.createChart(container, global.ChartEngine.chartOptions());
-      this.candleSeries = this.chart.addSeries(LWC.CandlestickSeries, global.ChartEngine.candlestickOptions());
+      this.seriesType = "candles";
+      this.candleSeries = this._createPriceSeries("candles");
       this.volumeSeries = null;
+      this._seriesChangeCbs = [];
       if (this.opts.showVolume !== false) this._addVolumeSeries();
 
       this._resizeObserver = new ResizeObserver(() => this._onResize());
@@ -34,7 +36,19 @@
       this._reachedHistoryStart = false;
       this._listeners = [];
 
-      const rangeHandler = (range) => this._maybeLoadOlder(range);
+      // "Following the market" (TradingView's default behavior): true while
+      // the right edge of the visible range is at (or past) the last loaded
+      // bar. Any user pan/zoom that leaves the last bar off-screen turns
+      // this off; live ticks then accumulate silently instead of yanking
+      // the view back (see appendCandle below and _updateFollowState).
+      this._following = true;
+      this._pendingLiveCount = 0;
+      this._followChangeCbs = [];
+
+      const rangeHandler = (range) => {
+        this._maybeLoadOlder(range);
+        this._updateFollowState(range);
+      };
       this.chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
       this._listeners.push(() => this.chart.timeScale().unsubscribeVisibleLogicalRangeChange(rangeHandler));
     }
@@ -46,6 +60,43 @@
         color: theme.up,
       });
       this.volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    }
+
+    _createPriceSeries(type) {
+      if (type === "line") return this.chart.addSeries(LWC.LineSeries, { color: theme.accent, lineWidth: 2 });
+      if (type === "area") return this.chart.addSeries(LWC.AreaSeries, { lineColor: theme.accent, topColor: "rgba(124,140,255,.28)", bottomColor: "rgba(124,140,255,.02)", lineWidth: 2 });
+      if (type === "bars") return this.chart.addSeries(LWC.BarSeries, { upColor: theme.up, downColor: theme.down });
+      return this.chart.addSeries(LWC.CandlestickSeries, global.ChartEngine.candlestickOptions());
+    }
+
+    /** Candles/bars keep full OHLC; line/area only ever plot the close. */
+    _seriesPoint(candle, type) {
+      return type === "line" || type === "area"
+        ? { time: candle.time, value: candle.close }
+        : { time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close };
+    }
+
+    onSeriesChange(cb) {
+      this._seriesChangeCbs.push(cb);
+      return () => { this._seriesChangeCbs = this._seriesChangeCbs.filter((f) => f !== cb); };
+    }
+
+    /** Switches candles/line/bars/area. lightweight-charts has no in-place
+     * series-type change, so this removes the old series and creates a new
+     * one - anything holding a reference to the old series (drawings'
+     * attached primitive, in particular) must re-bind via onSeriesChange,
+     * which fires with the new series right after data is restored. Zoom/
+     * pan position and drawings' own stored price/time coordinates are
+     * untouched - only the series object identity changes. */
+    setSeriesType(type) {
+      if (type === this.seriesType || !["candles", "line", "bars", "area"].includes(type)) return;
+      this.chart.removeSeries(this.candleSeries);
+      this.seriesType = type;
+      this.candleSeries = this._createPriceSeries(type);
+      this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, type)));
+      this._seriesChangeCbs.forEach((cb) => {
+        try { cb(this.candleSeries); } catch (e) { console.error(e); }
+      });
     }
 
     _onResize() {
@@ -63,15 +114,29 @@
     }
 
     /** Loads a fresh range for a symbol, replacing any previously loaded data.
-     * A single page is capped at `limit` bars, so for a wide from/to span on
-     * a fine-grained timeframe the first page can land short of `from` (e.g.
-     * a 6-month request on 10m bars is ~10-15k bars, far past the 5000 page
-     * cap). Rather than making the user scroll left to trigger lazy paging
-     * for a range they explicitly asked for, keep pulling older pages here
-     * until the requested `from` is covered or real history runs out. */
+     *
+     * `from`/`to` are both optional - the default ("full history") load
+     * omits `from` entirely: the backend's tail query (ORDER BY ts DESC
+     * LIMIT) then naturally returns just the latest `limit` bars regardless
+     * of how far back real history goes, so opening a chart never fetches
+     * more than one page's worth up front. Older bars come in later via the
+     * existing scroll-triggered _maybeLoadOlder/_fetchOlderPage, exactly
+     * like any other lazy-loaded page.
+     *
+     * When `from` IS given (the user picked a custom range), a single page
+     * is still capped at `limit` bars, so for a wide span on a fine-grained
+     * timeframe the first page can land short of `from` (e.g. a 6-month
+     * request on 10m bars is ~10-15k bars, far past the 5000 page cap).
+     * Rather than making the user scroll left to trigger lazy paging for a
+     * range they explicitly asked for, keep pulling older pages here until
+     * the requested `from` is covered or real history runs out. */
     async load({ symbol, board, timeframe, from, to, limit, onState }) {
       this._fetchParams = { symbol, board, timeframe };
       this._reachedHistoryStart = false;
+      // A fresh load (new symbol/timeframe/range) always starts followed -
+      // fitContent() is about to show the freshly loaded range's right edge.
+      this._following = true;
+      this._pendingLiveCount = 0;
       if (this._fetchAbort) this._fetchAbort.abort();
       const controller = new AbortController();
       this._fetchAbort = controller;
@@ -81,17 +146,17 @@
           symbol,
           board: board || "TQBR",
           timeframe: timeframe || "1d",
-          from: String(from),
-          to: String(to),
           limit: String(limit || 5000),
         });
+        if (to) params.set("to", String(to));
+        if (from) params.set("from", String(from));
         const res = await fetch(`/api/candles?${params}`, { signal: controller.signal });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
         const data = await res.json();
         if (controller.signal.aborted) return;
         this._setCandles(data.candles || []);
         this._reachedHistoryStart = !data.nextCursor;
-        await this._fillDownTo(from, controller);
+        if (from) await this._fillDownTo(from, controller);
         if (controller.signal.aborted) return;
         onState && onState(this._candles.length ? "ready" : "empty");
         return data;
@@ -100,6 +165,13 @@
         onState && onState("error", err);
         throw err;
       }
+    }
+
+    /** Public wrapper around _fillDownTo for callers outside load() - e.g. a
+     * quick-range preset ("1Г") that needs the visible span covered by real
+     * data before zooming to it, without re-fetching the whole series. */
+    async ensureCoverageBack(fromDate) {
+      await this._fillDownTo(fromDate, new AbortController());
     }
 
     /** Keeps fetching older pages (same mechanism as _maybeLoadOlder) until
@@ -122,6 +194,8 @@
      * engine ran against, not a fresh MOEX fetch). */
     setCandlesDirect(candles) {
       this._reachedHistoryStart = true; // no lazy-left-scroll pagination for this source
+      this._following = true;
+      this._pendingLiveCount = 0;
       this._setCandles(candles);
     }
 
@@ -140,23 +214,68 @@
         this._setCandles(this._candles.concat([candle]));
         return;
       }
+      const isNewBar = !last || candle.time !== last.time;
       if (last && candle.time === last.time) {
         this._candles[this._candles.length - 1] = candle;
       } else {
         this._candles.push(candle);
       }
       this._candlesByTime.set(candle.time, candle);
-      this.candleSeries.update({ time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close });
+      this.candleSeries.update(this._seriesPoint(candle, this.seriesType));
       if (this.volumeSeries) {
         this.volumeSeries.update({ time: candle.time, value: candle.volume || 0, color: candle.close >= candle.open ? theme.upSoft : theme.downSoft });
       }
+      // lightweight-charts only auto-scrolls series.update() into view when
+      // the previous last bar was already the rightmost visible one, so a
+      // user who's scrolled back into history never gets yanked forward by
+      // this call - it only ever needs to track *our own* count for the
+      // "К последней цене" button.
+      if (isNewBar && !this._following) {
+        this._pendingLiveCount++;
+        this._notifyFollow();
+      }
       this._notifyDataChanged();
+    }
+
+    /** True while the visible range's right edge is at (or past) the last
+     * loaded bar - see the constructor's docstring on _following. */
+    get isFollowing() { return this._following; }
+    get pendingLiveCount() { return this._pendingLiveCount; }
+
+    onFollowChange(cb) {
+      this._followChangeCbs.push(cb);
+      return () => { this._followChangeCbs = this._followChangeCbs.filter((f) => f !== cb); };
+    }
+
+    _notifyFollow() {
+      this._followChangeCbs.forEach((cb) => {
+        try { cb(this._following, this._pendingLiveCount); } catch (e) { console.error(e); }
+      });
+    }
+
+    _updateFollowState(logicalRange) {
+      if (!logicalRange || !this._candles.length) return;
+      const lastIndex = this._candles.length - 1;
+      const following = logicalRange.to >= lastIndex - 0.5;
+      if (following === this._following) return;
+      this._following = following;
+      if (following) this._pendingLiveCount = 0;
+      this._notifyFollow();
+    }
+
+    /** "К последней цене": scrolls to the live edge and resumes following.
+     * Doesn't touch price-scale zoom or drawings - only the time axis. */
+    scrollToRealTime() {
+      this.chart.timeScale().scrollToRealTime();
+      this._following = true;
+      this._pendingLiveCount = 0;
+      this._notifyFollow();
     }
 
     _setCandles(candles) {
       this._candles = candles.slice().sort((a, b) => a.time - b.time);
       this._candlesByTime = new Map(this._candles.map((c) => [c.time, c]));
-      this.candleSeries.setData(this._candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+      this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, this.seriesType)));
       if (this.volumeSeries) {
         this.volumeSeries.setData(
           this._candles.map((c) => ({
@@ -239,6 +358,20 @@
       const span = Math.max(1, to - from);
       const margin = Math.round(span * 0.15);
       this.chart.timeScale().setVisibleRange({ from: from - margin, to: to + margin });
+    }
+
+    /** Zooms to show (roughly) the last `n` loaded bars. Used for the quick
+     * range presets (1Д…5Л) instead of setVisibleRange(): a time-based range
+     * spanning many more bars than a chart panel can legibly show gets
+     * clamped/snapped by lightweight-charts' own bar-spacing floor in ways
+     * that don't match the requested span (observed on 10m/1m data over a
+     * 1-year window) - working in logical bar indices sidesteps that
+     * entirely and is what "how many bars fit" actually means anyway. */
+    setVisibleBarCount(n) {
+      const total = this._candles.length;
+      if (!total) return;
+      const count = Math.max(2, Math.min(n, total));
+      this.chart.timeScale().setVisibleLogicalRange({ from: total - count - 1, to: total });
     }
 
     destroy() {

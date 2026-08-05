@@ -75,9 +75,19 @@ def _resolve_range(ticker: str, board: str, timeframe: str, *, mode: str,
 
 def sync_native_timeframe(ticker: str, board: str, timeframe: str, *, market: str = "shares",
                            engine: str = "stock", mode: str = "continue", from_date: str | None = None,
-                           till_date: str | None = None, progress_cb=None, should_cancel=None) -> dict:
+                           till_date: str | None = None, progress_cb=None, should_cancel=None,
+                           max_pages: int | None = None) -> dict:
     """Fetches and stores one (ticker, board, timeframe) native series.
-    Returns {"rows_added", "pages_fetched", "status", "error"}."""
+    Returns {"rows_added", "pages_fetched", "status", "error"}.
+
+    `max_pages`, if given, stops the fetch loop after that many MOEX pages
+    even if `span_till` hasn't been reached yet, returning status "partial"
+    instead of "completed" - a safety valve for callers invoked synchronously
+    inside a request (candle_api._ensure_coverage's lazy-scroll backfill),
+    so a wide from_date (e.g. "give me the full history") can't turn one
+    /api/candles call into an unbounded multi-year MOEX crawl. Callers that
+    really do want a full unattended backfill (the admin sync job) simply
+    don't pass it."""
     timeframe = canonical(timeframe)
     if timeframe not in NATIVE_TIMEFRAMES:
         raise ValueError(f"{timeframe} is not a native MOEX timeframe (aggregate on read instead)")
@@ -115,6 +125,9 @@ def sync_native_timeframe(ticker: str, board: str, timeframe: str, *, market: st
             start += len(data)
             if progress_cb:
                 progress_cb(pages=pages, rows_added=rows_added, span_from=span_from, span_till=span_till)
+            if max_pages is not None and pages >= max_pages:
+                status = "partial"
+                break
             time.sleep(PAGE_SLEEP)
     except SyncCanceled:
         pass
@@ -124,7 +137,16 @@ def sync_native_timeframe(ticker: str, board: str, timeframe: str, *, market: st
     finally:
         store.update_sync_state(ticker, board, timeframe, market=market, engine=engine, status=status,
                                  last_error=error_msg, mark_synced=(status == "completed"))
-        if status == "completed" and span_from <= EARLIEST_PLAUSIBLE_DATE:
+        # A bounded (max_pages-aware, windowed) backfill call's own span_from
+        # rarely reaches EARLIEST_PLAUSIBLE_DATE directly - it's a chunk
+        # right below whatever's already cached. Zero rows added on an
+        # "initial" (backward) call is just as conclusive: MOEX had nothing
+        # in that whole window, so the ticker's real history doesn't extend
+        # into it - there's nothing older to find by asking again. Scoped to
+        # mode=="initial" only; a "continue" (forward freshness) call
+        # legitimately sees rows_added==0 all the time (market closed, no
+        # new bar yet) and must never be mistaken for "reached the start".
+        if status == "completed" and mode == "initial" and (span_from <= EARLIEST_PLAUSIBLE_DATE or rows_added == 0):
             store.mark_backfilled(ticker, board, timeframe)
         store.log_sync_event(ticker, board, timeframe, started_at=started_at, finished_at=time.time(),
                               status=status, rows_added=rows_added, pages_fetched=pages, retries=retries_total,

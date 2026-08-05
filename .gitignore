@@ -8,3 +8,4 @@ logs/
 .gunicorn/
 *.png
 test-results/
+cache/

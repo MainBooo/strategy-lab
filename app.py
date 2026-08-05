@@ -25,7 +25,7 @@ from candle_api import get_candles,tick_availability
 from feature_flags import has_feature
 from downloader import download_moex_candles
 from jobs import JobStore
-from market_ticker import get_market_ticker,get_prices
+from market_ticker import get_market_ticker,get_prices,get_realtime,realtime_config
 from moex_catalog import load_catalog,security_by_ticker
 from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
@@ -44,8 +44,38 @@ CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
-mds.init_db(STORAGE/"market_data.db")
+
+# The candle cache (re-fetchable from MOEX, unlike backtests/charts/replay
+# data above) lives in its own directory, outside both the frontend source
+# tree and STORAGE's "real user data" files, so a size-bounded cache can be
+# cleared/relocated without touching anything a user would consider "their
+# data". MARKET_CACHE_PATH can point this at any directory (e.g. a larger
+# disk); the one-time move below preserves an already-downloaded cache from
+# this app's previous location instead of re-downloading everything.
+MARKET_CACHE_DIR=Path(os.environ.get("MARKET_CACHE_PATH") or (BASE_DIR/"cache"/"market-data"))
+MARKET_CACHE_DIR.mkdir(parents=True,exist_ok=True)
+_market_data_db=MARKET_CACHE_DIR/"market_data.db"
+_legacy_market_data_db=STORAGE/"market_data.db"
+if not _market_data_db.exists() and _legacy_market_data_db.exists():
+    import shutil as _shutil
+    for _suffix in ("","-wal","-shm"):
+        _src=_legacy_market_data_db.with_name(_legacy_market_data_db.name+_suffix)
+        if _src.exists():
+            _shutil.move(str(_src),str(_market_data_db.with_name(_market_data_db.name+_suffix)))
+    logging.getLogger(__name__).info("Moved existing market data cache from %s to %s",_legacy_market_data_db,_market_data_db)
+mds.init_db(_market_data_db)
 rdb.init_db(STORAGE/"replay.db")
+
+_CACHE_EVICTION_INTERVAL_SECONDS=6*3600
+def _market_cache_eviction_loop():
+    while True:
+        try:
+            mds.evict_if_needed(logger=logging.getLogger(__name__))
+        except Exception:
+            logging.getLogger(__name__).exception("Market data cache eviction loop failed")
+        time.sleep(_CACHE_EVICTION_INTERVAL_SECONDS)
+threading.Thread(target=_market_cache_eviction_loop,daemon=True).start()
+
 CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
 try:
     _migration_summary=legacy_candle_migration.migrate_if_empty(DATA_DIR)
@@ -147,7 +177,8 @@ def _inspect_csv(path:Path)->tuple[int,float|None]:
 def index():
     return render_template("index.html",
         defaults={"from_date":(date.today()-timedelta(days=365)).isoformat(),"till_date":date.today().isoformat()},
-        strategies=STRATEGY_CATALOG,security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS)
+        strategies=STRATEGY_CATALOG,security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
+        realtime_config=realtime_config())
 
 @app.get("/api/securities")
 def securities():
@@ -174,6 +205,14 @@ def market_price_single(ticker):
     if not quote:
         return jsonify({"ticker":ticker.upper(),"last":None,"error":result["error"] or "Цена недоступна"}),404
     return jsonify({**quote,"stale":result["stale"]})
+
+@app.get("/api/market/realtime")
+def market_realtime():
+    """Normalized realtime/latency block for the chart indicator - see
+    market_ticker.get_realtime() and docs/DYNAMIC_MARKET_DATA.md."""
+    ticker=(request.args.get("ticker") or request.args.get("symbol") or "").strip().upper()
+    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    return jsonify(get_realtime(ticker))
 
 @app.get("/api/strategies")
 def strategies(): return jsonify(STRATEGY_CATALOG)
@@ -930,7 +969,15 @@ def api_candles():
     board=args.get("board","TQBR")
     timeframe=args.get("timeframe","1d")
     till_date=args.get("to") or date.today().isoformat()
-    from_date=args.get("from") or (date.today()-timedelta(days=365)).isoformat()
+    # No `from` = "give me the tail of the full available history" (the
+    # "Анализ графиков" default): the actual bar count is still bounded by
+    # `limit` below via market_data_store.get_candles' ORDER BY ts DESC, so
+    # this doesn't fetch more than requested - it only removes the old
+    # 365-day floor that used to make hasOlder/nextCursor falsely report
+    # "no more history" past a year back. candle_api._ensure_coverage caps
+    # how much it'll backfill from MOEX in a single request regardless
+    # (see market_data_sync.sync_native_timeframe's max_pages).
+    from_date=args.get("from") or mds_sync.EARLIEST_PLAUSIBLE_DATE
     try:
         from_date=date.fromtimestamp(int(from_date)).isoformat() if from_date.isdigit() else from_date
         till_date=date.fromtimestamp(int(till_date)).isoformat() if till_date.isdigit() else till_date
@@ -956,6 +1003,12 @@ def api_chart_history():
     """Spec-named alias for /api/candles - same handler, same response
     shape (candles, nextCursor, hasOlder, hasNewer, actualFrom/Till)."""
     return api_candles()
+
+@app.get("/api/market-data/cache-stats")
+def market_data_cache_stats():
+    """Diagnostic-only, not linked from any user-facing page: bounded-cache
+    size/config introspection for ops (see docs/DYNAMIC_MARKET_DATA.md)."""
+    return jsonify(mds.cache_stats())
 
 @app.get("/api/market-data/tick-coverage")
 def market_data_tick_coverage():

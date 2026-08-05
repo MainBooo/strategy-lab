@@ -454,6 +454,23 @@
     destroy() {
       this.series.detachPrimitive(this.primitive);
     }
+
+    /** ChartCore.setSeriesType() removes the old price series and creates a
+     * new one (lightweight-charts has no in-place type change) - the
+     * drawing layer's primitive has to move to whichever series is current,
+     * or every priceToCoordinate() call here would resolve against an
+     * already-destroyed series. Drawing coordinates themselves (price/time)
+     * are series-independent, so nothing about the drawings changes. */
+    rebindSeries(newSeries) {
+      // The old series is already disposed by ChartCore.removeSeries() by
+      // the time this fires (lightweight-charts has no in-place type
+      // change), which already tore down whatever it held on the primitive -
+      // detachPrimitive() on it would throw, so this only ever attaches to
+      // the new one.
+      this.series = newSeries;
+      this.series.attachPrimitive(this.primitive);
+      this.primitive.requestUpdate();
+    }
   }
 
   function positionStopPrice(d) {

@@ -17,7 +17,7 @@ module only serves the chart/replay read path.
 
 import calendar
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import market_data_store as store
@@ -47,28 +47,79 @@ def _date_to_ts(d: str) -> int:
     return calendar.timegm((y, m, day, 0, 0, 0, 0, 0, 0))
 
 
+# Bounds how far back a single /api/candles request will backfill from MOEX
+# when the requested from_date reaches further back than what's cached.
+# None = uncapped (daily/weekly/monthly: the spec explicitly allows loading
+# the full daily history in one go - at most a few thousand bars/pages
+# across MOEX's whole listed history for one ticker).
+#
+# Intraday timeframes are capped to a bounded *window immediately adjacent
+# to the already-cached range* - not a raw page-count cutoff. MOEX's
+# candles.json only paginates forward (ascending from `from`, via `start`),
+# with no descending/reverse option, so capping by page count alone would
+# fetch the OLDEST pages of a huge gap first (e.g. from a ticker's 2011
+# listing date) instead of the chunk right next to what's already shown -
+# leaving a silent hole between the newly-fetched fragment and the existing
+# cache while `earliest_ts` (a plain MIN(ts), not contiguity-aware) would
+# still claim coverage back to 2011. Bounding the *window* instead keeps
+# every backfill contiguous with what's already there; repeated scroll-left
+# calls extend it further back one bounded chunk at a time.
+_BACKFILL_WINDOW_DAYS = {"1m": 14, "10m": 45, "60m": 220, "1d": None, "1w": None, "1mo": None}
+# Belt-and-suspenders page cap on top of the window bound, in case a bounded
+# window unexpectedly contains far more data than typical (e.g. a data
+# anomaly) - never the primary bounding mechanism, just a hang guard.
+_BACKFILL_MAX_PAGES = {"1m": 80, "10m": 80, "60m": 120, "1d": None, "1w": None, "1mo": None}
+
+
 def _ensure_coverage(ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
                       market: str, engine: str) -> None:
-    cov = store.coverage(ticker, board, timeframe)
     from_ts = _date_to_ts(from_date)
     till_ts = _date_to_ts(till_date) + 86399
+    window_days = _BACKFILL_WINDOW_DAYS.get(timeframe)
+    max_pages = _BACKFILL_MAX_PAGES.get(timeframe)
 
-    if cov["candle_count"] == 0:
-        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
-                                    mode="initial", from_date=from_date, till_date=till_date)
-        return
+    def _bounded_from(anchor_date: str) -> str:
+        """The oldest date worth asking MOEX for in one backfill call ending
+        at `anchor_date`, given the timeframe's window bound - never older
+        than what the caller actually requested (`from_date`)."""
+        if window_days is None:
+            return from_date
+        anchor = date.fromisoformat(anchor_date)
+        bounded = (anchor - timedelta(days=window_days)).isoformat()
+        return max(bounded, from_date)
 
-    state = store.get_sync_state(ticker, board, timeframe) or {}
-    if from_ts < (cov["earliest_ts"] or from_ts) and not state.get("backfilled_complete"):
-        older_till = date.fromtimestamp(cov["earliest_ts"]).isoformat()
-        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
-                                    mode="initial", from_date=from_date, till_date=older_till)
+    # Serialize on (ticker, board, timeframe): a 6-tile chart layout or a
+    # multi-ticker backtest kickoff can otherwise fire several requests for
+    # the *same* missing range at once, each seeing "no coverage" and each
+    # starting its own redundant MOEX download. Whichever request gets here
+    # first does the real sync; the rest block, then fall through to the
+    # (now warm) freshness check below and skip re-fetching.
+    lock = store.sync_lock(ticker, board, timeframe)
+    with lock:
+        cov = store.coverage(ticker, board, timeframe)
 
-    fresh_enough = bool(state.get("last_synced_at")) and \
-        (time.time() - state["last_synced_at"]) < _FRESHNESS_SECONDS.get(timeframe, 3600)
-    if till_ts > (cov["latest_ts"] or 0) and not fresh_enough:
-        sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
-                                    mode="continue", till_date=till_date)
+        if cov["candle_count"] == 0:
+            # Cold ticker: prioritize the *recent* end first (what a fresh
+            # chart actually needs to show immediately) rather than
+            # ascending-from-from_date, which for a bounded window would
+            # otherwise cache an old fragment and leave "today" empty.
+            sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                        mode="initial", from_date=_bounded_from(till_date), till_date=till_date,
+                                        max_pages=max_pages)
+            return
+
+        state = store.get_sync_state(ticker, board, timeframe) or {}
+        if from_ts < (cov["earliest_ts"] or from_ts) and not state.get("backfilled_complete"):
+            older_till = date.fromtimestamp(cov["earliest_ts"]).isoformat()
+            sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                        mode="initial", from_date=_bounded_from(older_till), till_date=older_till,
+                                        max_pages=max_pages)
+
+        fresh_enough = bool(state.get("last_synced_at")) and \
+            (time.time() - state["last_synced_at"]) < _FRESHNESS_SECONDS.get(timeframe, 3600)
+        if till_ts > (cov["latest_ts"] or 0) and not fresh_enough:
+            sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                        mode="continue", till_date=till_date)
 
 
 def _aggregate(candles: list[dict], bucket_seconds: int) -> list[dict]:
@@ -149,6 +200,7 @@ def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: st
     from_ts = _date_to_ts(from_date)
     till_ts = _date_to_ts(till_date) + 86399
     candles = store.get_candles(ticker, board, canon_tf, ts_from=from_ts, ts_to=till_ts, before=before, limit=limit)
+    store.touch_access(ticker, board, canon_tf)
 
     cov = store.coverage(ticker, board, canon_tf)
     next_cursor = candles[0]["time"] if len(candles) == limit else None

@@ -8,9 +8,7 @@
 </head>
 <body>
 <main class="shell">
-<header class="hero"><div><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории — без ручной возни с файлами данных.</p></div><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><button class="secondary hero-data-btn" id="openMarketDataManager" type="button">Хранилище данных</button><div class="status" id="status">Загрузка справочника MOEX…</div></header>
-
-<div id="marketDataManagerRoot"></div>
+<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div></div></header>
 
 <section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
   <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
@@ -23,7 +21,7 @@
 <section id="tab-portfolio" class="tab-page">
 
   <article class="card">
-    <div class="card-head"><div><span class="step">01</span><h2>Сформируйте портфель</h2></div></div>
+    <div class="card-head"><div><span class="step">Шаг 1</span><h2>Сформируйте портфель</h2></div></div>
     <p class="lead">Выберите российские акции. Мы автоматически загрузим недостающие данные и подготовим портфель для бэктеста.</p>
 
     <div class="catalog-toolbar">
@@ -97,23 +95,23 @@
     </div>
   </article>
 
-  <article class="card results-card"><div class="card-head"><div><span class="step">PORT</span><h2>Сохранённые портфели</h2></div></div><div id="portfolioList"></div></article>
+  <article class="card results-card"><div class="card-head"><div><span class="step">Портфели</span><h2>Сохранённые портфели</h2></div></div><div id="portfolioList"></div></article>
 </section>
 
 <section id="tab-strategies" class="tab-page hidden">
-  <article class="card"><div class="card-head"><div><span class="step">02</span><h2>Библиотека стратегий</h2></div><div class="message" id="strategiesContext"></div></div><div id="strategyCards" class="strategy-grid"></div></article>
+  <article class="card"><div class="card-head"><div><span class="step">Шаг 2</span><h2>Библиотека стратегий</h2></div><div class="message" id="strategiesContext"></div></div><div id="strategyCards" class="strategy-grid"></div></article>
 </section>
 
 <section id="tab-backtest" class="tab-page hidden">
 
   <article class="card" id="backtestNoPortfolio">
-    <div class="card-head"><div><span class="step">03</span><h2>Бэктест портфеля</h2></div></div>
+    <div class="card-head"><div><span class="step">Шаг 3</span><h2>Бэктест портфеля</h2></div></div>
     <div class="empty">Сначала сформируйте портфель на вкладке «Портфель».<br><button class="secondary" id="goToPortfolioTab" style="margin-top:14px">Перейти к портфелю</button></div>
   </article>
 
   <div id="backtestBody" class="hidden">
     <article class="card">
-      <div class="card-head"><div><span class="step">03</span><h2>Настройка бэктеста</h2></div></div>
+      <div class="card-head"><div><span class="step">Шаг 3</span><h2>Настройка бэктеста</h2></div></div>
       <div class="form-grid three">
         <label>Портфель <select id="backtestPortfolioSelect"></select></label>
         <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
@@ -148,7 +146,7 @@
     </article>
 
     <article class="card results-card hidden" id="backtestResults">
-      <div class="card-head"><div><span class="step">RESULT</span><h2>Результат портфеля</h2></div></div>
+      <div class="card-head"><div><span class="step">Итог</span><h2>Результат портфеля</h2></div></div>
       <div id="portfolioMetrics" class="metrics"></div>
       <div id="backtestErrors" class="build-errors"></div>
       <div id="byTickerTable"></div>
@@ -156,7 +154,7 @@
     </article>
 
     <article class="card results-card">
-      <div class="card-head"><div><span class="step">HISTORY</span><h2>История бэктестов</h2></div></div>
+      <div class="card-head"><div><span class="step">История</span><h2>История бэктестов</h2></div></div>
       <div class="catalog-toolbar">
         <select id="historyFilterPortfolio"><option value="">Все портфели</option></select>
         <input id="historyFilterTicker" placeholder="Тикер">
@@ -216,6 +214,7 @@
 window.STRATEGIES={{ strategies|tojson }};
 window.SECURITY_PRESETS={{ security_presets|tojson }};
 window.PRESET_LABELS={{ preset_labels|tojson }};
+window.REALTIME_CONFIG={{ realtime_config|tojson }};
 </script>
 <script src="{{ url_for('static',filename='vendor/lightweight-charts.standalone.production.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-engine/theme.js') }}"></script>
@@ -230,16 +229,7 @@ window.PRESET_LABELS={{ preset_labels|tojson }};
 <script src="{{ url_for('static',filename='portfolio-balance.js') }}"></script>
 <script src="{{ url_for('static',filename='trade-chart.js') }}"></script>
 <script src="{{ url_for('static',filename='watchlist-sidebar.js') }}"></script>
-<script src="{{ url_for('static',filename='market-data-manager.js') }}"></script>
+<script src="{{ url_for('static',filename='realtime-indicator.js') }}"></script>
 <script src="{{ url_for('static',filename='market-replay.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-analysis.js') }}"></script>
-<script>
-(function(){
-  var root=document.getElementById('marketDataManagerRoot');
-  var btn=document.getElementById('openMarketDataManager');
-  if(!root||!btn)return;
-  var manager=new MarketDataManager(root);
-  btn.onclick=function(){manager.open()};
-})();
-</script>
 </body></html>

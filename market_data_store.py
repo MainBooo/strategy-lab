@@ -15,7 +15,9 @@ per-call connections, WAL mode, so multiple gunicorn worker processes can
 share the file safely without a connection pool.
 """
 
+import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -24,6 +26,47 @@ _DB_PATH: Path | None = None
 SCHEMA_VERSION = 1
 
 NATIVE_TIMEFRAMES = ("1m", "10m", "60m", "1d", "1w", "1mo")
+
+# Per (ticker, board, timeframe) locks so concurrent requests for the same
+# series (e.g. opening a 6-tile chart layout, which fires up to 6 /api/candles
+# calls at once, or several browser tabs on the same ticker) serialize onto a
+# single MOEX sync instead of each firing its own redundant download - see
+# candle_api._ensure_coverage(). Only guards against duplicate work *within
+# this process*; sync_state.status="running" (checked by the same call site)
+# is the cross-process backstop since gunicorn runs multiple workers.
+_sync_locks: dict[tuple, threading.Lock] = {}
+_sync_locks_guard = threading.Lock()
+
+
+def sync_lock(ticker: str, board: str, timeframe: str) -> threading.Lock:
+    key = (ticker, board, timeframe)
+    with _sync_locks_guard:
+        lock = _sync_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _sync_locks[key] = lock
+        return lock
+
+
+def cache_config() -> dict:
+    """Bounded-cache settings, read from the environment on every call so a
+    changed env var (or a test) takes effect without a process restart -
+    these are checked at most a few times per request, never in a hot loop.
+    See docs/DYNAMIC_MARKET_DATA.md for the meaning of each variable."""
+    def _bool(name: str, default: str) -> bool:
+        return os.environ.get(name, default).strip().lower() not in ("0", "false", "no", "")
+
+    def _float(name: str, default: str) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except ValueError:
+            return float(default)
+
+    return {
+        "enabled": _bool("MARKET_CACHE_ENABLED", "true"),
+        "max_gb": _float("MARKET_CACHE_MAX_GB", "40"),
+        "ttl_days": _float("MARKET_CACHE_TTL_DAYS", "7"),
+    }
 
 
 def _connect() -> sqlite3.Connection:
@@ -75,6 +118,7 @@ def init_db(path: Path) -> None:
                 status TEXT NOT NULL DEFAULT 'idle',
                 progress_pct REAL NOT NULL DEFAULT 0,
                 last_synced_at REAL,
+                last_accessed_at REAL,
                 last_error TEXT,
                 backfilled_complete INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL,
@@ -98,7 +142,139 @@ def init_db(path: Path) -> None:
                 ON sync_log(ticker, timeframe, started_at);
             """
         )
+        # sync_state predates last_accessed_at; older DBs need it added once.
+        try:
+            conn.execute("ALTER TABLE sync_state ADD COLUMN last_accessed_at REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
+        # DELETEs only free pages back to SQLite's own freelist, not to the
+        # OS, unless auto_vacuum is on - without it, evict_if_needed() below
+        # could delete every row and the .db file would never actually
+        # shrink. auto_vacuum can only be turned on via a one-time VACUUM
+        # (cheap here - low tens of MB - and only runs once per DB, guarded
+        # by the pragma read below so it's a no-op on every later restart).
+        mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if mode != 2:  # 2 = incremental
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+
+def touch_access(ticker: str, board: str, timeframe: str) -> None:
+    """Marks a series as just-read, for LRU eviction ordering. Best-effort:
+    a lock timeout here should never fail the candle request it's attached
+    to, so failures are swallowed rather than propagated."""
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO sync_state (ticker, board, timeframe, last_accessed_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(ticker, board, timeframe) DO UPDATE SET last_accessed_at=excluded.last_accessed_at""",
+            (ticker, board, timeframe, time.time(), time.time()),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+
+
+def db_size_bytes() -> int:
+    if _DB_PATH is None or not _DB_PATH.exists():
+        return 0
+    total = _DB_PATH.stat().st_size
+    for suffix in ("-wal", "-shm"):
+        p = _DB_PATH.with_name(_DB_PATH.name + suffix)
+        if p.exists():
+            total += p.stat().st_size
+    return total
+
+
+def _delete_series(conn: sqlite3.Connection, ticker: str, board: str, timeframe: str) -> int:
+    cur = conn.execute("DELETE FROM candles WHERE ticker=? AND board=? AND timeframe=?", (ticker, board, timeframe))
+    conn.execute("DELETE FROM sync_state WHERE ticker=? AND board=? AND timeframe=?", (ticker, board, timeframe))
+    return cur.rowcount
+
+
+def evict_if_needed(logger=None) -> dict:
+    """Bounds local disk usage of the candle cache: first drops series idle
+    longer than MARKET_CACHE_TTL_DAYS, then - if still over
+    MARKET_CACHE_MAX_GB - drops the least-recently-accessed remaining series
+    one at a time until back under budget. Evicted data isn't lost, just no
+    longer local: candle_api re-fetches it from MOEX on the next request for
+    that range. No-op when MARKET_CACHE_ENABLED=false (unlimited growth,
+    today's pre-existing behavior)."""
+    cfg = cache_config()
+    if not cfg["enabled"]:
+        return {"enabled": False}
+    conn = _connect()
+    evicted: list[dict] = []
+    try:
+        cutoff = time.time() - cfg["ttl_days"] * 86400
+        idle = conn.execute(
+            "SELECT ticker, board, timeframe FROM sync_state WHERE COALESCE(last_accessed_at, updated_at) < ? "
+            "AND status != 'running'",
+            (cutoff,),
+        ).fetchall()
+        for row in idle:
+            rows = _delete_series(conn, row["ticker"], row["board"], row["timeframe"])
+            if rows:
+                evicted.append({"ticker": row["ticker"], "board": row["board"], "timeframe": row["timeframe"],
+                                 "reason": "ttl", "rows": rows})
+        conn.commit()
+
+        max_bytes = cfg["max_gb"] * (1024 ** 3)
+        guard = 0
+        while db_size_bytes() > max_bytes and guard < 10000:
+            guard += 1
+            row = conn.execute(
+                "SELECT ticker, board, timeframe FROM sync_state WHERE status != 'running' "
+                "ORDER BY COALESCE(last_accessed_at, updated_at) ASC LIMIT 1"
+            ).fetchone()
+            if not row:
+                break
+            rows = _delete_series(conn, row["ticker"], row["board"], row["timeframe"])
+            conn.commit()
+            evicted.append({"ticker": row["ticker"], "board": row["board"], "timeframe": row["timeframe"],
+                             "reason": "size", "rows": rows})
+            conn.execute("PRAGMA incremental_vacuum")
+            conn.commit()
+
+        if evicted:
+            conn.execute("PRAGMA incremental_vacuum")
+            conn.commit()
+    except sqlite3.Error as exc:
+        if logger:
+            logger.exception("Market data cache eviction failed")
+        return {"enabled": True, "error": str(exc), "evicted": evicted}
+    finally:
+        conn.close()
+    if evicted and logger:
+        logger.info("Market data cache eviction removed %d series (%s)", len(evicted),
+                    ", ".join(f"{e['ticker']}/{e['timeframe']}:{e['reason']}" for e in evicted[:10]))
+    return {"enabled": True, "evicted": evicted, "size_bytes": db_size_bytes(), "max_bytes": int(max_bytes)}
+
+
+def cache_stats() -> dict:
+    cfg = cache_config()
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n, SUM(candle_count) AS candles FROM sync_state").fetchone()
+        oldest = conn.execute(
+            "SELECT ticker, board, timeframe, last_accessed_at FROM sync_state "
+            "WHERE status != 'running' ORDER BY COALESCE(last_accessed_at, updated_at) ASC LIMIT 1"
+        ).fetchone()
+        return {
+            "config": cfg,
+            "size_bytes": db_size_bytes(),
+            "max_bytes": int(cfg["max_gb"] * (1024 ** 3)),
+            "series_count": row["n"] or 0,
+            "candle_count": row["candles"] or 0,
+            "oldest_accessed": dict(oldest) if oldest else None,
+            "path": str(_DB_PATH),
+        }
     finally:
         conn.close()
 

@@ -25,6 +25,18 @@
     return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n) + " ₽";
   }
   function pnlClass(n) { return n > 0 ? "pnl-pos" : n < 0 ? "pnl-neg" : ""; }
+  function fmtPercent(n) {
+    if (n == null || Number.isNaN(n)) return "—";
+    return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+  }
+  function pluralLots(n) {
+    const abs = Math.abs(n) % 100;
+    const last = abs % 10;
+    if (abs > 10 && abs < 20) return "лотов";
+    if (last === 1) return "лот";
+    if (last >= 2 && last <= 4) return "лота";
+    return "лотов";
+  }
 
   const Page = {
     root: null,
@@ -133,20 +145,15 @@
                 <div class="mr-account-row"><span>Реализ. P&amp;L</span><strong id="mrRealized">—</strong></div>
                 <div class="mr-account-row mr-account-total"><span>Итого</span><strong id="mrTotal">—</strong></div>
               </div>
-              <div class="mr-card mr-position hidden" id="mrPositionCard">
-                <h4>Открытая позиция</h4>
-                <div id="mrPositionBody"></div>
-              </div>
               <div class="mr-card mr-order">
                 <h4>Ручная сделка</h4>
+                <div class="mr-position-status" id="mrPositionStatus"></div>
                 <label>Лоты <input type="number" id="mrLots" min="1" step="1" value="1"></label>
                 <label>Stop Loss <input type="number" id="mrStopLoss" step="0.01" placeholder="необязательно"></label>
                 <label>Take Profit <input type="number" id="mrTakeProfit" step="0.01" placeholder="необязательно"></label>
                 <div class="mr-order-buttons">
-                  <button class="mr-buy" id="mrBuy">Buy</button>
-                  <button class="mr-sell" id="mrSell">Sell</button>
-                  <button class="mr-short" id="mrShort">Short</button>
-                  <button class="mr-close" id="mrClose">Close</button>
+                  <button class="mr-buy" id="mrBuy" title="Buy (B)">Buy</button>
+                  <button class="mr-sell" id="mrSell" title="Sell (S)">Sell</button>
                 </div>
                 <div class="mr-order-message" id="mrOrderMessage"></div>
               </div>
@@ -170,10 +177,25 @@
       this.root.querySelector("#mrGotoCancel").onclick = () => this.root.querySelector("#mrGotoPanel").classList.add("hidden");
       this.root.querySelector("#mrGotoApply").onclick = () => this._goto();
       this.root.querySelector("#mrSpeedLive").onchange = (e) => this._setSpeed(e.target.value);
-      this.root.querySelector("#mrBuy").onclick = () => this._order("buy");
-      this.root.querySelector("#mrSell").onclick = () => this._order("sell");
-      this.root.querySelector("#mrShort").onclick = () => this._order("short");
-      this.root.querySelector("#mrClose").onclick = () => this._order("close");
+      this.root.querySelector("#mrBuy").onclick = () => this._handleBuy();
+      this.root.querySelector("#mrSell").onclick = () => this._handleSell();
+    },
+
+    // Buy/Sell are contextual, like a real trading terminal's one-click
+    // ticket: what they do depends on the position currently open, not on
+    // a separate Short/Close button. No position -> Buy opens Long, Sell
+    // opens Short. Existing Long -> Buy adds to it (averaging), Sell closes
+    // it fully. Existing Short -> Sell adds to it, Buy closes it fully.
+    _handleBuy() {
+      if (!this.state) return;
+      const side = this.state.session.position_side;
+      this._order(side === "short" ? "close" : "buy");
+    },
+
+    _handleSell() {
+      if (!this.state) return;
+      const side = this.state.session.position_side;
+      this._order(side === "long" ? "close" : "short");
     },
 
     async _loadSecurities() {
@@ -282,6 +304,7 @@
         this.core.candleSeries.attachPrimitive(this.overlay);
         this.markersHandle = global.LightweightCharts.createSeriesMarkers(this.core.candleSeries, []);
       }
+      this._orderMessage("");
       this._applyState(state);
       this._loadTrades();
     },
@@ -321,20 +344,32 @@
       this.root.querySelector("#mrTotal").textContent = fmtMoney(state.equity.total);
       this.root.querySelector("#mrStepBack").disabled = !state.can_step_back;
 
-      const posCard = this.root.querySelector("#mrPositionCard");
-      const s = state.session;
-      if (s.position_side) {
-        posCard.classList.remove("hidden");
-        this.root.querySelector("#mrPositionBody").innerHTML = `
-          <div class="mr-account-row"><span>Направление</span><strong>${s.position_side === "long" ? "Long" : "Short"}</strong></div>
-          <div class="mr-account-row"><span>Лоты</span><strong>${s.position_qty_lots}</strong></div>
-          <div class="mr-account-row"><span>Средняя цена</span><strong>${s.position_avg_price != null ? s.position_avg_price.toFixed(2) : "—"}</strong></div>
-          <div class="mr-account-row"><span>Stop Loss</span><strong>${s.position_stop_loss ?? "—"}</strong></div>
-          <div class="mr-account-row"><span>Take Profit</span><strong>${s.position_take_profit ?? "—"}</strong></div>`;
-      } else {
-        posCard.classList.add("hidden");
-      }
+      this._renderPositionStatus(state);
       if (state.finished) this._stopPlaying();
+    },
+
+    _renderPositionStatus(state) {
+      const el = this.root.querySelector("#mrPositionStatus");
+      const s = state.session;
+      if (!s.position_side) {
+        el.innerHTML = `<div class="mr-no-position">Нет открытой позиции</div>`;
+        return;
+      }
+      const long = s.position_side === "long";
+      const unrealized = state.equity.unrealized_pnl;
+      const costBasis = s.position_avg_price != null ? s.position_avg_price * s.position_qty_shares : 0;
+      const pct = costBasis ? (unrealized / costBasis) * 100 : null;
+      el.innerHTML = `
+        <div class="mr-position-status-head">
+          <span class="mr-trade-side ${long ? "mr-side-long" : "mr-side-short"}">${long ? "Long" : "Short"}</span>
+          <span>${s.position_qty_lots} ${pluralLots(s.position_qty_lots)}</span>
+        </div>
+        <div class="mr-account-row"><span>Средняя цена</span><strong>${s.position_avg_price != null ? s.position_avg_price.toFixed(2) : "—"}</strong></div>
+        <div class="mr-account-row"><span>Стоимость позиции</span><strong>${fmtMoney(state.equity.position_value)}</strong></div>
+        <div class="mr-account-row"><span>P&amp;L</span><strong class="${pnlClass(unrealized)}">${fmtMoney(unrealized)} · ${fmtPercent(pct)}</strong></div>
+        ${s.position_stop_loss != null ? `<div class="mr-account-row"><span>Stop Loss</span><strong>${s.position_stop_loss}</strong></div>` : ""}
+        ${s.position_take_profit != null ? `<div class="mr-account-row"><span>Take Profit</span><strong>${s.position_take_profit}</strong></div>` : ""}
+      `;
     },
 
     async _loadTrades() {
@@ -347,17 +382,34 @@
       } catch (e) { /* markers/table just stay stale until the next successful poll */ }
     },
 
+    // A fill is a "Buy" order if it bought shares (opened/added to a long,
+    // or reduced/closed a short) and a "Sell" order otherwise - this maps
+    // each backend action+side pair back to the button the user actually
+    // pressed, for the journal below.
+    _isBuyFill(t) {
+      const opening = t.action === "open" || t.action === "add";
+      return opening ? t.side === "long" : t.side === "short";
+    },
+
     _renderTrades(trades) {
       const box = this.root.querySelector("#mrTradesList");
       if (!trades.length) { box.innerHTML = `<div class="muted-note">Сделок пока нет</div>`; return; }
-      box.innerHTML = trades.slice().reverse().map((t) => `
-        <div class="mr-trade-row">
-          <span class="mr-trade-side ${t.side === "long" ? "mr-side-long" : "mr-side-short"}">${t.side === "long" ? "Long" : "Short"}</span>
-          <span>${t.action}</span>
-          <span>${t.qty_lots} лот × ${t.fill_price.toFixed(2)}</span>
-          ${t.realized_pnl != null ? `<span class="${pnlClass(t.realized_pnl)}">${fmtMoney(t.realized_pnl)}</span>` : "<span></span>"}
-          ${t.exit_reason ? `<span class="mr-exit-reason">${t.exit_reason === "stop" ? "SL" : t.exit_reason === "take" ? "TP" : "вручную"}</span>` : "<span></span>"}
-        </div>`).join("");
+      box.innerHTML = trades.slice().reverse().map((t) => {
+        const isBuy = this._isBuyFill(t);
+        return `
+        <div class="mr-trade-row ${isBuy ? "mr-trade-buy" : "mr-trade-sell"}">
+          <div class="mr-trade-main">
+            <span class="mr-trade-action">${isBuy ? "🟢 Buy" : "🔴 Sell"}</span>
+            <span class="mr-trade-qty">${t.qty_lots} ${pluralLots(t.qty_lots)}</span>
+            <span class="mr-trade-price">${t.fill_price.toFixed(2)}</span>
+          </div>
+          <div class="mr-trade-meta">
+            <span class="mr-trade-time">${fmtDateTime(t.bar_ts)}</span>
+            ${t.realized_pnl != null ? `<span class="mr-trade-pnl ${pnlClass(t.realized_pnl)}">P&amp;L ${fmtMoney(t.realized_pnl)}</span>` : ""}
+            ${t.exit_reason && t.exit_reason !== "manual" ? `<span class="mr-exit-reason">${t.exit_reason === "stop" ? "SL" : t.exit_reason === "take" ? "TP" : t.exit_reason}</span>` : ""}
+          </div>
+        </div>`;
+      }).join("");
     },
 
     _renderMarkers(trades) {
@@ -382,7 +434,7 @@
       }
       if (open) display.push(open); // still-open position: entry marker only, no exit yet
       this.overlay.setTrades(display);
-      this.markersHandle.setMarkers(CE.Trades.buildMarkers(display, { showResultLabels: false, showExits: true }));
+      this.markersHandle.setMarkers(CE.Trades.buildMarkers(display, { showResultLabels: false, showExits: true, colorByDirection: true }));
     },
 
     async _step() {
@@ -474,7 +526,11 @@
     },
 
     async _order(action) {
-      if (!this.state) return;
+      if (!this.state || this._orderBusy) return;
+      const buyBtn = this.root.querySelector("#mrBuy");
+      const sellBtn = this.root.querySelector("#mrSell");
+      this._orderBusy = true;
+      buyBtn.disabled = true; sellBtn.disabled = true;
       const lots = Number(this.root.querySelector("#mrLots").value || 1);
       const slRaw = this.root.querySelector("#mrStopLoss").value;
       const tpRaw = this.root.querySelector("#mrTakeProfit").value;
@@ -488,6 +544,9 @@
         this._orderMessage("");
       } catch (e) {
         this._orderMessage(e.message);
+      } finally {
+        this._orderBusy = false;
+        buyBtn.disabled = false; sellBtn.disabled = false;
       }
     },
 
@@ -503,6 +562,8 @@
       if (e.code === "Space") { e.preventDefault(); this._togglePlay(); }
       else if (e.code === "ArrowRight") { e.preventDefault(); this._step(); }
       else if (e.code === "ArrowLeft") { e.preventDefault(); this._stepBack(); }
+      else if (e.code === "KeyB") { e.preventDefault(); this._handleBuy(); }
+      else if (e.code === "KeyS") { e.preventDefault(); this._handleSell(); }
     },
   };
 

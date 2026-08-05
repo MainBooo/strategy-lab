@@ -28,15 +28,23 @@
    * are built at all (tied 1:1 to the "Маркеры" toggle in the caller, since
    * entry+exit are one visual layer); `showResultLabels` is the
    * "Подписи результата" toggle - when on, the exit marker's text is the
-   * exit reason plus the trade's actual P&L percent, not a generic caption. */
-  function buildMarkers(trades, { showResultLabels, showExits } = {}) {
+   * exit reason plus the trade's actual P&L percent, not a generic caption.
+   * `colorByDirection` swaps the default profit-colored markers (used by
+   * backtest review, where "was this trade a winner" is what matters) for
+   * buy/sell-colored ones (used by Market Replay's manual journal, where
+   * entry is always the color of the order that opened it - green for a
+   * buy, red for a sell - regardless of how the trade turned out). A manual
+   * close still gets the color of the order that closed it (opposite of
+   * entry); stop/take/end_of_period exits keep their semantic color either way. */
+  function buildMarkers(trades, { showResultLabels, showExits, colorByDirection } = {}) {
     const markers = [];
     for (const t of trades) {
       const long = isLong(t);
+      const entryColor = colorByDirection ? (long ? theme.up : theme.down) : tradeColor(t);
       markers.push({
         time: t.entry_time,
         position: long ? "belowBar" : "aboveBar",
-        color: tradeColor(t),
+        color: entryColor,
         shape: long ? "arrowUp" : "arrowDown",
         text: showResultLabels ? (long ? "L" : "S") + (t.number ? ` #${t.number}` : "") : "",
         id: `entry_${t.id}`,
@@ -45,10 +53,13 @@
         const reason = EXIT_LABEL[t.exit_reason] || (t.exit_reason ? String(t.exit_reason).toUpperCase() : "EXIT");
         const pct = t.return_percent;
         const label = showResultLabels && pct != null ? `${reason} ${pct >= 0 ? "+" : ""}${pct}%` : reason;
+        const exitColor = colorByDirection
+          ? (EXIT_COLOR[t.exit_reason] || (long ? theme.down : theme.up))
+          : (EXIT_COLOR[t.exit_reason] || theme.accent);
         markers.push({
           time: t.exit_time,
           position: long ? "aboveBar" : "belowBar",
-          color: EXIT_COLOR[t.exit_reason] || theme.accent,
+          color: exitColor,
           shape: "circle",
           text: showResultLabels ? label : "",
           id: `exit_${t.id}`,

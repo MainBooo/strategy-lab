@@ -40,11 +40,18 @@ let tvRunId=null,tvPage=1,tvPageSize=25;
 function setStatus(t,c=""){$("status").textContent=t;$("status").className=`status ${c}`}
 
 // ------------------------------------------------------------------ tabs --
+let _activeTabName=null;
 function activateTab(name){
+  const leaving=_activeTabName;
+  _activeTabName=name;
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===name));
   document.querySelectorAll(".tab-page").forEach(x=>x.classList.add("hidden"));
   $("tab-"+name).classList.remove("hidden");
   localStorage.setItem("moexlab_active_tab",name);
+  // Realtime polling (chart-analysis.js) only runs while its own tab is the
+  // one on screen - leaving it stops the poller, and re-entering below
+  // resumes it and fetches immediately instead of waiting for the next tick.
+  if(leaving==="charts"&&leaving!==name&&window.ChartAnalysisPage&&window.ChartAnalysisPage.onTabLeave)window.ChartAnalysisPage.onTabLeave();
   if(name==="backtest")renderBacktestTab();
   if(name==="strategies")renderStrategiesContext();
   if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
