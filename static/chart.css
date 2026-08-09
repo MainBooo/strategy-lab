@@ -437,7 +437,15 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 @media (max-width: 620px) {
   .ca-tile-change { display: none; }
   .ca-tile-grid { min-height: 220px; }
-  .ca-bottom { max-height: 38vh; }
+  .ca-bottom { max-height: 34vh; }
+  /* Drawing-tool rail: same tools, narrower footprint so the chart itself
+     keeps as much of a phone's width as possible (chart-analysis.js's own
+     tool list/click handling is untouched, only the button box shrinks). */
+  .ca-workspace { gap: 4px; }
+  .ca-tools { padding: 4px 2px; gap: 3px; }
+  .ca-tool-btn { width: 32px; height: 32px; font-size: 13px; }
+  #chartsRoot { gap: 4px; }
+  .ca-toolbar-unified { border-radius: 8px; }
 }
 .ca-range-presets { display: flex; gap: 4px; flex-wrap: wrap; }
 .range-preset {
@@ -562,6 +570,11 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   .ca-watchlist.wl-mobile-open {
     display: flex; position: fixed; inset: 0 0 0 auto; width: min(320px, 86vw); height: 100vh;
     z-index: 75; border-radius: 0; border-left: 1px solid var(--line);
+    animation: wl-slide-in .18s ease;
+  }
+  @keyframes wl-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .ca-watchlist.wl-mobile-open { animation: none; }
   }
   .ca-watchlist.wl-mobile-open.wl-collapsed { width: min(320px, 86vw); }
   .ca-watchlist.wl-mobile-open.wl-collapsed .wl-header input,
@@ -616,9 +629,14 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   z-index: 80;
 }
 .ca-modal-backdrop.hidden { display: none; }
+.ca-modal-backdrop:not(.hidden) { animation: fade-in .2s ease; }
 .ca-modal {
   width: min(560px, calc(100% - 32px)); max-height: 86vh; overflow: auto; background: var(--panel-2);
   border: 1px solid var(--line); border-radius: 14px; padding: 24px; position: relative; display: flex; flex-direction: column; gap: 10px;
+  animation: fade-scale-in .2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-modal-backdrop:not(.hidden), .ca-modal { animation: none; }
 }
 .ca-modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .ca-modal input, .ca-modal textarea {
@@ -734,4 +752,11 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   .mr-transport button { flex: 1 1 calc(50% - 8px); }
   .mr-order-buttons { grid-template-columns: 1fr 1fr; }
   .mr-controlbar { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 460px) {
+  /* Phone width (390-430px): even 2 equal columns leave setup fields (date/
+     time/balance/commission...) too narrow to read comfortably - one column
+     reads better here. Buy/Sell stays paired (.mr-order-buttons untouched)
+     since that's a deliberate two-action layout, not a form grid. */
+  .mr-setup-grid { grid-template-columns: 1fr; }
 }

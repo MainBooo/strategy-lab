@@ -839,9 +839,14 @@
       const bottom = this.root.querySelector("#caBottom");
       const watchlist = this.root.querySelector("#caWatchlist");
 
-      let collapsed = false, height = BOTTOM_HEIGHT_DEFAULT, wlWidth = WATCHLIST_WIDTH_DEFAULT;
+      // Default to collapsed on phone-width screens (no saved preference yet) -
+      // the Свойства/Объекты panel used to default open everywhere, eating
+      // ~40% of the viewport height on first mobile visit. An explicit prior
+      // choice (localStorage already has a value) always wins over this.
+      let collapsed = window.innerWidth <= 620, height = BOTTOM_HEIGHT_DEFAULT, wlWidth = WATCHLIST_WIDTH_DEFAULT;
       try {
-        collapsed = localStorage.getItem(BOTTOM_COLLAPSED_KEY) === "1";
+        const savedCollapsed = localStorage.getItem(BOTTOM_COLLAPSED_KEY);
+        if (savedCollapsed !== null) collapsed = savedCollapsed === "1";
         const h = Number(localStorage.getItem(BOTTOM_HEIGHT_KEY));
         if (Number.isFinite(h) && h > 0) height = h;
         const w = Number(localStorage.getItem(WATCHLIST_WIDTH_KEY));
