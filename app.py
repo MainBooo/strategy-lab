@@ -337,8 +337,11 @@ def files():
 @app.post("/api/download-batch")
 @heavy_sync
 def download_batch():
-    payload=request.get_json(force=True); tickers=[str(x).upper() for x in payload.get("tickers",[]) if str(x).strip()]
+    payload=request.get_json(force=True) or {}
+    tickers=[str(x).upper() for x in payload.get("tickers",[]) if str(x).strip()]
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
+    if not payload.get("from_date") or not payload.get("till_date"):
+        return jsonify({"error":"Не указан диапазон дат"}),400
     rows=[]
     for ticker in tickers:
         filename=f"{ticker}_{int(payload.get('interval',10))}m_{payload['from_date']}_{payload['till_date']}.csv"
@@ -355,7 +358,10 @@ def download_batch():
 @app.post("/api/backtest")
 @heavy_sync
 def backtest():
-    p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
+    p=request.get_json(force=True) or {}
+    if not p.get("file"):return jsonify({"error":"Не указан файл с данными"}),400
+    if not p.get("strategy"):return jsonify({"error":"Не указана стратегия"}),400
+    source=DATA_DIR/Path(str(p["file"])).name
     if not source.exists():return jsonify({"error":"Файл не найден"}),404
     try:return jsonify({"ok":True,**run_strategy(str(p["strategy"]),source,p.get("params",{}))})
     except Exception as exc:return jsonify({"error":str(exc)}),400
@@ -374,7 +380,10 @@ def batch_backtest():
 @app.post("/api/optimize")
 @heavy_sync
 def optimize():
-    p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
+    p=request.get_json(force=True) or {}
+    if not p.get("file"):return jsonify({"error":"Не указан файл с данными"}),400
+    source=DATA_DIR/Path(str(p["file"])).name
+    if not source.exists():return jsonify({"error":"Файл не найден"}),404
     try:return jsonify({"ok":True,**run_optimizer(source,p.get("ranges",{}),RESULTS_DIR)})
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
