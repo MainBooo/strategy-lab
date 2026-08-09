@@ -101,6 +101,7 @@ def init_db(path: Path) -> None:
                 volume REAL NOT NULL DEFAULT 0,
                 value REAL,
                 num_trades INTEGER,
+                is_synthetic INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (ticker, board, timeframe, ts)
             );
             CREATE INDEX IF NOT EXISTS idx_candles_ticker_tf_ts
@@ -145,6 +146,13 @@ def init_db(path: Path) -> None:
         # sync_state predates last_accessed_at; older DBs need it added once.
         try:
             conn.execute("ALTER TABLE sync_state ADD COLUMN last_accessed_at REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        # candles predates is_synthetic (gap-fill for illiquid intraday
+        # buckets - see candle_api._fill_synthetic_gaps); older DBs need it
+        # added once, defaulting existing rows to 0 (real).
+        try:
+            conn.execute("ALTER TABLE candles ADD COLUMN is_synthetic INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already exists
         conn.commit()
@@ -281,9 +289,57 @@ def cache_stats() -> dict:
 
 def upsert_candles(ticker: str, board: str, timeframe: str, rows: list[dict],
                     market: str = "shares", engine: str = "stock") -> int:
-    """Inserts candles, ignoring rows already present (dedup on the
-    (ticker, board, timeframe, ts) primary key). Returns rows actually
-    added (not total rows passed in)."""
+    """Inserts real MOEX candles. Unlike a plain INSERT OR IGNORE, an
+    existing row at the same (ticker, board, timeframe, ts) primary key IS
+    overwritten when MOEX's own values differ from what's stored - this is
+    what lets the still-forming current-interval candle actually keep
+    updating (higher/lower/close as trades continue) on every poll instead
+    of freezing at whatever it looked like on its first sync, and lets a
+    real candle replace a synthetic no-trade placeholder inserted earlier by
+    candle_api._fill_synthetic_gaps for the same interval. The `WHERE`
+    guard on the DO UPDATE means a byte-identical re-fetch performs no write
+    at all (total_changes stays flat), so the return value still means
+    "rows added or meaningfully changed", not "rows touched". Always stamps
+    is_synthetic=0 - real MOEX data, by definition, is never synthetic."""
+    if not rows:
+        return 0
+    conn = _connect()
+    try:
+        before = conn.total_changes
+        conn.executemany(
+            """INSERT INTO candles
+               (ticker, board, market, engine, timeframe, ts, open, high, low, close, volume, value, num_trades, is_synthetic)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+               ON CONFLICT(ticker, board, timeframe, ts) DO UPDATE SET
+                    open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+                    volume=excluded.volume, value=excluded.value, num_trades=excluded.num_trades,
+                    is_synthetic=0
+               WHERE candles.open IS NOT excluded.open OR candles.high IS NOT excluded.high
+                  OR candles.low IS NOT excluded.low OR candles.close IS NOT excluded.close
+                  OR candles.volume IS NOT excluded.volume OR candles.value IS NOT excluded.value
+                  OR candles.num_trades IS NOT excluded.num_trades OR candles.is_synthetic != 0""",
+            [
+                (ticker, board, market, engine, timeframe, int(r["ts"]),
+                 float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]),
+                 float(r.get("volume") or 0), r.get("value"), r.get("num_trades"))
+                for r in rows
+            ],
+        )
+        added = conn.total_changes - before
+        conn.commit()
+        return added
+    finally:
+        conn.close()
+
+
+def upsert_synthetic_candles(ticker: str, board: str, timeframe: str, rows: list[dict],
+                              market: str = "shares", engine: str = "stock") -> int:
+    """Inserts flat no-trade placeholder candles for confirmed-empty
+    intraday buckets (see candle_api._fill_synthetic_gaps) - always
+    INSERT OR IGNORE, on purpose: this must never overwrite a row that's
+    already real (or already synthetic - re-running the fill is a no-op for
+    buckets it already covered). Only upsert_candles (the real-data path)
+    is ever allowed to replace a synthetic row."""
     if not rows:
         return 0
     conn = _connect()
@@ -291,12 +347,12 @@ def upsert_candles(ticker: str, board: str, timeframe: str, rows: list[dict],
         before = conn.total_changes
         conn.executemany(
             """INSERT OR IGNORE INTO candles
-               (ticker, board, market, engine, timeframe, ts, open, high, low, close, volume, value, num_trades)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (ticker, board, market, engine, timeframe, ts, open, high, low, close, volume, value, num_trades, is_synthetic)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
             [
                 (ticker, board, market, engine, timeframe, int(r["ts"]),
                  float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]),
-                 float(r.get("volume") or 0), r.get("value"), r.get("num_trades"))
+                 0.0, 0.0, 0)
                 for r in rows
             ],
         )
@@ -342,14 +398,14 @@ def get_candles(ticker: str, board: str, timeframe: str, *, ts_from: int | None 
             clauses.append("ts<?"); params.append(int(before))
         where = " AND ".join(clauses)
         rows = conn.execute(
-            f"SELECT ts, open, high, low, close, volume FROM candles WHERE {where} "
+            f"SELECT ts, open, high, low, close, volume, is_synthetic FROM candles WHERE {where} "
             f"ORDER BY ts DESC LIMIT ?",
             (*params, int(limit)),
         ).fetchall()
         rows = list(reversed(rows))
         return [
             {"time": r["ts"], "open": r["open"], "high": r["high"], "low": r["low"],
-             "close": r["close"], "volume": r["volume"]}
+             "close": r["close"], "volume": r["volume"], "isSynthetic": bool(r["is_synthetic"])}
             for r in rows
         ]
     finally:
@@ -363,13 +419,13 @@ def get_candles_ascending(ticker: str, board: str, timeframe: str, *, ts_from: i
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT ts, open, high, low, close, volume FROM candles "
+            "SELECT ts, open, high, low, close, volume, is_synthetic FROM candles "
             "WHERE ticker=? AND board=? AND timeframe=? AND ts>=? ORDER BY ts ASC LIMIT ?",
             (ticker, board, timeframe, int(ts_from), int(limit)),
         ).fetchall()
         return [
             {"time": r["ts"], "open": r["open"], "high": r["high"], "low": r["low"],
-             "close": r["close"], "volume": r["volume"]}
+             "close": r["close"], "volume": r["volume"], "isSynthetic": bool(r["is_synthetic"])}
             for r in rows
         ]
     finally:

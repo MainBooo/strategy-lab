@@ -35,11 +35,17 @@ MARKETDATA_COLUMNS = "SECID,BID,OFFER,LAST,LASTTOPREVPRICE,VOLTODAY,NUMTRADES,TR
 # GAZP, LKOH, T, YDEX) at a rock-steady ~900s (15 minute) lag between a
 # security's own last-trade TIME and the SYSTIME the row was served with -
 # the standard exchange-data delay for a feed without a paid real-time data
-# agreement, not a connectivity problem. Status thresholds below are set
-# relative to that measured baseline (see docs/DYNAMIC_MARKET_DATA.md) -
-# copying generic near-real-time defaults here would make every single
-# quote misreport as "stale"/"disconnected" even when the feed is behaving
-# exactly as MOEX's free tier always does.
+# agreement, not a connectivity problem. This is a property of the SOURCE
+# (constant, ~every ticker sees roughly the same lag on a fresh trade) and
+# must never be confused with LAST_TRADE_AGE below, which is a property of
+# the INSTRUMENT (how long ago its own last trade happened - can be minutes
+# for a blue chip or hours for an illiquid name with no trades at all). Two
+# tickers with the exact same healthy source connection can show wildly
+# different "age" numbers just because one of them isn't trading right now -
+# see docs/DYNAMIC_MARKET_DATA.md, "source delay vs last-trade age".
+SOURCE_DELAY_MS = 900_000  # 15 minutes - the measured free-tier baseline above
+
+
 def realtime_config() -> dict:
     def _int(name: str, default: str) -> int:
         try:
@@ -50,15 +56,24 @@ def realtime_config() -> dict:
     return {
         "enabled": os.environ.get("REALTIME_ENABLED", "true").strip().lower() not in ("0", "false", "no", ""),
         "poll_interval_ms": _int("REALTIME_POLL_INTERVAL_MS", "45000"),
-        "warning_delay_ms": _int("REALTIME_WARNING_DELAY_MS", "1200000"),   # 20 min: 5 min past the measured baseline
-        "stale_delay_ms": _int("REALTIME_STALE_DELAY_MS", "2400000"),       # 40 min
-        "disconnected_delay_ms": _int("REALTIME_DISCONNECTED_DELAY_MS", "3600000"),  # 60 min / fetch failure
+        "source_delay_ms": _int("REALTIME_SOURCE_DELAY_MS", str(SOURCE_DELAY_MS)),
+        # How far a ticker's own last-trade age is allowed to exceed the
+        # source delay baseline before it stops being "just the normal
+        # source lag" and starts being reported as "нет сделок" (illiquid /
+        # no new prints) instead - see _classify_status.
+        "no_trade_threshold_ms": _int("REALTIME_NO_TRADE_THRESHOLD_MS", "1200000"),  # 20 min: 5 min past baseline
     }
 
 
-def _is_trading_hours(now_utc: datetime | None = None) -> bool:
-    # No tzdata dependency: MSK is a fixed UTC+3 offset (Russia doesn't
-    # observe DST), so a plain offset is exact, not an approximation.
+def is_trading_session(now_utc: datetime | None = None) -> bool:
+    """Weekday + MSK session-hours check (no tzdata dependency: MSK is a
+    fixed UTC+3 offset, Russia doesn't observe DST). Deliberately does NOT
+    know about exchange holidays - there is no MOEX holiday calendar wired
+    into this integration yet, so a public holiday that falls on a weekday
+    is (honestly, not silently) a known gap: both the realtime badge and
+    candle_api's synthetic gap-fill will treat it as a trading day. Shared
+    by market_ticker (badge/status) and candle_api (gap-fill session
+    bounds) so the two can never disagree about what "market open" means."""
     now = now_utc or datetime.utcnow()
     msk = now + timedelta(hours=3)
     if msk.weekday() >= 5:
@@ -155,7 +170,7 @@ def _refresh_if_stale() -> dict:
     cache side."""
     with _lock:
         now = datetime.utcnow()
-        interval = _TRADING_INTERVAL_SEC if _is_trading_hours(now) else _CLOSED_INTERVAL_SEC
+        interval = _TRADING_INTERVAL_SEC if is_trading_session(now) else _CLOSED_INTERVAL_SEC
         fresh = (
             _cache["by_ticker"] is not None
             and _cache["fetched_at"] is not None
@@ -203,41 +218,60 @@ def get_prices(tickers: list[str] | None = None) -> dict:
     return {"prices": by_ticker, "stale": snap["stale"], "error": snap["error"]}
 
 
-def _classify_status(*, fetch_error: str | None, market_open: bool, delay_ms: int | None, cfg: dict) -> str:
+def _classify_status(*, fetch_error: str | None, market_open: bool, last_trade_age_ms: int | None,
+                      cfg: dict) -> str:
+    """Six honestly-distinct causes, not one ever-growing timer (see
+    docs/DYNAMIC_MARKET_DATA.md and the chart-analysis spec's "различать
+    реальную задержку / отсутствие сделок / закрытый рынок / ошибку"):
+
+    - "disconnected": the MOEX fetch itself is failing right now - a real
+      technical problem, unrelated to any one ticker's trading activity.
+    - "market_closed": the exchange session isn't open (checked first,
+      before looking at any ticker-specific age, so a closed market is
+      never misreported as "нет сделок").
+    - "no_trades": market is open, the feed is healthy, but THIS ticker's
+      own last trade is older than the source-delay baseline plus a
+      tolerance band - i.e. illiquidity, not a source/connectivity issue.
+    - "delayed": the normal, expected state - market open, feed healthy,
+      last trade age within the tolerance band around the known ~15min
+      source lag. This is this integration's steady-state "everything is
+      fine" status (see realtime_config's SOURCE_DELAY_MS docstring for why
+      it's never "live")."""
     if fetch_error:
         return "disconnected"
-    if delay_ms is None:
-        return "no_trades" if market_open else "market_closed"
-    if delay_ms >= cfg["disconnected_delay_ms"]:
-        return "disconnected"
-    if delay_ms >= cfg["stale_delay_ms"]:
-        return "stale"
     if not market_open:
         return "market_closed"
-    if delay_ms >= cfg["warning_delay_ms"]:
-        return "delayed"
-    return "delayed"  # this integration's baseline is always "delayed", never "live" - see realtime_config()
+    if last_trade_age_ms is None or last_trade_age_ms > cfg["no_trade_threshold_ms"]:
+        return "no_trades"
+    return "delayed"
 
 
 def get_realtime(ticker: str) -> dict:
     """Normalized realtime block for one ticker - the shape the frontend
     indicator (static/realtime-indicator.js) renders directly. See
     docs/DYNAMIC_MARKET_DATA.md for the field-by-field meaning and why
-    status can never be "live" for this integration."""
+    status can never be "live" for this integration.
+
+    Exposes source_delay_ms (constant, the source's own advertised lag) and
+    last_trade_age_ms (per-ticker, how long since this instrument's own
+    last print) as two separate numbers - never collapse them back into one
+    "delay" figure, that conflation is exactly what made illiquid names
+    like a low-volume second-tier ticker show a misleading multi-hour
+    "delay" that was actually just "no one has traded this in a while"."""
     cfg = realtime_config()
     ticker = ticker.upper()
     snap = _refresh_if_stale()
     quote = snap["by_ticker"].get(ticker)
-    market_open = _is_trading_hours()
+    market_open = is_trading_session()
     response_generated_at = datetime.utcnow()
-    delay_ms = quote["delay_ms"] if quote else None
+    last_trade_age_ms = quote["delay_ms"] if quote else None
     # Add the time spent sitting in our own cache since the last real MOEX
-    # fetch, so delay_ms reflects "how old is what you're looking at right
+    # fetch, so the age reflects "how old is what you're looking at right
     # now", not just the age of the response at the moment we fetched it.
-    if delay_ms is not None and snap.get("server_received_at") is not None:
-        delay_ms += max(0, round((response_generated_at - snap["server_received_at"]).total_seconds() * 1000))
+    if last_trade_age_ms is not None and snap.get("server_received_at") is not None:
+        last_trade_age_ms += max(0, round((response_generated_at - snap["server_received_at"]).total_seconds() * 1000))
     status = _classify_status(fetch_error=snap["error"] if not quote else None, market_open=market_open,
-                               delay_ms=delay_ms, cfg=cfg)
+                               last_trade_age_ms=last_trade_age_ms, cfg=cfg)
     return {
         "source": "MOEX",
         "ticker": ticker,
@@ -249,7 +283,9 @@ def get_realtime(ticker: str) -> dict:
         "market_time": quote["market_time"] if quote else None,
         "server_received_at": snap["server_received_at"].isoformat() if snap.get("server_received_at") else None,
         "response_generated_at": response_generated_at.isoformat(),
-        "delay_ms": delay_ms,
+        "source_delay_ms": cfg["source_delay_ms"],
+        "last_trade_age_ms": last_trade_age_ms,
+        "delay_ms": last_trade_age_ms,  # back-compat alias, same value as last_trade_age_ms
         "status": status,
         "market_status": "open" if market_open else "closed",
         "error": snap["error"] if not quote else None,

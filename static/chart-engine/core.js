@@ -111,11 +111,29 @@
 
     /** Candles/bars/Heikin-Ashi keep full OHLC; line/area/baseline only ever
      * plot the close. (Heikin-Ashi bypasses this - see _computeHeikinAshi/
-     * _haPoint, which derive their own synthetic OHLC.) */
+     * _haPoint, which derive their own synthetic OHLC.)
+     *
+     * A synthetic no-trade bucket (candle.isSynthetic - see
+     * candle_api._fill_synthetic_gaps) gets a muted neutral color instead
+     * of the normal up/down palette on candles/bars, so the timeline still
+     * visibly advances every interval without implying a real up or down
+     * move happened - per spec, "не выделять слишком ярко", just distinct
+     * enough to read as "no trade here" on hover/inspection. */
     _seriesPoint(candle, type) {
-      return type === "line" || type === "area" || type === "baseline"
-        ? { time: candle.time, value: candle.close }
-        : { time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close };
+      if (type === "line" || type === "area" || type === "baseline") {
+        return { time: candle.time, value: candle.close };
+      }
+      const point = { time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close };
+      if (candle.isSynthetic) {
+        if (type === "bars") {
+          point.color = theme.muted;
+        } else {
+          point.color = theme.muted;
+          point.borderColor = theme.muted;
+          point.wickColor = theme.muted;
+        }
+      }
+      return point;
     }
 
     /** Heikin-Ashi transform (full recompute - used on load/page/reset, not
@@ -391,6 +409,53 @@
         this._notifyFollow();
       }
       this._notifyDataChanged();
+    }
+
+    /** Periodic "catch up on newly closed intervals" fetch (see ChartTile's
+     * tail-refresh timer) - separate from load()'s full-range fetch but
+     * sharing the same cross-tile dedup cache (fetchCandlesShared), so two
+     * tiles polling the same symbol/timeframe at nearly the same moment
+     * collapse onto one request instead of firing two. Always asks for the
+     * tail of the full history (no from/to), so it naturally reflects
+     * whatever the backend's freshness/gap-fill pass just did - see
+     * candle_api._ensure_coverage / _fill_synthetic_gaps. Throws on a
+     * failed fetch so the caller can distinguish and surface a genuine
+     * refresh error, rather than silently doing nothing. */
+    async refreshTail(limit) {
+      if (!this._fetchParams) return null;
+      const { symbol, board, timeframe } = this._fetchParams;
+      const params = new URLSearchParams({ symbol, board: board || "TQBR", timeframe: timeframe || "1d", limit: String(limit || 10) });
+      const data = await fetchCandlesShared(`/api/candles?${params}`);
+      this.mergeTailCandles(data.candles || []);
+      return data;
+    }
+
+    /** Merges a small ascending batch of the newest backend candles (real
+     * and/or synthetic gap-fill bars - see candle_api._fill_synthetic_gaps)
+     * into the already-loaded series without a full reload/redraw and
+     * without touching zoom/scroll position. This is what lets a periodic
+     * background refresh (see ChartTile's tail-refresh timer) pick up a
+     * newly-closed real candle, an updated still-forming candle, or a
+     * newly-inserted synthetic no-trade bar - each via one targeted
+     * series.update() through appendCandle(), never setData(). Silently
+     * no-ops if the batch doesn't connect to what's already loaded (a
+     * range/symbol change invalidated it mid-flight) - the next full
+     * load() resyncs properly instead of splicing on a disconnected tail. */
+    mergeTailCandles(candles) {
+      if (!candles || !candles.length || !this._candles.length) return;
+      const lastLoaded = this._candles[this._candles.length - 1].time;
+      if (candles[0].time > lastLoaded + 1) return;
+      // Only candles at-or-after the current last loaded bar go through
+      // appendCandle (update-in-place or append) - anything older is
+      // already-known history repeated in every tail response (the API
+      // always returns the newest `limit` rows, not just what changed).
+      // Feeding an already-loaded older timestamp into appendCandle would
+      // hit its "went backward" fallback (a full concat+resort, meant for
+      // a genuine rewind like Market Replay's goto/reset), which doesn't
+      // dedupe against an already-present same-timestamp row - a real bug
+      // reproduced live (AKMC 10m) where every poll re-appended the same
+      // handful of tail bars as duplicates.
+      candles.forEach((c) => { if (c.time >= lastLoaded) this.appendCandle(c); });
     }
 
     /** True while the visible range's right edge is at (or past) the last

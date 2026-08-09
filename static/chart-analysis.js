@@ -52,7 +52,7 @@
   const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "3": 3, "3b": 3, "4": 4, "6": 6 };
   const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "3", 4: "4", 5: "6", 6: "6" };
 
-  const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", timescale: "Временная шкала", range: "Диапазон отображения" };
+  const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", scroll: "Прокрутка (позиция)", zoom: "Масштаб (ширина свечей)", range: "Диапазон отображения" };
 
   const IND_PARAM_LABELS = { period: "Период", mult: "Множитель", fast: "Быстрая", slow: "Медленная", signal: "Сигнальная", kPeriod: "%K период", dPeriod: "%D период" };
   const IND_LINE_LABELS = {
@@ -134,7 +134,14 @@
     tiles: [],
     activeTileId: null,
     layoutMode: "1",
-    syncFlags: { ticker: false, interval: false, crosshair: false, timescale: false, range: false },
+    // Every sync channel independently OFF by default - a fresh workspace
+    // (and any workspace migrating from the old single syncEnabled toggle,
+    // see _restoreWorkspaceState below) always starts with fully
+    // independent tiles; the user must explicitly opt each one in via the
+    // "Синхронизация графиков" menu. scroll/zoom are deliberately separate
+    // keys (not one bundled "timescale") per spec: panning one tile must
+    // never imply anything about zoom sync, and vice versa.
+    syncFlags: { ticker: false, interval: false, crosshair: false, scroll: false, zoom: false, range: false },
     _archivedTiles: [],
     _built: false,
 
@@ -955,7 +962,7 @@
           tile.drawingMgr.onChange(() => {
             if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
           });
-          tile.onRangeChange((range) => { if (this.syncFlags.timescale) this._broadcastRange(tile, range); });
+          tile.onRangeChange((range) => { if (this.syncFlags.scroll || this.syncFlags.zoom) this._broadcastRange(tile, range); });
           tile.onCrosshairMove((time, price) => { if (this.syncFlags.crosshair) this._broadcastCrosshair(tile, time, price); });
           tile.onPriceUpdate((t, info) => {
             t._lastPriceInfo = info;
@@ -963,6 +970,12 @@
           });
           tile.onLiveTick((symbol, price) => { if (global.AlertService) global.AlertService.evaluate(symbol, price); });
           tile.onStateChanged((t, detail) => {
+            // Any state change worth notifying about (symbol/timeframe/
+            // range/layout) can reload the series into an entirely
+            // different logical-index space - a stale _lastBroadcastRange
+            // from before that would compute a meaningless scroll delta on
+            // the next sync broadcast, so always drop it here.
+            t._lastBroadcastRange = null;
             this._saveWorkspaceState();
             if (t.id === this.activeTileId) {
               if (this.watchlist) this.watchlist.setActive(t.symbol);
@@ -976,8 +989,39 @@
       });
     },
 
+    /** Applies `range` (source's new visible logical range) to the other
+     * tiles according to which of scroll/zoom sync is actually on - the two
+     * are never bundled into one "apply the whole range" call except when
+     * BOTH are enabled. Cycle-safe: each tile's own onRangeChange only
+     * re-fires from a genuine user interaction (ChartTile guards
+     * programmatic applyLogicalRange() calls via _applyingRange), so this
+     * can never re-trigger itself through another tile. */
     _broadcastRange(source, range) {
-      this.tiles.forEach((t) => { if (t !== source) t.applyLogicalRange(range); });
+      if (!range) return;
+      const prev = source._lastBroadcastRange || range;
+      source._lastBroadcastRange = range;
+      const deltaPos = range.from - prev.from;
+      const bothOn = this.syncFlags.scroll && this.syncFlags.zoom;
+      this.tiles.forEach((t) => {
+        if (t === source || !t.core) return;
+        if (bothOn) {
+          t.applyLogicalRange(range);
+          return;
+        }
+        const tRange = t.core.chart.timeScale().getVisibleLogicalRange();
+        if (!tRange) return;
+        if (this.syncFlags.zoom) {
+          // Match the source's new width, keep this tile's own center -
+          // scroll sync being off means this tile's position must not move.
+          const center = (tRange.from + tRange.to) / 2;
+          const width = range.to - range.from;
+          t.applyLogicalRange({ from: center - width / 2, to: center + width / 2 });
+        } else if (this.syncFlags.scroll) {
+          // Translate by the same delta, keep this tile's own width - zoom
+          // sync being off means this tile's own scale must not change.
+          t.applyLogicalRange({ from: tRange.from + deltaPos, to: tRange.to + deltaPos });
+        }
+      });
     },
     _broadcastCrosshair(source, time, price) {
       this.tiles.forEach((t) => { if (t !== source) t.applyCrosshair(time, price); });
@@ -1066,8 +1110,14 @@
         while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
         const activeIdx = Number.isInteger(state.activeIndex) && state.activeIndex >= 0 && state.activeIndex < this.tiles.length ? state.activeIndex : 0;
         this.activeTileId = this.tiles[activeIdx].id;
+        // A per-parameter syncFlags snapshot restores as-is (it only ever
+        // contains what the user explicitly turned on). A pre-syncFlags
+        // session ("syncEnabled" - one bundled toggle from an older
+        // version) does NOT get migrated to any sync being on: every sync
+        // channel must start OFF until explicitly re-enabled, even for a
+        // workspace that had the old toggle on - see the spec's "по
+        // умолчанию все виды синхронизации должны быть выключены".
         if (state.syncFlags) this.syncFlags = Object.assign({}, this.syncFlags, state.syncFlags);
-        else if (state.syncEnabled) this.syncFlags = { ticker: false, interval: false, crosshair: true, timescale: true, range: false }; // migrate old single toggle
         return true;
       } catch (e) {
         return false;
