@@ -40,7 +40,7 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = form.querySelector("button[type=submit]");
-      if (btn) btn.disabled = true;
+      if (btn) { btn.disabled = true; btn.classList.add("is-loading"); }
       showMessage(msg, "", false);
       try {
         const result = await submit(new FormData(form));
@@ -48,7 +48,7 @@
       } catch (err) {
         showMessage(msg, err.message || "Что-то пошло не так", true);
       } finally {
-        if (btn) btn.disabled = false;
+        if (btn) { btn.disabled = false; btn.classList.remove("is-loading"); }
       }
     });
   }

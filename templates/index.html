@@ -14,7 +14,10 @@
   <span class="beta-badge">Public Beta · бесплатно</span>
   {% if current_user %}
     <div class="account-menu" id="accountMenu">
-      <button class="secondary" id="accountMenuBtn" type="button">{{ current_user.display_name }} ▾</button>
+      <button class="account-trigger" id="accountMenuBtn" type="button">
+        <span class="account-avatar">{{ current_user.display_name[:2]|upper }}</span>
+        {{ current_user.display_name }} ▾
+      </button>
       <div class="account-dropdown hidden" id="accountDropdown">
         <a href="/account">Личный кабинет</a>
         <a href="/account/backtests">Мои бэктесты</a>

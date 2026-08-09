@@ -883,13 +883,14 @@ function resumeBacktestJobIfAny(){
 
 function renderMetrics(s,target){
   const pnl=(s.final_capital_rub||0)-(s.starting_capital_rub||0);
+  const signClass=(n)=>n>0?"pos":n<0?"neg":"";
   const fields=[
-    ["Доходность",`${s.return_pct??0}%`],["Прибыль/убыток",`${money(pnl)} ₽`],
-    ["Просадка",`${s.max_drawdown_pct??0}%`],["Сделок",s.trades??0],["Win Rate",`${s.win_rate??0}%`],
-    ["Profit Factor",s.profit_factor??"—"],["Sharpe (оценка)",s.sharpe_ratio??"—"],
-    ["Использование капитала",`${s.capital_utilization_pct??0}%`],["Капитал",`${money(s.final_capital_rub)} ₽`],
+    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} ₽`,signClass(pnl)],
+    ["Просадка",`${s.max_drawdown_pct??0}%`,""],["Сделок",s.trades??0,""],["Win Rate",`${s.win_rate??0}%`,""],
+    ["Profit Factor",s.profit_factor??"—",""],["Sharpe (оценка)",s.sharpe_ratio??"—",""],
+    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} ₽`,""],
   ];
-  $(target).innerHTML=fields.map(([a,b])=>`<div class="metric"><span>${a}</span><strong>${b}</strong></div>`).join("");
+  $(target).innerHTML=fields.map(([a,b,c])=>`<div class="metric"><span>${a}</span><strong class="${c}">${b}</strong></div>`).join("");
 }
 function renderBacktestResult(result){
   lastBacktestResult=result;
@@ -901,6 +902,7 @@ function renderBacktestResult(result){
   renderByStrategyTable(result.by_strategy||[]);
 }
 const BY_TICKER_COLUMNS=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub","Прибыль ₽"],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
+const BY_TICKER_NUM_KEYS=new Set(["trades","pnl_rub","win_rate","max_drawdown_pct"]);
 function renderByTickerTable(){
   if(!lastBacktestResult)return;
   const rows=[...(lastBacktestResult.by_ticker||[])].sort((a,b)=>{
@@ -908,8 +910,8 @@ function renderByTickerTable(){
     const cmp=typeof av==="number"&&typeof bv==="number"?av-bv:String(av).localeCompare(String(bv));
     return cmp*byTickerSort.dir;
   });
-  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${BY_TICKER_COLUMNS.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
-    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy_name||"—"}</td><td>${r.trades}</td><td>${r.pnl_rub}</td><td>${r.win_rate}%</td><td>${r.max_drawdown_pct}%</td><td>${r.run_id?`<button class="link-btn" data-open-run="${r.run_id}">Подробнее</button>`:"—"}</td></tr>`).join("")
+  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${BY_TICKER_COLUMNS.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${BY_TICKER_NUM_KEYS.has(k)?'num':''} ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
+    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy_name||"—"}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.win_rate}%</td><td class="num">${r.max_drawdown_pct}%</td><td>${r.run_id?`<button class="link-btn" data-open-run="${r.run_id}">Подробнее</button>`:"—"}</td></tr>`).join("")
   }</tbody></table></div>`;
   document.querySelectorAll("[data-sort-key]").forEach(th=>th.onclick=()=>{
     const key=th.dataset.sortKey;
@@ -920,8 +922,8 @@ function renderByTickerTable(){
 }
 function renderByStrategyTable(rows){
   if(!rows.length){$("byStrategyTable").innerHTML="";return}
-  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th>Тикеров</th><th>Сделок</th><th>Прибыль ₽</th><th>Средний Win Rate</th></tr></thead><tbody>${
-    rows.map(r=>`<tr><td>${r.strategy_name}</td><td>${r.tickers}</td><td>${r.trades}</td><td>${r.pnl_rub}</td><td>${r.avg_win_rate}%</td></tr>`).join("")
+  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль ₽</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
+    rows.map(r=>`<tr><td>${r.strategy_name}</td><td class="num">${r.tickers}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.avg_win_rate}%</td></tr>`).join("")
   }</tbody></table></div>`;
 }
 
@@ -953,18 +955,19 @@ async function loadHistory(page){
 function renderHistoryTable(items){
   if(!items.length){$("historyTable").innerHTML="<div class='empty'>Запусков пока нет.</div>";return}
   $("historyTable").innerHTML=`<div class="table-scroll"><table><thead><tr>
-    <th>Дата</th><th>Портфель</th><th>Комбинаций</th><th>Статус</th><th>Доходность</th><th>Просадка</th><th>Сделок</th><th>Длительность</th><th></th>
+    <th>Дата</th><th>Портфель</th><th class="num">Комбинаций</th><th>Статус</th><th class="num">Доходность</th><th class="num">Просадка</th><th class="num">Сделок</th><th class="num">Длительность</th><th></th>
   </tr></thead><tbody>${items.map(it=>{
     const duration=it.completed_at&&it.started_at?`${(it.completed_at-it.started_at).toFixed(1)}с`:"—";
+    const retClass=it.return_percent>0?"pnl-pos":it.return_percent<0?"pnl-neg":"";
     return `<tr>
       <td>${fmtDateTime(it.created_at)}</td>
       <td>${it.portfolio_name_snapshot||"—"}</td>
-      <td>${it.combinations_ok||0}/${it.combinations_count||0}</td>
+      <td class="num">${it.combinations_ok||0}/${it.combinations_count||0}</td>
       <td><span class="pill status-${it.status}">${HISTORY_STATUS_LABEL[it.status]||it.status}</span></td>
-      <td>${it.return_percent!=null?it.return_percent+"%":"—"}</td>
-      <td>${it.max_drawdown!=null?it.max_drawdown+"%":"—"}</td>
-      <td>${it.trades_count??"—"}</td>
-      <td>${duration}</td>
+      <td class="num ${retClass}">${it.return_percent!=null?it.return_percent+"%":"—"}</td>
+      <td class="num">${it.max_drawdown!=null?it.max_drawdown+"%":"—"}</td>
+      <td class="num">${it.trades_count??"—"}</td>
+      <td class="num">${duration}</td>
       <td class="history-actions">
         <button class="link-btn" data-hist-trades="${it.id}">Сделки</button>
         <button class="link-btn" data-hist-repeat="${it.id}">Повторить</button>
@@ -1052,12 +1055,12 @@ async function loadTrades(){
 function renderTradesTable(items,total){
   if(!items.length){$("tvTable").innerHTML="<div class='empty'>Сделок не найдено по текущим фильтрам.</div>";$("tvPagination").innerHTML="";return}
   $("tvTable").innerHTML=`<div class="table-scroll"><table><thead><tr>
-    <th>#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Лоты</th><th>Прибыль</th><th>Доходность</th><th>Причина</th><th></th>
+    <th class="num">#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th class="num">Лоты</th><th class="num">Прибыль</th><th class="num">Доходность</th><th>Причина</th><th></th>
   </tr></thead><tbody>${items.map((t,i)=>`<tr data-row-id="${t.id}">
-      <td>${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
+      <td class="num">${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
       <td>${t.direction}</td><td>${t.entry_datetime}<br><small>${money(t.entry_price)} ₽</small></td>
-      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td>${t.quantity_lots}</td>
-      <td class="${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td>${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
+      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td class="num">${t.quantity_lots}</td>
+      <td class="num ${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td class="num ${t.return_percent>0?'pnl-pos':t.return_percent<0?'pnl-neg':''}">${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
       <td><button class="link-btn" data-trade-detail="${t.id}">Подробнее</button> <button class="link-btn" data-trade-chart="${t.id}">На графике</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-trade-detail]").forEach(b=>b.onclick=()=>openTradeDetail(b.dataset.tradeDetail));

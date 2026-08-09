@@ -105,6 +105,8 @@
     const msg = $(messageId);
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      const btn = form.querySelector("button[type=submit]");
+      if (btn) { btn.disabled = true; btn.classList.add("is-loading"); }
       msg.textContent = ""; msg.className = "message";
       try {
         await submit(new FormData(form));
@@ -112,6 +114,8 @@
         form.reset();
       } catch (err) {
         msg.textContent = err.message || "Не удалось сохранить"; msg.className = "message error";
+      } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove("is-loading"); }
       }
     });
   }
@@ -130,11 +134,15 @@
       e.preventDefault();
       if (!confirm("Аккаунт будет деактивирован, вход станет невозможен. Продолжить?")) return;
       const msg = $("deleteAccountMessage");
+      const btn = deleteForm.querySelector("button[type=submit]");
+      if (btn) { btn.disabled = true; btn.classList.add("is-loading"); }
       try {
         await authFetch("/account/api/delete", { method: "POST", body: JSON.stringify({ password: new FormData(deleteForm).get("password") }) });
         window.location.href = "/";
       } catch (err) {
         msg.textContent = err.message || "Не удалось удалить аккаунт"; msg.className = "message error";
+      } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove("is-loading"); }
       }
     });
   }
