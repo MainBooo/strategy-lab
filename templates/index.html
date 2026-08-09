@@ -5,10 +5,30 @@
   <title>MOEX Strategy Lab V3</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='chart.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='auth.css') }}">
+  <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body>
 <main class="shell">
-<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div></div></header>
+<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div>
+  <span class="beta-badge">Public Beta · бесплатно</span>
+  {% if current_user %}
+    <div class="account-menu" id="accountMenu">
+      <button class="secondary" id="accountMenuBtn" type="button">{{ current_user.display_name }} ▾</button>
+      <div class="account-dropdown hidden" id="accountDropdown">
+        <a href="/account">Личный кабинет</a>
+        <a href="/account/backtests">Мои бэктесты</a>
+        <a href="/account/portfolios">Мои портфели</a>
+        <a href="/account/favorites">Избранное</a>
+        <a href="/account/settings">Настройки</a>
+        <button type="button" id="logoutBtn">Выйти</button>
+      </div>
+    </div>
+  {% else %}
+    <a class="secondary" href="/login">Войти</a>
+    <a class="primary" href="/register">Регистрация</a>
+  {% endif %}
+</div></header>
 
 <section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
   <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
@@ -206,6 +226,10 @@
   </header>
   <div id="replayRoot"></div>
 </section>
+<footer class="site-footer">
+  <p>MOEX Strategy Lab предназначен для исследования и тестирования торговых стратегий на исторических данных. Результаты моделирования не гарантируют доходность в будущем и не являются индивидуальной инвестиционной рекомендацией.</p>
+  <p><a href="/terms">Условия использования</a> · <a href="/privacy">Конфиденциальность</a> · <a href="https://github.com/MainBooo/strategy-lab/issues" target="_blank" rel="noopener">Сообщить об ошибке</a></p>
+</footer>
 </main>
 <script>
 window.STRATEGIES={{ strategies|tojson }};
@@ -222,6 +246,7 @@ window.REALTIME_CONFIG={{ realtime_config|tojson }};
 <script src="{{ url_for('static',filename='chart-engine/trades.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-engine/drawings.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-engine/persistence.js') }}"></script>
+<script src="{{ url_for('static',filename='auth.js') }}"></script>
 <script src="{{ url_for('static',filename='app.js') }}"></script>
 <script src="{{ url_for('static',filename='portfolio-balance.js') }}"></script>
 <script src="{{ url_for('static',filename='trade-chart.js') }}"></script>

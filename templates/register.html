@@ -1,0 +1,20 @@
+{% extends "_base.html" %}
+{% block title %}Регистрация — MOEX Strategy Lab{% endblock %}
+{% block content %}
+<section class="tab-page auth-page">
+  <article class="card auth-card">
+    <div class="card-head"><div><h2>Создать аккаунт</h2></div></div>
+    <p class="lead">Бесплатно. Аккаунт нужен только для того, чтобы сохранять ваши бэктесты, портфели и избранное между визитами.</p>
+    <form id="registerForm" class="form-grid" data-next="{{ next_url or '' }}">
+      <label>Имя <input type="text" name="display_name" autocomplete="name" required maxlength="80"></label>
+      <label>Email <input type="email" name="email" autocomplete="email" required maxlength="254"></label>
+      <label>Пароль <input type="password" name="password" autocomplete="new-password" required minlength="8" maxlength="256"></label>
+      <label>Повторите пароль <input type="password" name="password2" autocomplete="new-password" required minlength="8" maxlength="256"></label>
+      <label class="toggle"><input type="checkbox" name="accept_terms" required><span>Я принимаю <a href="/terms" target="_blank" rel="noopener">условия использования</a></span></label>
+      <button class="primary" type="submit">Создать аккаунт</button>
+      <div class="message" id="registerMessage"></div>
+    </form>
+    <p class="hint auth-switch">Уже есть аккаунт? <a href="/login{{ ('?next=' + (next_url|urlencode)) if next_url else '' }}">Войти</a></p>
+  </article>
+</section>
+{% endblock %}

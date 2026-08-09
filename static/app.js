@@ -1142,5 +1142,10 @@ async function bootstrap(){
   setBuildTarget(null);
   resumeBuildJob();
   loadTickerTape();
+  // Deep link from the personal cabinet ("Мои бэктесты" -> "Открыть") -
+  // reuses the existing backtest tab + trade viewer instead of building a
+  // second results view inside /account.
+  const openRun=new URLSearchParams(location.search).get("openRun");
+  if(openRun){activateTab("backtest");openTradeViewer(openRun);}
 }
 bootstrap();

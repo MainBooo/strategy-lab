@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,9 @@ from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
 from portfolio_store import PortfolioStore
 from rate_limit import BoundedConcurrency,SlidingWindowLimiter,client_ip
+import auth
+import auth_db
+import auth_routes
 from sectors import PRESET_LABELS,SECURITY_PRESETS,is_liquid,sector_for
 from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
@@ -46,6 +50,8 @@ CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
+auth_db.init_db(STORAGE/"users.db")
+auth_routes.configure(PORTFOLIOS)
 
 # The candle cache (re-fetchable from MOEX, unlike backtests/charts/replay
 # data above) lives in its own directory, outside both the frontend source
@@ -102,6 +108,39 @@ _handler=RotatingFileHandler(LOGS_DIR/"app.log",maxBytes=5_000_000,backupCount=3
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 app.logger.addHandler(_handler)
 app.logger.setLevel(logging.INFO)
+
+# Accounts (see auth.py/auth_db.py) need a signed session cookie, which
+# needs a stable SECRET_KEY - without one, every process restart would
+# silently log every visitor out as the key regenerates. Falls back to a
+# random per-process key (sessions just won't survive a restart) instead of
+# refusing to start, since a dev checkout or the test suite has no .env -
+# but it's loud about it so a real deployment notices the missing config
+# instead of quietly losing sessions on every deploy. See .env.example.
+_secret_key=os.environ.get("SECRET_KEY")
+if not _secret_key:
+    _secret_key=secrets.token_hex(32)
+    logging.getLogger(__name__).warning(
+        "SECRET_KEY is not set - using a random per-process key. Every restart will "
+        "log all users out. Set SECRET_KEY in the environment for production (see .env.example)."
+    )
+app.secret_key=_secret_key
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Only demand HTTPS-only cookies when the app itself is told it's
+    # behind a TLS-terminating proxy (see deploy/) - forcing Secure on a
+    # plain-HTTP dev server would silently break every login (the browser
+    # drops a Secure cookie sent over http://).
+    SESSION_COOKIE_SECURE=os.environ.get("FORCE_HTTPS_COOKIES","").strip().lower() in ("1","true","yes"),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
+app.register_blueprint(auth_routes.auth_bp)
+
+@app.context_processor
+def _inject_auth_context():
+    from csrf import ensure_csrf_token
+    return {"csrf_token":ensure_csrf_token(),"current_user":auth.current_user()}
 
 # Free public server, single box, 2 gunicorn workers x 4 threads (see
 # moex-strategy-lab.service) - a handful of concurrent heavy computations
@@ -336,15 +375,15 @@ def optimize():
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.get("/api/portfolios")
-def portfolios(): return jsonify(PORTFOLIOS.list())
+def portfolios(): return jsonify([p for p in PORTFOLIOS.list() if _portfolio_accessible(p)])
 
 @app.post("/api/portfolios")
-def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True)))
+def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True),user_id=auth.current_user_id()))
 
 @app.get("/api/portfolios/<portfolio_id>")
 def get_portfolio(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
 
 @app.get("/api/portfolios/<portfolio_id>/summary")
@@ -355,7 +394,7 @@ def portfolio_summary(portfolio_id):
     # computed by portfolio_engine.simulate_portfolio during that run).
     # Never fabricated: if no completed run exists yet, say so explicitly.
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed",page=1,page_size=1)
     if not rows:
         rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed_with_errors",page=1,page_size=1)
@@ -370,6 +409,30 @@ def portfolio_summary(portfolio_id):
         "profit":run.get("profit"),"return_percent":run.get("return_percent"),"max_drawdown":run.get("max_drawdown"),
         "trades_count":run.get("trades_count"),
     })
+
+def _portfolio_accessible(portfolio:dict,user_id:str|None="__unset__")->bool:
+    """A portfolio with no owner (created before accounts existed, or by an
+    anonymous visitor) stays visible/editable by anyone - unchanged from
+    this app's original single-operator behavior. One with an owner is only
+    accessible to that same logged-in user; everyone else gets exactly the
+    same "not found" a nonexistent id would produce (see the account-system
+    spec's IDOR requirement - existence is not confirmed either way).
+
+    user_id defaults to the current Flask request's session (only valid
+    called from a route handler, which always has a request context). A
+    background job thread (see _run_heavy) has no request context by the
+    time it runs - its call sites must capture auth.current_user_id() in the
+    route *before* spawning the thread and pass it through explicitly."""
+    if user_id=="__unset__":
+        user_id=auth.current_user_id()
+    owner=portfolio.get("user_id")
+    return owner is None or owner==user_id
+
+def _run_accessible(run:dict,user_id:str|None="__unset__")->bool:
+    if user_id=="__unset__":
+        user_id=auth.current_user_id()
+    owner=run.get("user_id")
+    return owner is None or owner==user_id
 
 def _validate_portfolio_payload(payload:dict)->str|None:
     """Returns an error message, or None if the payload is acceptable."""
@@ -392,7 +455,8 @@ def _validate_portfolio_payload(payload:dict)->str|None:
 
 @app.put("/api/portfolios/<portfolio_id>")
 def put_portfolio(portfolio_id):
-    if not PORTFOLIOS.get(portfolio_id):return jsonify({"error":"Портфель не найден"}),404
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     payload=request.get_json(force=True) or {}
     err=_validate_portfolio_payload(payload)
     if err:return jsonify({"error":err}),400
@@ -400,10 +464,15 @@ def put_portfolio(portfolio_id):
     return jsonify(portfolio)
 
 @app.delete("/api/portfolios/<portfolio_id>")
-def delete_portfolio(portfolio_id): return jsonify({"ok":PORTFOLIOS.delete(portfolio_id)})
+def delete_portfolio(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
+    return jsonify({"ok":PORTFOLIOS.delete(portfolio_id)})
 
 @app.delete("/api/portfolios/<portfolio_id>/instruments")
 def portfolio_remove_instruments(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
     tickers=[str(t).upper() for t in p.get("tickers",[])]
     if not tickers:return jsonify({"error":"Не указаны тикеры"}),400
@@ -413,6 +482,8 @@ def portfolio_remove_instruments(portfolio_id):
 
 @app.patch("/api/portfolios/<portfolio_id>/strategies")
 def portfolio_set_strategies(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
     portfolio=PORTFOLIOS.set_ticker_strategies(portfolio_id,p.get("default_strategy_id"),p.get("ticker_strategies"))
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
@@ -449,6 +520,10 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                 JOBS.update(job_id,stage=f"Загружаем котировки: {ticker}")
                 try:
                     filename=f"{ticker}_{interval}m_{from_date}_{till_date}.csv"
+                    if not FILENAME_RE.match(filename):
+                        # Same guard as /api/download-batch - filename feeds
+                        # straight into a filesystem path below.
+                        raise ValueError(f"Некорректный тикер или диапазон дат для {ticker}")
                     download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
                     app.logger.info("Build job %s: downloaded %s (%s)",job_id,ticker,filename)
                 except Exception as exc:
@@ -492,7 +567,13 @@ def _execute_build_job(job_id:str,payload:dict)->None:
 
         JOBS.update(job_id,stage="Формируем портфель")
         portfolio_id=payload.get("portfolio_id")
-        if portfolio_id and PORTFOLIOS.get(portfolio_id):
+        existing_portfolio=PORTFOLIOS.get(portfolio_id) if portfolio_id else None
+        if existing_portfolio and not _portfolio_accessible(existing_portfolio,payload.get("user_id")):
+            JOBS.update(job_id,status="failed",stage="Портфель не найден",
+                         error={"message":"Портфель не найден.","ticker":None,"stage":"validate","code":"not_found"},
+                         errors=errors)
+            return
+        if existing_portfolio:
             portfolio=PORTFOLIOS.add_instruments(portfolio_id,prepared)
         else:
             portfolio=PORTFOLIOS.create({
@@ -500,7 +581,7 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                 "starting_capital":starting_capital,
                 "default_strategy_id":payload.get("default_strategy_id") or "false_breakout",
                 "instruments":prepared,
-            })
+            },user_id=payload.get("user_id"))
 
         JOBS.update(job_id,status="completed",stage="Готово",percent=100,completed=total,
                      portfolio_id=portfolio["id"],
@@ -522,16 +603,18 @@ def portfolio_build():
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
     portfolio_id=p.get("portfolio_id")
     portfolio_name=p.get("name") or ""
+    user_id=auth.current_user_id()
     if portfolio_id:
         existing_portfolio=PORTFOLIOS.get(portfolio_id)
-        if not existing_portfolio:return jsonify({"error":"Портфель не найден"}),404
+        if not existing_portfolio or not _portfolio_accessible(existing_portfolio,user_id):
+            return jsonify({"error":"Портфель не найден"}),404
         portfolio_name=existing_portfolio["name"]
         active=JOBS.find_active_for_portfolio(portfolio_id,kind="build")
         if active:return jsonify({"job_id":active["job_id"],"status":active["status"]}),202
 
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio_name,len(tickers),kind="build")
-    if not _start_heavy_job(_execute_build_job,job["job_id"],{**p,"tickers":tickers}):
+    if not _start_heavy_job(_execute_build_job,job["job_id"],{**p,"tickers":tickers,"user_id":user_id}):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
         return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
@@ -624,7 +707,7 @@ def _execute_portfolio_job(job_id:str,portfolio:dict)->None:
 @app.post("/api/portfolios/<portfolio_id>/run")
 def run_portfolio(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     instruments=portfolio.get("instruments",[])
     if not instruments:return jsonify({"error":"В портфеле нет инструментов"}),400
 
@@ -846,7 +929,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
 @app.post("/api/portfolios/<portfolio_id>/backtest")
 def portfolio_backtest(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
     all_tickers=[str(i["ticker"]) for i in portfolio.get("instruments",[])]
 
@@ -871,7 +954,8 @@ def portfolio_backtest(portfolio_id):
     run_id=bdb.new_run_id()
     bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
                     float(portfolio.get("starting_capital") or 1_000_000),len(combos),
-                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to})
+                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to},
+                    user_id=auth.current_user_id())
 
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
@@ -915,18 +999,19 @@ def list_backtests():
     rows,total=bdb.list_runs(portfolio_id=args.get("portfolio_id") or None,ticker=args.get("ticker") or None,
                                strategy_id=args.get("strategy_id") or None,status=args.get("status") or None,
                                date_from=args.get("date_from") or None,date_to=args.get("date_to") or None,
-                               page=page,page_size=page_size)
+                               page=page,page_size=page_size,user_id=auth.current_user_id(),owner_scope="mixed")
     return jsonify({"items":[_run_summary_dict(r) for r in rows],"total":total,"page":page,"page_size":page_size})
 
 @app.get("/api/backtests/<run_id>")
 def get_backtest(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     return jsonify({**_run_summary_dict(run),"results":bdb.get_results(run_id)})
 
 @app.get("/api/backtests/<run_id>/results")
 def get_backtest_results(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     return jsonify(bdb.get_results(run_id))
 
 @app.get("/api/backtests/<run_id>/candles")
@@ -935,7 +1020,7 @@ def get_backtest_candles(run_id):
     engine actually read for this ticker, not a fresh MOEX fetch - so the
     chart can never show a different history than what produced the trades."""
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     ticker=(request.args.get("ticker") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
     portfolio=PORTFOLIOS.get(run["portfolio_id"])
@@ -957,7 +1042,8 @@ def get_backtest_candles(run_id):
 
 @app.get("/api/backtests/<run_id>/trades")
 def get_backtest_trades(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     args=request.args
     try:page=int(args.get("page",1)); page_size=int(args.get("page_size",50))
     except ValueError:return jsonify({"error":"Некорректные параметры пагинации"}),400
@@ -971,6 +1057,8 @@ def get_backtest_trades(run_id):
 
 @app.get("/api/backtests/<run_id>/trades/<int:trade_id>")
 def get_backtest_trade(run_id,trade_id):
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Сделка не найдена"}),404
     trade=bdb.get_trade(trade_id)
     if not trade or trade["backtest_run_id"]!=run_id:return jsonify({"error":"Сделка не найдена"}),404
     trade=dict(trade); trade["signal_metadata"]=json.loads(trade.get("signal_metadata_json") or "{}")
@@ -996,15 +1084,18 @@ def get_backtest_trade(run_id,trade_id):
 
 @app.delete("/api/backtests/<run_id>")
 def delete_backtest(run_id):
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     if not bdb.delete_run(run_id):return jsonify({"error":"Запуск не найден"}),404
     return jsonify({"ok":True})
 
 @app.post("/api/backtests/<run_id>/repeat")
 def repeat_backtest(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     portfolio=PORTFOLIOS.get(run["portfolio_id"])
-    if not portfolio:return jsonify({"error":"Портфель, к которому относится этот запуск, больше не существует"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):
+        return jsonify({"error":"Портфель, к которому относится этот запуск, больше не существует"}),404
     config=json.loads(run["configuration_json"]) if run.get("configuration_json") else {}
     assignments=config.get("assignments") or []
     if not assignments:return jsonify({"error":"Не удалось восстановить конфигурацию запуска"}),400
@@ -1014,7 +1105,8 @@ def repeat_backtest(run_id):
 
     new_run_id=bdb.new_run_id()
     bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
-                    float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config)
+                    float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config,
+                    user_id=auth.current_user_id())
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
     if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,assignments,
@@ -1028,7 +1120,7 @@ def repeat_backtest(run_id):
 @app.get("/api/backtests/<run_id>/export.json")
 def export_backtest_json(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     results=bdb.get_results(run_id)
     trades,_=bdb.list_trades(run_id,page=1,page_size=100000)
     payload=json.dumps({"run":_run_summary_dict(run),"results":results,"trades":trades},ensure_ascii=False,indent=2,default=str)
@@ -1037,7 +1129,8 @@ def export_backtest_json(run_id):
 
 @app.get("/api/backtests/<run_id>/export.csv")
 def export_backtest_csv(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     trades,_=bdb.list_trades(run_id,page=1,page_size=100000)
     if not trades:
         return Response("no trades\n",mimetype="text/csv")

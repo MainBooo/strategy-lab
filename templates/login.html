@@ -1,0 +1,18 @@
+{% extends "_base.html" %}
+{% block title %}Вход — MOEX Strategy Lab{% endblock %}
+{% block content %}
+<section class="tab-page auth-page">
+  <article class="card auth-card">
+    <div class="card-head"><div><h2>Вход в аккаунт</h2></div></div>
+    <p class="lead">Бэктесты и портфели, привязанные к вашему аккаунту, доступны с любого устройства.</p>
+    <form id="loginForm" class="form-grid" data-next="{{ next_url or '' }}">
+      <label>Email <input type="email" name="email" autocomplete="email" required maxlength="254"></label>
+      <label>Пароль <input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+      <label class="toggle"><input type="checkbox" name="remember" checked><span>Запомнить меня</span></label>
+      <button class="primary" type="submit">Войти</button>
+      <div class="message" id="loginMessage"></div>
+    </form>
+    <p class="hint auth-switch">Нет аккаунта? <a href="/register{{ ('?next=' + (next_url|urlencode)) if next_url else '' }}">Зарегистрироваться</a></p>
+  </article>
+</section>
+{% endblock %}

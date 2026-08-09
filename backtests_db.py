@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     combinations_failed INTEGER DEFAULT 0,
     error_message TEXT,
     configuration_json TEXT,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    user_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_portfolio ON backtest_runs(portfolio_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON backtest_runs(created_at);
@@ -114,6 +115,16 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     if "signal_datetime" not in existing:
         conn.execute("ALTER TABLE backtest_trades ADD COLUMN signal_datetime TEXT")
 
+    # user_id predates accounts (see auth_db.py) - added nullable so every
+    # run created before accounts existed stays exactly as it was (NULL =
+    # legacy/system record, per the account-system spec's explicit
+    # instruction not to guess an owner for pre-existing data), while new
+    # runs from a logged-in user get a real value going forward.
+    runs_existing = {row[1] for row in conn.execute("PRAGMA table_info(backtest_runs)")}
+    if "user_id" not in runs_existing:
+        conn.execute("ALTER TABLE backtest_runs ADD COLUMN user_id TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON backtest_runs(user_id)")
+
 
 def _connect() -> sqlite3.Connection:
     # Short-lived connection per call rather than one shared across gunicorn
@@ -131,14 +142,15 @@ def new_run_id() -> str:
 
 
 def create_run(run_id: str, portfolio_id: str | None, portfolio_name: str, date_from: str | None,
-                date_to: str | None, initial_capital: float, combinations_count: int, configuration: dict) -> None:
+                date_to: str | None, initial_capital: float, combinations_count: int, configuration: dict,
+                user_id: str | None = None) -> None:
     now = time.time()
     with _connect() as conn:
         conn.execute(
             "INSERT INTO backtest_runs (id,portfolio_id,portfolio_name_snapshot,started_at,date_from,date_to,"
-            "status,initial_capital,combinations_count,configuration_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "status,initial_capital,combinations_count,configuration_json,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, portfolio_id, portfolio_name, now, date_from, date_to, "running",
-             initial_capital, combinations_count, json.dumps(configuration, ensure_ascii=False), now),
+             initial_capital, combinations_count, json.dumps(configuration, ensure_ascii=False), now, user_id),
         )
 
 
@@ -184,7 +196,18 @@ def add_trades(run_id: str, result_id: int, ticker: str, strategy_id: str, trade
 
 def list_runs(*, portfolio_id: str | None = None, ticker: str | None = None, strategy_id: str | None = None,
               status: str | None = None, date_from: str | None = None, date_to: str | None = None,
-              page: int = 1, page_size: int = 20) -> tuple[list[dict], int]:
+              page: int = 1, page_size: int = 20, user_id: str | None = None,
+              owner_scope: str = "mixed") -> tuple[list[dict], int]:
+    """owner_scope controls how user_id is applied:
+    - "mixed" (default - the main app's shared history view): rows owned by
+      user_id, plus every legacy/global row (user_id IS NULL) - a logged-in
+      user sees their own runs mixed with the pre-accounts shared history,
+      exactly what an anonymous visitor already saw before accounts
+      existed. With user_id=None (anonymous request), only the legacy/
+      global rows show, same as today.
+    - "mine" (the personal cabinet's "Мои бэктесты"): strictly user_id's own
+      rows, never someone else's and never unowned legacy rows.
+    """
     page = max(1, page); page_size = max(1, min(200, page_size))
     where = ["1=1"]; params: list = []
     base = "FROM backtest_runs r"
@@ -204,6 +227,12 @@ def list_runs(*, portfolio_id: str | None = None, ticker: str | None = None, str
         where.append("date(r.created_at,'unixepoch')>=date(?)"); params.append(date_from)
     if date_to:
         where.append("date(r.created_at,'unixepoch')<=date(?)"); params.append(date_to)
+    if owner_scope == "mine":
+        where.append("r.user_id=?"); params.append(user_id)
+    elif user_id is not None:
+        where.append("(r.user_id=? OR r.user_id IS NULL)"); params.append(user_id)
+    else:
+        where.append("r.user_id IS NULL")
     clause = (" WHERE " if "WHERE" not in base else " AND ") + " AND ".join(where) if where else ""
     with _connect() as conn:
         total = conn.execute(f"SELECT COUNT(*) {base}{clause}", params).fetchone()[0]

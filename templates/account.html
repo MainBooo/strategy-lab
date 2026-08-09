@@ -1,0 +1,83 @@
+{% extends "_base.html" %}
+{% block title %}Личный кабинет — MOEX Strategy Lab{% endblock %}
+{% block content %}
+<section class="tab-page">
+  <nav class="tabs account-tabs">
+    <button class="tab" data-account-tab="overview">Обзор</button>
+    <button class="tab" data-account-tab="backtests">Мои бэктесты</button>
+    <button class="tab" data-account-tab="portfolios">Мои портфели</button>
+    <button class="tab" data-account-tab="favorites">Избранное</button>
+    <button class="tab" data-account-tab="settings">Настройки</button>
+  </nav>
+
+  <div id="account-overview" class="account-subpage">
+    <article class="card">
+      <div class="card-head"><div><h2 id="overviewGreeting">Добро пожаловать</h2></div></div>
+      <div class="metrics" id="overviewMetrics"></div>
+    </article>
+    <article class="card results-card">
+      <div class="card-head"><div><h2>Последние бэктесты</h2></div></div>
+      <div id="overviewRecentBacktests"></div>
+    </article>
+  </div>
+
+  <div id="account-backtests" class="account-subpage hidden">
+    <article class="card results-card">
+      <div class="card-head"><div><h2>Мои бэктесты</h2></div></div>
+      <div id="accountBacktestsTable"></div>
+      <div class="history-pagination" id="accountBacktestsPagination"></div>
+    </article>
+  </div>
+
+  <div id="account-portfolios" class="account-subpage hidden">
+    <article class="card results-card">
+      <div class="card-head"><div><h2>Мои портфели</h2></div></div>
+      <p class="hint">Портфели без владельца видны и доступны всем посетителям (общий/устаревший режим). Портфели, созданные в вашем аккаунте, видны только вам.</p>
+      <div id="accountPortfoliosTable"></div>
+    </article>
+  </div>
+
+  <div id="account-favorites" class="account-subpage hidden">
+    <article class="card results-card">
+      <div class="card-head"><div><h2>Избранные инструменты</h2></div></div>
+      <p class="hint">Синхронизировано с вашим аккаунтом — доступно на любом устройстве.</p>
+      <div id="accountFavoritesList"></div>
+    </article>
+  </div>
+
+  <div id="account-settings" class="account-subpage hidden">
+    <article class="card auth-card">
+      <div class="card-head"><div><h2>Профиль</h2></div></div>
+      <form id="profileForm" class="form-grid">
+        <label>Имя <input type="text" name="display_name" value="{{ current_user.display_name }}" required maxlength="80"></label>
+        <label>Email <input type="email" value="{{ current_user.email }}" disabled></label>
+        <button class="primary" type="submit">Сохранить</button>
+        <div class="message" id="profileMessage"></div>
+      </form>
+    </article>
+    <article class="card auth-card">
+      <div class="card-head"><div><h2>Смена пароля</h2></div></div>
+      <form id="passwordForm" class="form-grid">
+        <label>Текущий пароль <input type="password" name="current_password" autocomplete="current-password" required maxlength="256"></label>
+        <label>Новый пароль <input type="password" name="new_password" autocomplete="new-password" required minlength="8" maxlength="256"></label>
+        <label>Повтор нового пароля <input type="password" name="new_password2" autocomplete="new-password" required minlength="8" maxlength="256"></label>
+        <button class="primary" type="submit">Сменить пароль</button>
+        <div class="message" id="passwordMessage"></div>
+      </form>
+    </article>
+    <article class="card auth-card danger-card">
+      <div class="card-head"><div><h2>Удаление аккаунта</h2></div></div>
+      <p class="lead">Аккаунт будет деактивирован, вход станет невозможен. Ваши бэктесты и портфели сохранятся в системе как обезличенные записи.</p>
+      <form id="deleteAccountForm" class="form-grid">
+        <label>Пароль <input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+        <button class="secondary danger-btn" type="submit">Удалить аккаунт</button>
+        <div class="message" id="deleteAccountMessage"></div>
+      </form>
+    </article>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.ACCOUNT_INITIAL_TAB={{ initial_tab|tojson }};</script>
+<script src="{{ url_for('static',filename='account.js') }}"></script>
+{% endblock %}
