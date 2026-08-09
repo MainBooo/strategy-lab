@@ -16,13 +16,18 @@
 (function (global) {
   "use strict";
 
+  /* Two genuinely different numbers, never merged into one "delay":
+   * - source_delay_ms: constant, the feed's own advertised lag (~15 min on
+   *   MOEX's free tier) - a property of the SOURCE.
+   * - last_trade_age_ms: how long ago THIS ticker's own last trade was - a
+   *   property of the INSTRUMENT (can be huge for an illiquid name even
+   *   when the source itself is perfectly healthy).
+   * See market_ticker.py's _classify_status docstring for the full mapping. */
   const STATUS_META = {
-    delayed: { dot: "●", cls: "rti-delayed", label: (d) => `Данные MOEX · задержка ${fmtDelay(d)}` },
-    warning: { dot: "●", cls: "rti-warning", label: (d) => `Данные MOEX · задержка ${fmtDelay(d)}` },
-    stale: { dot: "●", cls: "rti-stale", label: (d) => `Устаревшие данные · ${fmtDelay(d)}` },
+    delayed: { dot: "●", cls: "rti-delayed", label: (d) => `Данные MOEX · задержка ${fmtDelay(d.source_delay_ms)}` },
+    no_trades: { dot: "○", cls: "rti-nottrades", label: (d) => d.last_trade_age_ms != null ? `Нет сделок · ${fmtDelay(d.last_trade_age_ms)} назад` : "Нет сделок по инструменту" },
     disconnected: { dot: "●", cls: "rti-disconnected", label: () => "Источник временно недоступен" },
-    market_closed: { dot: "○", cls: "rti-closed", label: (_d, q) => q && q.market_time ? `Рынок закрыт · последняя сделка ${q.market_time}` : "Рынок закрыт" },
-    no_trades: { dot: "○", cls: "rti-closed", label: () => "Нет сделок по инструменту" },
+    market_closed: { dot: "○", cls: "rti-closed", label: (d) => d && d.market_time ? `Рынок закрыт · последняя сделка ${d.market_time}` : "Рынок закрыт" },
     connecting: { dot: "●", cls: "rti-connecting", label: () => "Подключение…" },
     replay: { dot: "◐", cls: "rti-replay", label: () => "Историческое воспроизведение" },
   };
@@ -76,7 +81,12 @@
       this._pollGen = 0;
       this._lastPayload = null;
       this._visible = true;
-      this.container.className = "rt-indicator";
+      // Preserve whatever class the caller's container already had (e.g.
+      // chart-tile.js's "ca-tile-realtime-slot", which CSS keys tile-specific
+      // compact sizing off - not just "rt-indicator ..." each time, since
+      // that would silently drop it here and again on every _render().
+      this._baseClass = this.container.className;
+      this.container.className = `${this._baseClass} rt-indicator`.trim();
       this.container.innerHTML = `
         <button type="button" class="rt-indicator-btn" id="rtiBtn">
           <span class="rt-dot" id="rtiDot">●</span><span class="rt-label" id="rtiLabel">—</span>
@@ -163,21 +173,20 @@
     }
 
     _render(data) {
-      let status = data.status || "connecting";
-      // warning: our own "getting worse than the measured baseline" band
-      // inside candle_api's "delayed" classification (see market_ticker.py
-      // _classify_status - it never returns "warning" itself, the frontend
-      // derives it so the threshold used for color can live in one place:
-      // REALTIME_CONFIG, already passed to the backend classifier too).
-      const cfg = global.REALTIME_CONFIG || {};
-      if (status === "delayed" && data.delay_ms != null && cfg.warning_delay_ms && data.delay_ms >= cfg.warning_delay_ms) {
-        status = "warning";
-      }
+      const status = data.status || "connecting";
       const meta = STATUS_META[status] || STATUS_META.connecting;
       const compact = this.opts.compact ? this.opts.compact() : false;
-      this.container.className = `rt-indicator ${meta.cls}`;
+      this.container.className = `${this._baseClass} rt-indicator ${meta.cls}`.trim();
       this._dot.textContent = meta.dot;
-      this._label.textContent = compact ? (data.delay_ms != null ? fmtDelay(data.delay_ms) : meta.label(data.delay_ms, data)) : meta.label(data.delay_ms, data);
+      // Compact mode still shows a short duration where one is meaningful
+      // (source delay when "delayed", last-trade age when "no_trades") -
+      // never the same number for both statuses, that's the exact
+      // conflation this rewrite removes.
+      this._label.textContent = compact
+        ? (status === "delayed" ? fmtDelay(data.source_delay_ms)
+          : status === "no_trades" && data.last_trade_age_ms != null ? fmtDelay(data.last_trade_age_ms)
+          : meta.label(data))
+        : meta.label(data);
       this._popover.innerHTML = this._popoverHtml(data, status);
     }
 
@@ -200,7 +209,8 @@
       rows.push(
         ["Получено сервером", fmtClock(data.server_received_at)],
         ["Отображено сейчас", fmtClock(data.response_generated_at)],
-        ["Расчётная задержка", data.delay_ms != null ? fmtDelay(data.delay_ms) : "н/д"],
+        ["Задержка источника (MOEX)", data.source_delay_ms != null ? fmtDelay(data.source_delay_ms) : "н/д"],
+        ["Последняя сделка (возраст)", data.last_trade_age_ms != null ? `${fmtDelay(data.last_trade_age_ms)} назад` : "н/д"],
         ["Статус рынка", data.market_status === "open" ? "Открыт" : "Закрыт"],
       );
       if (data.error) rows.push(["Ошибка", data.error]);
