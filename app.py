@@ -91,11 +91,15 @@ try:
         logging.getLogger(__name__).info("Imported legacy candle CSVs into market_data.db: %s",_migration_summary)
 except Exception:
     logging.getLogger(__name__).exception("Legacy candle CSV migration failed (non-fatal, chart data will re-download as needed)")
-# No login exists in this app (single operator). Every chart-layout/drawing/
-# request row still carries a user id so real per-user ownership can be
-# switched on later without another migration - see charts_db.py and
-# feature_flags.py docstrings.
-CURRENT_USER_ID="local"
+# Every chart-layout/drawing/request row carries a user id - the "switched
+# on later without another migration" this comment used to promise before
+# accounts existed. A logged-in user now gets their own private namespace;
+# an anonymous visitor still shares the single "local" namespace exactly
+# like every visitor did before accounts existed (see charts_db.py and
+# feature_flags.py docstrings) - not a per-anonymous-visitor namespace,
+# since chart layouts never had a session concept to key one on before.
+def _effective_user_id()->str:
+    return auth.current_user_id() or "local"
 # Real single-ticker backtests on a year of 10m candles take ~5-6s; 60s gives
 # a wide safety margin so this only trips on a genuine hang, not normal load.
 PORTFOLIO_INSTRUMENT_TIMEOUT=60
@@ -1148,7 +1152,7 @@ def _forbidden_feature(feature:str):
 
 @app.get("/api/candles")
 def api_candles():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     args=request.args
     ticker=(args.get("symbol") or args.get("ticker") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
@@ -1204,7 +1208,7 @@ def market_data_tick_coverage():
 
 @app.get("/api/market-data/instruments")
 def market_data_instruments():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     q=(request.args.get("q") or "").strip().upper()
     items_map:dict[str,dict]={}
     for it in catalog():
@@ -1256,7 +1260,7 @@ def _execute_market_data_sync_job(job_id:str,tickers:list[str],timeframes:list[s
 
 @app.post("/api/market-data/sync")
 def market_data_sync_start():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     p=request.get_json(force=True) or {}
     tickers=[str(t).strip().upper() for t in p.get("tickers",[]) if str(t).strip()]
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
@@ -1284,7 +1288,7 @@ def _replay_error(exc:replay_engine.ReplayError,code:int=400):
 
 @app.post("/api/replay/sessions")
 def replay_create():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     p=request.get_json(force=True) or {}
     ticker=str(p.get("ticker","")).strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
@@ -1359,15 +1363,15 @@ def replay_trades(session_id):
 
 @app.get("/api/chart-layouts")
 def list_chart_layouts():
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    return jsonify(cdb.list_layouts(CURRENT_USER_ID,context=request.args.get("context"),symbol=request.args.get("symbol")))
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    return jsonify(cdb.list_layouts(_effective_user_id(),context=request.args.get("context"),symbol=request.args.get("symbol")))
 
 @app.post("/api/chart-layouts")
 def create_chart_layout():
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
     p=request.get_json(force=True) or {}
     if not p.get("name"):return jsonify({"error":"Укажите название шаблона"}),400
-    layout=cdb.create_layout(CURRENT_USER_ID,context=p.get("context","analysis"),name=p["name"],symbol=p.get("symbol"),
+    layout=cdb.create_layout(_effective_user_id(),context=p.get("context","analysis"),name=p["name"],symbol=p.get("symbol"),
                                board=p.get("board"),timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),
                                visible_to=p.get("visibleTo"),chart_type=p.get("chartType","candles"),
                                settings=p.get("settings"),indicators=p.get("indicators"),is_default=bool(p.get("isDefault")))
@@ -1375,16 +1379,16 @@ def create_chart_layout():
 
 @app.get("/api/chart-layouts/<layout_id>")
 def get_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    layout=cdb.get_layout(layout_id,CURRENT_USER_ID)
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    layout=cdb.get_layout(layout_id,_effective_user_id())
     if not layout:return jsonify({"error":"Шаблон не найден"}),404
-    return jsonify({**layout,"drawings":cdb.list_drawings(layout_id,CURRENT_USER_ID)})
+    return jsonify({**layout,"drawings":cdb.list_drawings(layout_id,_effective_user_id())})
 
 @app.put("/api/chart-layouts/<layout_id>")
 def update_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
     p=request.get_json(force=True) or {}
-    layout=cdb.update_layout(layout_id,CURRENT_USER_ID,name=p.get("name"),symbol=p.get("symbol"),board=p.get("board"),
+    layout=cdb.update_layout(layout_id,_effective_user_id(),name=p.get("name"),symbol=p.get("symbol"),board=p.get("board"),
                                timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
                                chart_type=p.get("chartType"),settings=p.get("settings"),indicators=p.get("indicators"),
                                is_default=p.get("isDefault"))
@@ -1393,23 +1397,23 @@ def update_chart_layout(layout_id):
 
 @app.delete("/api/chart-layouts/<layout_id>")
 def delete_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    if not cdb.delete_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not cdb.delete_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
     return jsonify({"ok":True})
 
 
 @app.get("/api/chart-layouts/<layout_id>/drawings")
 def list_chart_drawings(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
-    if not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
-    return jsonify(cdb.list_drawings(layout_id,CURRENT_USER_ID))
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.get_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify(cdb.list_drawings(layout_id,_effective_user_id()))
 
 @app.post("/api/chart-layouts/<layout_id>/drawings")
 def create_chart_drawing(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
     p=request.get_json(force=True) or {}
     if not p.get("type") or not p.get("points"):return jsonify({"error":"Не указан тип или точки объекта"}),400
-    drawing=cdb.create_drawing(layout_id,CURRENT_USER_ID,type=p["type"],symbol=p.get("symbol"),timeframe=p.get("timeframe"),
+    drawing=cdb.create_drawing(layout_id,_effective_user_id(),type=p["type"],symbol=p.get("symbol"),timeframe=p.get("timeframe"),
                                  points=p["points"],properties=p.get("properties"),locked=bool(p.get("locked")),
                                  hidden=bool(p.get("hidden")),z_index=int(p.get("zIndex",0)))
     if not drawing:return jsonify({"error":"Шаблон не найден"}),404
@@ -1417,7 +1421,7 @@ def create_chart_drawing(layout_id):
 
 @app.put("/api/chart-drawings/<drawing_id>")
 def update_chart_drawing(drawing_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
     p=request.get_json(force=True) or {}
     fields={}
     if "points" in p:fields["points"]=p["points"]
@@ -1425,14 +1429,14 @@ def update_chart_drawing(drawing_id):
     if "locked" in p:fields["locked"]=p["locked"]
     if "hidden" in p:fields["hidden"]=p["hidden"]
     if "zIndex" in p:fields["z_index"]=p["zIndex"]
-    drawing=cdb.update_drawing(drawing_id,CURRENT_USER_ID,**fields)
+    drawing=cdb.update_drawing(drawing_id,_effective_user_id(),**fields)
     if not drawing:return jsonify({"error":"Объект не найден"}),404
     return jsonify(drawing)
 
 @app.delete("/api/chart-drawings/<drawing_id>")
 def delete_chart_drawing(drawing_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
-    if not cdb.delete_drawing(drawing_id,CURRENT_USER_ID):return jsonify({"error":"Объект не найден"}),404
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.delete_drawing(drawing_id,_effective_user_id()):return jsonify({"error":"Объект не найден"}),404
     return jsonify({"ok":True})
 
 
@@ -1441,7 +1445,7 @@ def upload_chart_screenshot():
     """Stores a data: URL PNG exported by chart.takeScreenshot() so a strategy
     request can reference it as a file path instead of inlining megabytes of
     base64 into the request row."""
-    if not has_feature(CURRENT_USER_ID,"CHART_EXPORT"):return _forbidden_feature("CHART_EXPORT")
+    if not has_feature(_effective_user_id(),"CHART_EXPORT"):return _forbidden_feature("CHART_EXPORT")
     p=request.get_json(force=True) or {}
     data_url=p.get("dataUrl","")
     if not data_url.startswith("data:image/png;base64,"):return jsonify({"error":"Ожидается PNG data URL"}),400
@@ -1461,12 +1465,12 @@ def get_chart_screenshot(name):
 
 @app.post("/api/chart-strategy-requests")
 def create_chart_strategy_request():
-    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    if not has_feature(_effective_user_id(),"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
     p=request.get_json(force=True) or {}
     if not (p.get("ideaDescription") or "").strip():return jsonify({"error":"Опишите торговую идею"}),400
     layout_id=p.get("layoutId")
-    if layout_id and not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
-    req=cdb.create_strategy_request(CURRENT_USER_ID,layout_id=layout_id,symbol=p.get("symbol"),board=p.get("board"),
+    if layout_id and not cdb.get_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
+    req=cdb.create_strategy_request(_effective_user_id(),layout_id=layout_id,symbol=p.get("symbol"),board=p.get("board"),
                                       timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
                                       drawings_snapshot=p.get("drawingsSnapshot"),indicators=p.get("indicators"),
                                       idea_description=p.get("ideaDescription"),entry_conditions=p.get("entryConditions"),
@@ -1478,8 +1482,8 @@ def create_chart_strategy_request():
 
 @app.get("/api/chart-strategy-requests")
 def list_chart_strategy_requests():
-    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
-    return jsonify(cdb.list_strategy_requests(CURRENT_USER_ID))
+    if not has_feature(_effective_user_id(),"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    return jsonify(cdb.list_strategy_requests(_effective_user_id()))
 
 
 if __name__=="__main__":app.run(host="127.0.0.1",port=5050,debug=False)
