@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from datetime import date,timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -30,6 +31,7 @@ from moex_catalog import load_catalog,security_by_ticker
 from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
 from portfolio_store import PortfolioStore
+from rate_limit import BoundedConcurrency,SlidingWindowLimiter,client_ip
 from sectors import PRESET_LABELS,SECURITY_PRESETS,is_liquid,sector_for
 from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
@@ -100,6 +102,65 @@ _handler=RotatingFileHandler(LOGS_DIR/"app.log",maxBytes=5_000_000,backupCount=3
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 app.logger.addHandler(_handler)
 app.logger.setLevel(logging.INFO)
+
+# Free public server, single box, 2 gunicorn workers x 4 threads (see
+# moex-strategy-lab.service) - a handful of concurrent heavy computations
+# (backtest/optimize/portfolio run/market-data sync) is expected, but
+# unbounded concurrent heavy jobs would starve every other request on the
+# box. HEAVY_OPS caps how many run at once; HEAVY_TRIGGER_LIMITER caps how
+# often one IP can even ask to start one, so a user double/triple-clicking
+# (or a script looping) a "Запустить" button can't spin up dozens of jobs
+# before the first ones even finish. Both are in-process, not shared across
+# the 2 workers - see rate_limit.py's module docstring for why that's an
+# accepted, documented tradeoff for this deployment.
+HEAVY_OPS=BoundedConcurrency(int(os.environ.get("MAX_CONCURRENT_HEAVY_JOBS","3")))
+HEAVY_BUSY_MESSAGE="Сервер сейчас занят другими тяжёлыми расчётами. Попробуйте повторить запрос через несколько секунд."
+HEAVY_TRIGGER_LIMITER=SlidingWindowLimiter(max_requests=20,window_seconds=60)
+RATE_LIMIT_MESSAGE="Слишком много запросов. Подождите немного и повторите."
+
+def _heavy_trigger_ok()->bool:
+    return HEAVY_TRIGGER_LIMITER.allow(client_ip(request))
+
+def heavy_sync(view):
+    """For a heavy endpoint that computes synchronously in the request
+    thread (unlike the job-queue endpoints, which acquire/release HEAVY_OPS
+    around their background thread instead - see _run_heavy_job below)."""
+    @wraps(view)
+    def wrapped(*args,**kwargs):
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        if not HEAVY_OPS.try_acquire():return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
+        try:return view(*args,**kwargs)
+        finally:HEAVY_OPS.release()
+    return wrapped
+
+def _start_heavy_job(target,*args,**kwargs)->bool:
+    """Non-blocking HEAVY_OPS acquire + background thread launch for the
+    job-queue endpoints. Returns False (nothing started, slot not held) if
+    the server is already at MAX_CONCURRENT_HEAVY_JOBS - the caller must
+    respond with HEAVY_BUSY_MESSAGE in that case."""
+    if not HEAVY_OPS.try_acquire():return False
+    HEAVY_OPS.run_in_background(target,*args,**kwargs)
+    return True
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected_error(exc):
+    """Last-resort catch for routes without their own try/except (most
+    already return a specific {"error": ...} JSON on failure). Without this,
+    an unhandled exception falls through to Flask's default 500 page, which
+    with debug=False is a bare "Internal Server Error" - not useful to a
+    public-beta user and not distinguishable from any other failure. Real
+    HTTP errors (404 from abort(), etc.) pass through unchanged; only genuine
+    unexpected exceptions get the generic message + full traceback in the
+    server log."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+    message = "Внутренняя ошибка сервера. Мы уже знаем о таких ошибках по логам — попробуйте повторить запрос позже."
+    if request.path.startswith("/api/"):
+        return jsonify({"error": message}), 500
+    return message, 500
 
 
 def catalog(refresh=False): return load_catalog(CATALOG_FILE,"TQBR",refresh)
@@ -231,17 +292,25 @@ def files():
     return jsonify(items)
 
 @app.post("/api/download-batch")
+@heavy_sync
 def download_batch():
     payload=request.get_json(force=True); tickers=[str(x).upper() for x in payload.get("tickers",[]) if str(x).strip()]
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
     rows=[]
     for ticker in tickers:
         filename=f"{ticker}_{int(payload.get('interval',10))}m_{payload['from_date']}_{payload['till_date']}.csv"
+        if not FILENAME_RE.match(filename):
+            # Ticker/date fields feed straight into a filesystem path below;
+            # rejecting anything that doesn't match the plain
+            # TICKER_Nm_YYYY-MM-DD_YYYY-MM-DD.csv shape blocks path
+            # traversal via "../" or separators smuggled through those fields.
+            return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
         info=download_moex_candles(ticker,str(payload.get("board","TQBR")),int(payload.get("interval",10)),str(payload["from_date"]),str(payload["till_date"]),DATA_DIR/filename)
         sec=security_by_ticker(catalog(),ticker);rows.append({"ticker":ticker,"file":filename,"lot_size":int(sec.get("LOTSIZE") or 1),**info})
     return jsonify({"ok":True,"rows":rows})
 
 @app.post("/api/backtest")
+@heavy_sync
 def backtest():
     p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
     if not source.exists():return jsonify({"error":"Файл не найден"}),404
@@ -249,6 +318,7 @@ def backtest():
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.post("/api/batch-backtest")
+@heavy_sync
 def batch_backtest():
     p=request.get_json(force=True); files=[DATA_DIR/Path(x).name for x in p.get("files",[])]
     rows=[]
@@ -259,6 +329,7 @@ def batch_backtest():
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.post("/api/optimize")
+@heavy_sync
 def optimize():
     p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
     try:return jsonify({"ok":True,**run_optimizer(source,p.get("ranges",{}),RESULTS_DIR)})
@@ -458,8 +529,12 @@ def portfolio_build():
         active=JOBS.find_active_for_portfolio(portfolio_id,kind="build")
         if active:return jsonify({"job_id":active["job_id"],"status":active["status"]}),202
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio_name,len(tickers),kind="build")
-    threading.Thread(target=_execute_build_job,args=(job["job_id"],{**p,"tickers":tickers}),daemon=True).start()
+    if not _start_heavy_job(_execute_build_job,job["job_id"],{**p,"tickers":tickers}):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
@@ -556,8 +631,12 @@ def run_portfolio(portfolio_id):
     existing=JOBS.find_active_for_portfolio(portfolio_id,kind="portfolio_run")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(instruments),kind="portfolio_run")
-    threading.Thread(target=_execute_portfolio_job,args=(job["job_id"],portfolio),daemon=True).start()
+    if not _start_heavy_job(_execute_portfolio_job,job["job_id"],portfolio):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
@@ -794,8 +873,13 @@ def portfolio_backtest(portfolio_id):
                     float(portfolio.get("starting_capital") or 1_000_000),len(combos),
                     {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to})
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
-    threading.Thread(target=_execute_combo_backtest_job,args=(job["job_id"],portfolio,combos,date_from,date_to,run_id),daemon=True).start()
+    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,combos,date_from,date_to,run_id):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        bdb.finish_run(run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"],"run_id":run_id,"combinations":len(combos)}),202
 
 
@@ -931,10 +1015,14 @@ def repeat_backtest(run_id):
     new_run_id=bdb.new_run_id()
     bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
                     float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config)
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
-    threading.Thread(target=_execute_combo_backtest_job,
-                      args=(job["job_id"],portfolio,assignments,config.get("date_from"),config.get("date_to"),new_run_id),
-                      daemon=True).start()
+    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,assignments,
+                             config.get("date_from"),config.get("date_to"),new_run_id):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        bdb.finish_run(new_run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"],"run_id":new_run_id,"combinations":len(assignments)}),202
 
 @app.get("/api/backtests/<run_id>/export.json")
@@ -1086,9 +1174,13 @@ def market_data_sync_start():
     board=str(p.get("board","TQBR"))
     total=len(tickers)*len(timeframes)
     label=f"Загрузка данных: {', '.join(tickers[:3])}{'…' if len(tickers)>3 else ''}"
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(None,label,total,kind="market_data_sync",
                      extra={"tickers":tickers,"timeframes":timeframes,"mode":mode,"board":board})
-    threading.Thread(target=_execute_market_data_sync_job,args=(job["job_id"],tickers,timeframes,mode,board),daemon=True).start()
+    if not _start_heavy_job(_execute_market_data_sync_job,job["job_id"],tickers,timeframes,mode,board):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 

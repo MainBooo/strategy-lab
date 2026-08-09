@@ -148,6 +148,7 @@
     <article class="card results-card hidden" id="backtestResults">
       <div class="card-head"><div><span class="step">Итог</span><h2>Результат портфеля</h2></div></div>
       <div id="portfolioMetrics" class="metrics"></div>
+      <p class="hint">Модель исполнения: сигнал на закрытии бара → вход по цене открытия следующего бара. Комиссия 0.05% за сторону (0.1% за сделку) учтена. Проскальзывание не моделируется. Если в баре одновременно достигнуты стоп-лосс и тейк-профит — фиксируется срабатывание стоп-лосса (консервативное допущение).</p>
       <div id="backtestErrors" class="build-errors"></div>
       <div id="byTickerTable"></div>
       <div id="byStrategyTable"></div>
