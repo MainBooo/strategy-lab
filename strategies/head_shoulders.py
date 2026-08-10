@@ -6,9 +6,10 @@ import numpy as np
 import pandas as pd
 
 from strategies.common import (
-    COMMISSION_SIDE, add_atr, load_candles, save_run,
-    passes_volume_filter, simulate_exit, universal_execution_params,
+    COMMISSION_SIDE, TradeSlotGate, add_atr, load_candles, save_run,
+    passes_volume_filter, simulate_exit,
 )
+from strategies.param_schema import parse_params
 
 
 def _pivots(df: pd.DataFrame, span: int):
@@ -41,15 +42,7 @@ def _line(x1, y1, x2, y2, x):
 
 
 def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dict:
-    params = {
-        "pivot_span": int(raw_params.get("pivot_span", 3)),
-        "shoulder_tolerance": float(raw_params.get("shoulder_tolerance", 0.03)),
-        "head_min_distance": float(raw_params.get("head_min_distance", 0.01)),
-        "stop_pct": float(raw_params.get("stop_pct", 0.02)),
-        "take_pct": float(raw_params.get("take_pct", 0.05)),
-        "max_breakout_bars": int(raw_params.get("max_breakout_bars", 30)),
-        **universal_execution_params(raw_params),
-    }
+    params = parse_params("head_shoulders", raw_params)
 
     df = add_atr(load_candles(source, raw_params.get("date_from"), raw_params.get("date_till")), 14)
     pivots = _pivots(df, params["pivot_span"])
@@ -97,9 +90,9 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
                 break
 
     trades = []
-    available_from = 0
+    gate = TradeSlotGate(params["max_concurrent_trades"], params["reentry_cooldown_bars"])
     for entry_i, side, signal_time in sorted(signals):
-        if entry_i < available_from or entry_i >= len(df):
+        if entry_i >= len(df) or not gate.admit(entry_i):
             continue
 
         entry = float(df.at[entry_i,"open"])
@@ -109,9 +102,11 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
             stop, take = entry*(1+params["stop_pct"]), entry*(1-params["take_pct"])
 
         exit_i, exit_price, reason = simulate_exit(
-            df, entry_i, side, stop, take,
-            trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"],
+            df, entry_i, side, stop, take, entry=entry,
+            trailing_stop_atr=params["trailing_stop_atr"], breakeven_at_r=params["breakeven_at_r"],
+            max_holding_bars=params["max_holding_bars"],
         )
+        gate.register(exit_i)
 
         gross = exit_price/entry-1 if side == "long" else entry/exit_price-1
         trades.append({
@@ -120,12 +115,12 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
             "entry_time": df.at[entry_i,"begin"],
             "exit_time": df.at[exit_i,"begin"],
             "entry_price": entry,
+            "stop_price": stop,
             "exit_price": exit_price,
             "net_return": gross - 2*COMMISSION_SIDE,
             "exit_reason": reason,
             "bars_held": exit_i-entry_i+1,
         })
-        available_from = exit_i+1
 
     return save_run(
         results_dir,
