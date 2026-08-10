@@ -99,6 +99,7 @@
         }
       }
 
+      const compact = !!src.compact;
       const sel = src.trades.find((t) => t.id === src.selectedId);
       if (sel) {
         const x1 = x(sel.entry_time);
@@ -108,18 +109,23 @@
           if (sel.stop_loss != null && src.showStopLoss !== false) {
             const stopY = y(sel.stop_loss);
             if (entryY != null && stopY != null) {
-              this._segments.push({ kind: "level", x1, x2, y: stopY, color: theme.down, label: `Стоп ${fmtPrice(sel.stop_loss)}` });
+              const label = compact ? `SL ${fmtPrice(sel.stop_loss)}` : `Стоп ${fmtPrice(sel.stop_loss)}`;
+              this._segments.push({ kind: "level", x1, x2, y: stopY, color: theme.down, label, compact });
               this._zones.push({ x1, x2, yTop: Math.min(entryY, stopY), yBottom: Math.max(entryY, stopY), color: "rgba(255,112,129,.14)" });
             }
           }
           if (sel.take_profit != null && src.showTakeProfit !== false) {
             const takeY = y(sel.take_profit);
             if (entryY != null && takeY != null) {
-              this._segments.push({ kind: "level", x1, x2, y: takeY, color: theme.up, label: `Тейк ${fmtPrice(sel.take_profit)}` });
+              const label = compact ? `TP ${fmtPrice(sel.take_profit)}` : `Тейк ${fmtPrice(sel.take_profit)}`;
+              this._segments.push({ kind: "level", x1, x2, y: takeY, color: theme.up, label, compact });
               this._zones.push({ x1, x2, yTop: Math.min(entryY, takeY), yBottom: Math.max(entryY, takeY), color: "rgba(77,212,172,.14)" });
             }
           }
-          if (entryY != null) this._segments.push({ kind: "level", x1, x2, y: entryY, color: theme.accent, label: `Вход ${fmtPrice(sel.entry_price)}` });
+          if (entryY != null) {
+            const label = compact ? `Вх ${fmtPrice(sel.entry_price)}` : `Вход ${fmtPrice(sel.entry_price)}`;
+            this._segments.push({ kind: "level", x1, x2, y: entryY, color: theme.accent, label, compact });
+          }
         }
       }
     }
@@ -159,9 +165,9 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
                 if (s.label) {
-                  ctx.font = `${11 * rv}px Inter, sans-serif`;
+                  ctx.font = `${(s.compact ? 9 : 11) * rv}px Inter, sans-serif`;
                   ctx.fillStyle = s.color;
-                  ctx.fillText(s.label, (s.x2 + 6) * r, s.y * rv + 4 * rv);
+                  ctx.fillText(s.label, (s.x2 + (s.compact ? 4 : 6)) * r, s.y * rv + 4 * rv);
                 }
               }
             }
@@ -189,16 +195,21 @@
       this.showConnectors = true;
       this.showStopLoss = true;
       this.showTakeProfit = true;
+      // Tighter entry/stop/take level labels - opt-in per caller (see
+      // trade-chart.js's fullscreen toggle); false everywhere else so
+      // chart-analysis.js and market-replay.js are unaffected.
+      this.compact = false;
       this._paneViews = [new TradeOverlayPaneView(this)];
       this._requestUpdate = null;
     }
     attached(params) { this._requestUpdate = params && params.requestUpdate; }
     setTrades(trades) { this.trades = trades; this._requestUpdate && this._requestUpdate(); }
     setSelected(id) { this.selectedId = id; this._requestUpdate && this._requestUpdate(); }
-    setDisplayOptions({ showConnectors, showStopLoss, showTakeProfit } = {}) {
+    setDisplayOptions({ showConnectors, showStopLoss, showTakeProfit, compact } = {}) {
       if (showConnectors != null) this.showConnectors = showConnectors;
       if (showStopLoss != null) this.showStopLoss = showStopLoss;
       if (showTakeProfit != null) this.showTakeProfit = showTakeProfit;
+      if (compact != null) this.compact = compact;
       this._requestUpdate && this._requestUpdate();
     }
     updateAllViews() { this._paneViews.forEach((v) => v.update()); }

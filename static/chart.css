@@ -12,6 +12,9 @@
 
 .trade-row-highlight { background: rgba(124,140,255,.16) !important; }
 
+.tc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tc-head-title { font-size: 13px; font-weight: 700; color: var(--text); }
+
 .tc-toolbar, .ca-toolbar {
   display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
   padding: 10px 0; font-size: 13px; color: var(--muted);
@@ -34,6 +37,55 @@
 }
 .tc-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .tc-card-head h3 { margin: 0; font-size: 15px; }
+
+/* Same real-Fullscreen-API pattern as #chartsRoot.is-fullscreen /
+ * .ca-tile.is-fullscreen (chart-engine/fullscreen.js): #tvChartView is the
+ * whole trade-chart component (toolbar + nav + chart host + trade card),
+ * so making IT the fullscreen target - rather than the trade-viewer modal
+ * around it - covers the entire viewport and needs no second chart
+ * instance or extra wrapper element. Escapes the modal's own
+ * position:fixed/overflow:auto box the same way .ca-tile's fullscreen
+ * already escapes its scrollable workspace ancestors. */
+#tvChartView.is-fullscreen {
+  position: fixed; inset: 0; z-index: 9999; background: var(--bg);
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; margin: 0; overflow: hidden;
+}
+#tvChartView:fullscreen { width: 100vw; height: 100vh; }
+#tvChartView.is-fullscreen .tc-toolbar,
+#tvChartView.is-fullscreen .tc-nav,
+#tvChartView.is-fullscreen .tc-head { flex: 0 0 auto; }
+/* The chart is the reason fullscreen exists - it gets every pixel of
+ * height the controls above/below don't need. */
+#tvChartView.is-fullscreen .tc-chart-host { flex: 1 1 auto; height: auto !important; min-height: 0; }
+/* Trade detail becomes a compact bottom panel rather than pushing the
+ * chart up an unbounded amount - scrolls internally past ~28% height. */
+#tvChartView.is-fullscreen .tc-card { flex: 0 0 auto; max-height: 28vh; overflow-y: auto; margin-top: 6px; }
+#tvChartView.is-fullscreen #tcFullscreenBtn.active { color: var(--accent); border-color: var(--accent); }
+
+@media (max-width: 640px) {
+  /* Outside fullscreen these rows wrap (flex-wrap, the default) - fine
+   * when the chart has the rest of the page to grow into. In fullscreen
+   * the chart IS the page, so each control row instead stays one line and
+   * scrolls horizontally: wrapping 5 selects + 2 buttons + 9 toggles into
+   * 4-5 stacked rows would eat most of a phone screen's height, leaving
+   * "almost the whole screen" for the chart (spec) unreachable. */
+  #tvChartView.is-fullscreen .tc-toolbar,
+  #tvChartView.is-fullscreen .tc-nav {
+    flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+    padding-bottom: 2px; /* clears the scrollbar from touching labels below */
+  }
+  #tvChartView.is-fullscreen .tc-toolbar > *,
+  #tvChartView.is-fullscreen .tc-nav > * { flex: 0 0 auto; }
+  #tvChartView.is-fullscreen .tc-toolbar { gap: 6px 10px; padding: 6px 0 4px; }
+  #tvChartView.is-fullscreen .tc-toolbar label { font-size: 10px; }
+  #tvChartView.is-fullscreen .tc-nav { gap: 8px; margin: 2px 0 6px; }
+  #tvChartView.is-fullscreen .tc-head-title { font-size: 12px; }
+  #tvChartView.is-fullscreen .tc-card { max-height: 34vh; padding: 10px 12px; }
+  #tvChartView.is-fullscreen .summary-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+  #tvChartView.is-fullscreen .summary-grid div { padding: 6px 8px; }
+}
 
 .icon-btn {
   background: transparent; border: 1px solid var(--line); color: var(--muted);

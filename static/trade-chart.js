@@ -9,6 +9,14 @@
 
   const parseNaive = global.ChartEngine.parseNaiveDatetime;
 
+  // Same 24x24, 2px-stroke line-icon language as the "Анализ графиков"
+  // toolbar (chart-analysis.js's ICN.expand) - kept as a local literal
+  // rather than a shared import since that file doesn't expose ICN on
+  // ChartEngine and duplicating two small SVG strings is cheaper than
+  // wiring a new shared module for it.
+  const ICN_EXPAND = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+  const ICN_COMPRESS = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M13 21v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+
   const TradeChart = {
     run: null,
     core: null,
@@ -18,6 +26,7 @@
     selection: null,
     ticker: null,
     container: null,
+    fsCtrl: null,
     _built: false,
     _candlesCache: {},
     _tradesCache: {},
@@ -33,6 +42,10 @@
         this.indicatorMgr = null;
         this.overlay = null;
         this.markersHandle = null;
+      }
+      if (this.fsCtrl) {
+        this.fsCtrl.destroy();
+        this.fsCtrl = null;
       }
       this._built = false;
     },
@@ -67,6 +80,10 @@
 
     _build(container) {
       container.innerHTML = `
+        <div class="tc-head">
+          <span class="tc-head-title">График сделок</span>
+          <button class="icon-btn" id="tcFullscreenBtn" title="Полноэкранный режим" aria-label="Полноэкранный режим графика">${ICN_EXPAND}</button>
+        </div>
         <div class="tc-toolbar">
           <label>Тикер <select id="tcTicker"></select></label>
           <label>Стратегия <select id="tcStrategy"><option value="">Все стратегии</option></select></label>
@@ -137,7 +154,32 @@
       };
 
       this.core.chart.subscribeClick((param) => this._onChartClick(param));
+
+      container.querySelector("#tcFullscreenBtn").onclick = () => this.fsCtrl.toggle();
+      this.fsCtrl = new global.ChartEngine.Fullscreen.FullscreenController(container, {
+        className: "is-fullscreen",
+        onChange: (active) => this._onFullscreenChange(active),
+      });
+
       this._built = true;
+    },
+
+    _onFullscreenChange(active) {
+      const btn = this.container.querySelector("#tcFullscreenBtn");
+      if (btn) {
+        btn.innerHTML = active ? ICN_COMPRESS : ICN_EXPAND;
+        btn.title = active ? "Выйти из полноэкранного режима (Esc)" : "Полноэкранный режим графика";
+        btn.setAttribute("aria-label", btn.title);
+        btn.classList.toggle("active", active);
+      }
+      // Fewer, tighter TP/SL level labels once the chart is the whole
+      // screen and trade density is what the user came here to read.
+      if (this.overlay) this.overlay.setDisplayOptions({ compact: active });
+      // The chart host's box changes size with the fullscreen CSS toggle;
+      // the host already has a ResizeObserver (chart-engine/core.js) but
+      // nudging it explicitly avoids a one-frame stale layout, same as
+      // chart-analysis.js's workspace fullscreen handler.
+      requestAnimationFrame(() => this.core && this.core._onResize());
     },
 
     _toggleIndicator(type, on) {

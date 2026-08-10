@@ -1182,7 +1182,18 @@ async function openTradeDetail(tradeId){
 }
 $("tradeViewerClose").onclick=()=>$("tradeViewer").classList.add("hidden");
 $("tradeViewerBackdrop").onclick=()=>$("tradeViewer").classList.add("hidden");
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("tradeViewer").classList.contains("hidden"))$("tradeViewer").classList.add("hidden")});
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape"||$("tradeViewer").classList.contains("hidden"))return;
+  // Trade chart fullscreen (trade-chart.js) also exits on Esc - if that's
+  // currently active, this same keypress must only collapse fullscreen,
+  // not also close the whole modal underneath it (document.fullscreenElement
+  // is still set here regardless of listener order: leaving native
+  // fullscreen is always an async transition, so it hasn't cleared yet at
+  // this point in the same keydown dispatch; the fsCtrl.active check
+  // covers the rare no-Fullscreen-API fallback path the same way).
+  if(document.fullscreenElement||(window.TradeChart&&window.TradeChart.fsCtrl&&window.TradeChart.fsCtrl.active))return;
+  $("tradeViewer").classList.add("hidden");
+});
 
 // ------------------------------------------------------------- ticker tape
 let tickerTapeTimer=null;
