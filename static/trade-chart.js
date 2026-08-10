@@ -16,6 +16,26 @@
   // wiring a new shared module for it.
   const ICN_EXPAND = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
   const ICN_COMPRESS = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M13 21v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+  const ICN_SETTINGS = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  const ICN_CLOSE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  const ICN_CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
+  const ICN_CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>';
+
+  // Single source of truth for the "display toggle" checkboxes - each
+  // renders TWICE (the normal toolbar row, and the fullscreen settings
+  // popover) but drives the exact same state change, so there is only one
+  // place that knows what a toggle does. See _wireDisplayToggles().
+  const DISPLAY_TOGGLES = [
+    { id: "tcShowAll", label: "Показывать все сделки", checked: true, kind: "filter" },
+    { id: "tcOnlySelected", label: "Только выбранная сделка", checked: false, kind: "filter" },
+    { id: "tcShowMarkers", label: "Маркеры", checked: true, kind: "filter" },
+    { id: "tcShowConnectors", label: "Линии вход–выход", checked: true, kind: "filter" },
+    { id: "tcShowStopLoss", label: "Stop-loss", checked: true, kind: "filter" },
+    { id: "tcShowTakeProfit", label: "Take-profit", checked: true, kind: "filter" },
+    { id: "tcShowResultLabels", label: "Подписи результата", checked: true, kind: "filter" },
+    { id: "tcShowRsi", label: "RSI(14)", checked: false, kind: "indicator", indicator: "rsi" },
+    { id: "tcShowAtr", label: "ATR(14)", checked: false, kind: "indicator", indicator: "atr" },
+  ];
 
   const TradeChart = {
     run: null,
@@ -79,6 +99,10 @@
     },
 
     _build(container) {
+      const toggleRow = (suffix) => DISPLAY_TOGGLES.map((t) =>
+        `<label class="toggle"><input type="checkbox" id="${t.id}${suffix}" ${t.checked ? "checked" : ""}><span>${t.label}</span></label>`
+      ).join("");
+
       container.innerHTML = `
         <div class="tc-head">
           <span class="tc-head-title">График сделок</span>
@@ -93,24 +117,37 @@
           <button class="secondary" id="tcHideAll" title="Скрыть все сделки на графике">Скрыть сделки</button>
           <button class="secondary" id="tcResetRange" title="Вернуть масштаб графика к общему диапазону тестирования">К общему диапазону</button>
         </div>
-        <div class="tc-toolbar">
-          <label class="toggle"><input type="checkbox" id="tcShowAll" checked><span>Показывать все сделки</span></label>
-          <label class="toggle"><input type="checkbox" id="tcOnlySelected"><span>Только выбранная сделка</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowMarkers" checked><span>Маркеры</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowConnectors" checked><span>Линии вход–выход</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowStopLoss" checked><span>Stop-loss</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowTakeProfit" checked><span>Take-profit</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowResultLabels" checked><span>Подписи результата</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowRsi"><span>RSI(14)</span></label>
-          <label class="toggle"><input type="checkbox" id="tcShowAtr"><span>ATR(14)</span></label>
-        </div>
+        <div class="tc-toolbar">${toggleRow("")}</div>
         <div class="tc-nav">
           <button class="secondary" id="tcPrev">← Предыдущая сделка</button>
           <span id="tcCounter" class="muted-note">—</span>
           <button class="secondary" id="tcNext">Следующая сделка →</button>
         </div>
         <div class="tc-status" id="tcStatus"></div>
-        <div id="tcChartHost" class="tc-chart-host"></div>
+        <div id="tcChartWrap" class="tc-chart-wrap">
+          <div id="tcChartHost" class="tc-chart-host"></div>
+          <div class="tc-fs-overlay" id="tcFsOverlay">
+            <div class="tc-fs-top">
+              <span class="tc-fs-ticker" id="tcFsTicker">—</span>
+              <div class="tc-fs-actions">
+                <button class="tc-fs-btn" id="tcFsSettingsBtn" title="Настройки отображения" aria-label="Настройки отображения" aria-haspopup="true">${ICN_SETTINGS}</button>
+                <button class="tc-fs-btn" id="tcFsCloseBtn" title="Выйти из полноэкранного режима (Esc)" aria-label="Выйти из полноэкранного режима">${ICN_CLOSE}</button>
+              </div>
+              <div class="tc-fs-settings hidden" id="tcFsSettings">
+                <div class="tc-fs-settings-actions">
+                  <button class="secondary" id="tcFsHideAll">Скрыть сделки</button>
+                  <button class="secondary" id="tcFsResetRange">К общему диапазону</button>
+                </div>
+                ${toggleRow("Fs")}
+              </div>
+            </div>
+            <div class="tc-fs-bottom hidden" id="tcFsBottom">
+              <button class="tc-fs-nav-btn" id="tcFsPrev" aria-label="Предыдущая сделка">${ICN_CHEVRON_LEFT}</button>
+              <span class="tc-fs-counter" id="tcFsCounter">—</span>
+              <button class="tc-fs-nav-btn" id="tcFsNext" aria-label="Следующая сделка">${ICN_CHEVRON_RIGHT}</button>
+            </div>
+          </div>
+        </div>
         <div id="tcCard" class="tc-card hidden"></div>
       `;
       this.core = new global.ChartEngine.ChartCore(container.querySelector("#tcChartHost"), { showVolume: true });
@@ -130,38 +167,94 @@
         .map((t) => `<option value="${t}">${t}</option>`).join("");
       container.querySelector("#tcTicker").onchange = (e) => this.selectTicker(e.target.value);
 
-      [
-        "tcStrategy", "tcDirection", "tcResult", "tcTradeNumber", "tcShowAll", "tcOnlySelected",
-        "tcShowMarkers", "tcShowConnectors", "tcShowStopLoss", "tcShowTakeProfit", "tcShowResultLabels",
-      ].forEach((id) => {
+      ["tcStrategy", "tcDirection", "tcResult", "tcTradeNumber"].forEach((id) => {
         container.querySelector("#" + id).addEventListener("input", () => this._applyFilters());
       });
-      container.querySelector("#tcShowRsi").onchange = (e) => this._toggleIndicator("rsi", e.target.checked);
-      container.querySelector("#tcShowAtr").onchange = (e) => this._toggleIndicator("atr", e.target.checked);
+      this._wireDisplayToggles(container);
       container.querySelector("#tcPrev").onclick = () => this.selection.prev();
       container.querySelector("#tcNext").onclick = () => this.selection.next();
-      container.querySelector("#tcHideAll").onclick = () => {
-        container.querySelector("#tcShowAll").checked = false;
-        this.selection.select(null);
-        this._applyFilters();
-      };
-      container.querySelector("#tcResetRange").onclick = () => {
-        const trades = this.selection.filtered;
-        if (!trades.length) { this.core.fitContent(); return; }
-        const from = Math.min(...trades.map((t) => t.entry_time));
-        const to = Math.max(...trades.map((t) => t.exit_time || t.entry_time));
-        this.core.setVisibleRange(from, to);
-      };
+      container.querySelector("#tcFsPrev").onclick = () => this.selection.prev();
+      container.querySelector("#tcFsNext").onclick = () => this.selection.next();
+      container.querySelector("#tcHideAll").onclick = () => this._hideAllTrades();
+      container.querySelector("#tcResetRange").onclick = () => this._resetRange();
+      container.querySelector("#tcFsHideAll").onclick = () => { this._hideAllTrades(); this._closeFsSettings(); };
+      container.querySelector("#tcFsResetRange").onclick = () => { this._resetRange(); this._closeFsSettings(); };
 
       this.core.chart.subscribeClick((param) => this._onChartClick(param));
+      // Any interaction with the chart itself (pan/zoom/click-to-select)
+      // should dismiss an open settings popover rather than leaving it
+      // stranded on top of the candles the user is trying to look at.
+      container.querySelector("#tcChartHost").addEventListener("click", () => this._closeFsSettings());
+
+      container.querySelector("#tcFsSettingsBtn").onclick = (e) => {
+        e.stopPropagation();
+        const panel = container.querySelector("#tcFsSettings");
+        const willOpen = panel.classList.contains("hidden");
+        if (willOpen) this._syncFsSettings();
+        panel.classList.toggle("hidden", !willOpen);
+        container.querySelector("#tcFsSettingsBtn").classList.toggle("active", willOpen);
+      };
+      container.querySelector("#tcFsCloseBtn").onclick = () => this.fsCtrl.exit();
 
       container.querySelector("#tcFullscreenBtn").onclick = () => this.fsCtrl.toggle();
-      this.fsCtrl = new global.ChartEngine.Fullscreen.FullscreenController(container, {
+      // The fullscreen target is ONLY the chart + its compact overlay
+      // (#tcChartWrap) - deliberately NOT `container`, which also holds
+      // the filter row, the 9-toggle row, the big prev/next nav and the
+      // trade-detail card. Those stay outside the fullscreen element
+      // entirely (rather than hidden-but-present inside it), so fullscreen
+      // never has to fight a few hundred px of chrome for height; the same
+      // ChartCore instance just gets a bigger box to resize into.
+      this.fsCtrl = new global.ChartEngine.Fullscreen.FullscreenController(container.querySelector("#tcChartWrap"), {
         className: "is-fullscreen",
         onChange: (active) => this._onFullscreenChange(active),
       });
 
       this._built = true;
+    },
+
+    _wireDisplayToggles(container) {
+      DISPLAY_TOGGLES.forEach((t) => {
+        const main = container.querySelector("#" + t.id);
+        const fs = container.querySelector("#" + t.id + "Fs");
+        const onToggle = (checked) => {
+          if (t.kind === "indicator") this._toggleIndicator(t.indicator, checked);
+          else this._applyFilters();
+        };
+        main.addEventListener("change", (e) => { fs.checked = e.target.checked; onToggle(e.target.checked); });
+        fs.addEventListener("change", (e) => { main.checked = e.target.checked; onToggle(e.target.checked); });
+      });
+    },
+
+    _syncFsSettings() {
+      DISPLAY_TOGGLES.forEach((t) => {
+        const main = this.container.querySelector("#" + t.id);
+        const fs = this.container.querySelector("#" + t.id + "Fs");
+        if (main && fs) fs.checked = main.checked;
+      });
+    },
+
+    _closeFsSettings() {
+      const panel = this.container.querySelector("#tcFsSettings");
+      const btn = this.container.querySelector("#tcFsSettingsBtn");
+      if (panel) panel.classList.add("hidden");
+      if (btn) btn.classList.remove("active");
+    },
+
+    _hideAllTrades() {
+      const showAll = this.container.querySelector("#tcShowAll");
+      const showAllFs = this.container.querySelector("#tcShowAllFs");
+      showAll.checked = false;
+      if (showAllFs) showAllFs.checked = false;
+      this.selection.select(null);
+      this._applyFilters();
+    },
+
+    _resetRange() {
+      const trades = this.selection.filtered;
+      if (!trades.length) { this.core.fitContent(); return; }
+      const from = Math.min(...trades.map((t) => t.entry_time));
+      const to = Math.max(...trades.map((t) => t.exit_time || t.entry_time));
+      this.core.setVisibleRange(from, to);
     },
 
     _onFullscreenChange(active) {
@@ -172,14 +265,44 @@
         btn.setAttribute("aria-label", btn.title);
         btn.classList.toggle("active", active);
       }
+      if (!active) this._closeFsSettings();
+      else { this._updateFsOverlay(); this._updateFsNav(); }
       // Fewer, tighter TP/SL level labels once the chart is the whole
       // screen and trade density is what the user came here to read.
       if (this.overlay) this.overlay.setDisplayOptions({ compact: active });
       // The chart host's box changes size with the fullscreen CSS toggle;
       // the host already has a ResizeObserver (chart-engine/core.js) but
       // nudging it explicitly avoids a one-frame stale layout, same as
-      // chart-analysis.js's workspace fullscreen handler.
+      // chart-analysis.js's workspace fullscreen handler. No visible range
+      // is touched here - only the pixel box changes, so zoom/scroll
+      // position survive enter/exit untouched (state lives entirely in
+      // the one ChartCore/TradeSelectionManager, never rebuilt).
       requestAnimationFrame(() => this.core && this.core._onResize());
+    },
+
+    /** Ticker (+ active strategy filter, if any) shown top-left of the
+     * fullscreen overlay - the only chart identity label left once the
+     * full filter row is out of view. */
+    _updateFsOverlay() {
+      const el = (id) => this.container.querySelector("#" + id);
+      const label = el("tcFsTicker");
+      if (!label) return;
+      const strategySel = el("tcStrategy");
+      const strategyName = strategySel && strategySel.value ? strategySel.selectedOptions[0].textContent : "";
+      label.textContent = strategyName ? `${this.ticker || "—"} · ${strategyName}` : (this.ticker || "—");
+    },
+
+    /** Compact "‹  i / n  ›" nav pill - hidden entirely when there's
+     * nothing to page through, so an empty ticker doesn't leave a dead
+     * control floating over the chart. */
+    _updateFsNav() {
+      const bottom = this.container.querySelector("#tcFsBottom");
+      if (!bottom) return;
+      const total = this.selection.filtered.length;
+      bottom.classList.toggle("hidden", total === 0);
+      if (!total) return;
+      const i = this.selection.filtered.findIndex((t) => t.id === this.selection.selectedId);
+      this.container.querySelector("#tcFsCounter").textContent = `${i >= 0 ? i + 1 : "—"} / ${total}`;
     },
 
     _toggleIndicator(type, on) {
@@ -191,6 +314,7 @@
     async selectTicker(ticker) {
       this.ticker = ticker;
       this.container.querySelector("#tcTicker").value = ticker;
+      this._updateFsOverlay();
       const status = this.container.querySelector("#tcStatus");
       status.textContent = "Загрузка свечей…";
       try {
@@ -259,6 +383,7 @@
         if (number && String(t.number) !== String(number)) return false;
         return true;
       });
+      this._updateFsOverlay();
       this._render();
     },
 
@@ -281,6 +406,7 @@
 
       const i = this.selection.filtered.findIndex((t) => t.id === this.selection.selectedId);
       el("tcCounter").textContent = this.selection.filtered.length ? `Сделка ${i >= 0 ? i + 1 : "—"} из ${this.selection.filtered.length}` : "Нет сделок по фильтру";
+      this._updateFsNav();
     },
 
     _onSelectionChange() {

@@ -30,7 +30,13 @@
 .tc-nav { display: flex; align-items: center; gap: 14px; margin: 4px 0 10px; }
 .tc-status, .ca-status { min-height: 18px; font-size: 12px; color: var(--muted); }
 
-.tc-chart-host { width: 100%; height: 460px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0c1019; }
+/* .tc-chart-wrap carries the height (fixed in normal mode, viewport-filling
+ * in fullscreen); .tc-chart-host is a flex child that always just fills
+ * whatever box its wrap gives it. Splitting them is what lets fullscreen
+ * hand the chart 100% of a fixed 100dvh box instead of the old fixed
+ * 460px carrying over. */
+.tc-chart-wrap { position: relative; display: flex; flex-direction: column; width: 100%; height: 460px; }
+.tc-chart-host { flex: 1 1 auto; min-width: 0; min-height: 0; width: 100%; height: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0c1019; }
 .tc-card {
   margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--panel-2);
@@ -38,53 +44,102 @@
 .tc-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .tc-card-head h3 { margin: 0; font-size: 15px; }
 
-/* Same real-Fullscreen-API pattern as #chartsRoot.is-fullscreen /
- * .ca-tile.is-fullscreen (chart-engine/fullscreen.js): #tvChartView is the
- * whole trade-chart component (toolbar + nav + chart host + trade card),
- * so making IT the fullscreen target - rather than the trade-viewer modal
- * around it - covers the entire viewport and needs no second chart
- * instance or extra wrapper element. Escapes the modal's own
- * position:fixed/overflow:auto box the same way .ca-tile's fullscreen
- * already escapes its scrollable workspace ancestors. */
-#tvChartView.is-fullscreen {
-  position: fixed; inset: 0; z-index: 9999; background: var(--bg);
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 10px 12px; margin: 0; overflow: hidden;
+/* ---------------------------------------------- trade chart fullscreen -- */
+/* The Fullscreen API target is #tcChartWrap - the chart host plus its own
+ * compact overlay - NOT the whole trade-chart component. The filter row,
+ * the 9-toggle row, the big prev/next nav and the trade-detail card are
+ * all outside #tcChartWrap in the DOM, so they are never part of the
+ * fullscreen element at all (not hidden-but-present - simply not inside
+ * the box that goes fullscreen). That's what makes the chart get the
+ * whole screen instead of whatever's left under ~600-800px of chrome.
+ * Same real-Fullscreen-API pattern as #chartsRoot.is-fullscreen /
+ * .ca-tile.is-fullscreen (chart-engine/fullscreen.js), just scoped to a
+ * smaller element - one ChartCore instance, only its container resizes. */
+.tc-chart-wrap.is-fullscreen {
+  position: fixed; inset: 0; z-index: 9999;
+  width: 100vw; height: 100vh; height: 100dvh; /* dvh overrides vh where supported; vh is the fallback on older iOS/Safari, not the primary unit */
+  box-sizing: border-box; margin: 0; overflow: hidden;
+  background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
-#tvChartView:fullscreen { width: 100vw; height: 100vh; }
-#tvChartView.is-fullscreen .tc-toolbar,
-#tvChartView.is-fullscreen .tc-nav,
-#tvChartView.is-fullscreen .tc-head { flex: 0 0 auto; }
-/* The chart is the reason fullscreen exists - it gets every pixel of
- * height the controls above/below don't need. */
-#tvChartView.is-fullscreen .tc-chart-host { flex: 1 1 auto; height: auto !important; min-height: 0; }
-/* Trade detail becomes a compact bottom panel rather than pushing the
- * chart up an unbounded amount - scrolls internally past ~28% height. */
-#tvChartView.is-fullscreen .tc-card { flex: 0 0 auto; max-height: 28vh; overflow-y: auto; margin-top: 6px; }
-#tvChartView.is-fullscreen #tcFullscreenBtn.active { color: var(--accent); border-color: var(--accent); }
+.tc-chart-wrap:fullscreen { width: 100vw; height: 100vh; height: 100dvh; }
+.tc-chart-wrap.is-fullscreen .tc-chart-host { border-radius: 0; border: none; }
+
+/* Overlay sits on TOP of the chart (not in flex flow) so the chart canvas
+ * itself always measures the wrap's full box - controls float over it
+ * instead of squeezing it. pointer-events:none on the row containers lets
+ * clicks/drags reach the chart in the empty space between the top bar and
+ * bottom pill; the pill/bar/popover themselves re-enable pointer-events so
+ * they stay clickable. */
+.tc-fs-overlay {
+  position: absolute; inset: 0; z-index: 2;
+  display: none; flex-direction: column; justify-content: space-between;
+  padding: 10px; pointer-events: none;
+}
+.tc-chart-wrap.is-fullscreen .tc-fs-overlay { display: flex; }
+
+.tc-fs-top {
+  position: relative; align-self: stretch;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 10px; border-radius: 10px;
+  background: rgba(10,14,22,.76); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.08);
+  pointer-events: auto;
+}
+.tc-fs-ticker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--text); }
+.tc-fs-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.tc-fs-btn {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px; border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06); color: var(--text); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.tc-fs-btn:hover { border-color: var(--accent); }
+.tc-fs-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(124,140,255,.16); }
+.tc-fs-btn svg { flex-shrink: 0; width: 15px; height: 15px; }
+
+.tc-fs-bottom {
+  align-self: center; display: flex; align-items: center; justify-content: center; gap: 16px;
+  padding: 6px 10px; border-radius: 999px;
+  background: rgba(10,14,22,.76); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.08);
+  pointer-events: auto;
+}
+.tc-fs-bottom.hidden { display: none; }
+.tc-fs-nav-btn {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06); color: var(--text); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.tc-fs-nav-btn:hover { border-color: var(--accent); }
+.tc-fs-nav-btn svg { flex-shrink: 0; width: 16px; height: 16px; }
+.tc-fs-counter { font-size: 13px; font-weight: 600; color: var(--text); min-width: 52px; text-align: center; }
+
+/* Anchored under the gear button rather than a full bottom sheet - stays
+ * out of the way of the candles below it and never covers the whole
+ * screen, so "почти один график" holds even while it's open. */
+.tc-fs-settings {
+  position: absolute; top: 54px; right: 10px; z-index: 3;
+  width: min(280px, calc(100vw - 20px)); max-height: min(70vh, 520px); overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  pointer-events: auto;
+}
+.tc-fs-settings.hidden { display: none; }
+.tc-fs-settings-actions { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.tc-fs-settings-actions button { font-size: 12px; padding: 7px 10px; }
+.tc-fs-settings .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 2px; }
 
 @media (max-width: 640px) {
-  /* Outside fullscreen these rows wrap (flex-wrap, the default) - fine
-   * when the chart has the rest of the page to grow into. In fullscreen
-   * the chart IS the page, so each control row instead stays one line and
-   * scrolls horizontally: wrapping 5 selects + 2 buttons + 9 toggles into
-   * 4-5 stacked rows would eat most of a phone screen's height, leaving
-   * "almost the whole screen" for the chart (spec) unreachable. */
-  #tvChartView.is-fullscreen .tc-toolbar,
-  #tvChartView.is-fullscreen .tc-nav {
-    flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
-    -webkit-overflow-scrolling: touch; scrollbar-width: thin;
-    padding-bottom: 2px; /* clears the scrollbar from touching labels below */
-  }
-  #tvChartView.is-fullscreen .tc-toolbar > *,
-  #tvChartView.is-fullscreen .tc-nav > * { flex: 0 0 auto; }
-  #tvChartView.is-fullscreen .tc-toolbar { gap: 6px 10px; padding: 6px 0 4px; }
-  #tvChartView.is-fullscreen .tc-toolbar label { font-size: 10px; }
-  #tvChartView.is-fullscreen .tc-nav { gap: 8px; margin: 2px 0 6px; }
-  #tvChartView.is-fullscreen .tc-head-title { font-size: 12px; }
-  #tvChartView.is-fullscreen .tc-card { max-height: 34vh; padding: 10px 12px; }
-  #tvChartView.is-fullscreen .summary-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
-  #tvChartView.is-fullscreen .summary-grid div { padding: 6px 8px; }
+  .tc-fs-top { padding: 6px 8px; }
+  .tc-fs-ticker { font-size: 13px; }
+  .tc-fs-bottom { gap: 12px; padding: 5px 8px; }
+  .tc-fs-settings { top: 50px; right: 6px; left: 6px; width: auto; }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  /* The spec's explicit landscape case: rotating a phone should buy back
+   * even more chart area, not just keep the portrait chrome sizing. */
+  .tc-fs-overlay { padding: 6px 10px; }
+  .tc-fs-top, .tc-fs-bottom { padding: 5px 8px; }
+  .tc-fs-settings { max-height: min(80vh, 420px); }
 }
 
 .icon-btn {
