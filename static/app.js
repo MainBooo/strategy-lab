@@ -764,17 +764,6 @@ function bindParamFieldEvents(container,idPrefix,onFieldCommit){
   });
   container.querySelectorAll("[data-preset-pick]").forEach(b=>b.onclick=e=>{e.stopPropagation();onFieldCommit("__preset__",b.dataset.presetPick)});
 }
-function strategyBadgeLine(strategyId,values,presetName){
-  const parts=[];
-  if(values.rr!=null)parts.push(`RR ${Number(values.rr).toFixed(1)}`);
-  if(values.stop_atr!=null)parts.push(`SL ${Number(values.stop_atr).toFixed(2)}×ATR`);
-  else if(values.stop_pct!=null)parts.push(`SL ${(Number(values.stop_pct)*100).toFixed(1)}%`);
-  else if(values.stop_buffer_atr!=null)parts.push(`Буфер ${Number(values.stop_buffer_atr).toFixed(2)}×ATR`);
-  if(values.direction&&values.direction!=="both")parts.push(values.direction==="long"?"Только Long":"Только Short");
-  parts.push(PRESET_RU_LABEL[presetName]||"Свои настройки");
-  return parts.join(" · ");
-}
-
 let expandedStrategyCards=new Set();
 let strategyFormState={};       // strategyId -> {values, presetName}
 let strategyUserPresets={};     // strategyId -> {parameters:{...}} | null (loaded lazily)
@@ -795,20 +784,25 @@ function fillStrategies(){
 function renderStrategyCard(strategyId,meta){
   const expanded=expandedStrategyCards.has(strategyId);
   const st=ensureStrategyFormState(strategyId);
+  const presetLabel=PRESET_RU_LABEL[st.presetName]||"Свои настройки";
   return `<article class="strategy-card accordion ${meta.primary?"primary-strategy":""} ${expanded?"open":""}" data-strategy-card="${strategyId}">
     <div class="accordion-header" data-toggle-strategy="${strategyId}" role="button" tabindex="0" aria-expanded="${expanded}">
-      <span class="accordion-arrow">${expanded?"▾":"▸"}</span>
       <div class="strategy-card-main">
+        <div class="strategy-card-toprow">
+          <span class="strategy-category">${meta.category}</span>
+          <span class="strategy-preset-chip">${presetLabel}</span>
+        </div>
+        <div class="strategy-card-titlerow">
+          <h3>${meta.name}</h3>
+          <span class="strategy-chevron" aria-hidden="true">⌄</span>
+        </div>
+        <p class="strategy-summary">${meta.summary}</p>
         <div class="strategy-visual">${meta.visual}</div>
-        <span>${meta.category}</span>
-        <h3>${meta.name}</h3>
-        <p>${meta.summary}</p>
-        <div class="strategy-badge-row">${strategyBadgeLine(strategyId,st.values,st.presetName)}</div>
       </div>
     </div>
     ${expanded
       ?`<div class="accordion-body" data-no-toggle="1" id="strategy-body-${strategyId}">${renderStrategyParamsForm(strategyId)}</div>`
-      :`<button type="button" class="link-btn strategy-configure-link" data-toggle-strategy="${strategyId}">Настроить параметры →</button>`}
+      :""}
   </article>`;
 }
 
