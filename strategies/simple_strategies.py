@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategies.common import COMMISSION_SIDE, add_atr, load_candles, save_run
+from strategies.common import (
+    COMMISSION_SIDE, add_atr, load_candles, save_run,
+    filter_signals_by_direction, passes_volume_filter, simulate_exit, universal_execution_params,
+)
 
 
 def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -16,7 +19,12 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def _execute(df: pd.DataFrame, signals: list[dict], rr: float, stop_atr: float) -> pd.DataFrame:
+def _execute(df: pd.DataFrame, signals: list[dict], rr: float, stop_atr: float, *,
+             direction: str = "both", volume_filter: bool = False, volume_multiplier: float = 1.5,
+             trailing_stop_atr: float = 0, max_holding_bars: int = 0) -> pd.DataFrame:
+    signals = filter_signals_by_direction(signals, direction)
+    if volume_filter:
+        signals = [s for s in signals if passes_volume_filter(df, max(0, s["entry_i"] - 1), volume_multiplier)]
     trades = []
     available = 0
     for signal in sorted(signals, key=lambda x: x["entry_i"]):
@@ -38,19 +46,10 @@ def _execute(df: pd.DataFrame, signals: list[dict], rr: float, stop_atr: float) 
             take = entry - rr * risk
         if risk <= 0 or risk / entry > 0.03:
             continue
-        exit_i = len(df) - 1
-        exit_price = float(df.at[exit_i, "close"])
-        reason = "end_of_period"
-        for k in range(i, len(df)):
-            high, low = float(df.at[k, "high"]), float(df.at[k, "low"])
-            hit_stop = low <= stop if side == "long" else high >= stop
-            hit_take = high >= take if side == "long" else low <= take
-            if hit_stop:
-                exit_i, exit_price, reason = k, stop, "stop"
-                break
-            if hit_take:
-                exit_i, exit_price, reason = k, take, "take"
-                break
+        exit_i, exit_price, reason = simulate_exit(
+            df, i, side, stop, take,
+            trailing_stop_atr=trailing_stop_atr, max_holding_bars=max_holding_bars,
+        )
         gross = exit_price / entry - 1 if side == "long" else entry / exit_price - 1
         trades.append({
             "side": side,
@@ -70,7 +69,7 @@ def _execute(df: pd.DataFrame, signals: list[dict], rr: float, stop_atr: float) 
 
 
 def run_ema_pullback(source: Path, raw: dict, results_dir: Path) -> dict:
-    params = {"fast": int(raw.get("fast", 20)), "slow": int(raw.get("slow", 50)), "rr": float(raw.get("rr", 2)), "stop_atr": float(raw.get("stop_atr", 1.2))}
+    params = {"fast": int(raw.get("fast", 20)), "slow": int(raw.get("slow", 50)), "rr": float(raw.get("rr", 2)), "stop_atr": float(raw.get("stop_atr", 1.2)), **universal_execution_params(raw)}
     df = add_atr(load_candles(source, raw.get("date_from"), raw.get("date_till")), 14)
     df["ema_fast"] = df["close"].ewm(span=params["fast"], adjust=False).mean()
     df["ema_slow"] = df["close"].ewm(span=params["slow"], adjust=False).mean()
@@ -80,11 +79,14 @@ def run_ema_pullback(source: Path, raw: dict, results_dir: Path) -> dict:
             signals.append({"side":"long","entry_i":i+1,"signal_time":df.at[i,"begin"]})
         elif df.at[i, "ema_fast"] < df.at[i, "ema_slow"] and df.at[i, "high"] >= df.at[i, "ema_fast"] and df.at[i, "close"] < df.at[i, "ema_fast"] and df.at[i, "close"] < df.at[i, "open"]:
             signals.append({"side":"short","entry_i":i+1,"signal_time":df.at[i,"begin"]})
-    return save_run(results_dir, "Откат к EMA", source.name, params, _execute(df, signals, params["rr"], params["stop_atr"]))
+    trades = _execute(df, signals, params["rr"], params["stop_atr"], direction=params["direction"],
+                       volume_filter=params["volume_filter"], volume_multiplier=params["volume_multiplier"],
+                       trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"])
+    return save_run(results_dir, "Откат к EMA", source.name, params, trades)
 
 
 def run_rsi_reversal(source: Path, raw: dict, results_dir: Path) -> dict:
-    params = {"period": int(raw.get("period", 14)), "oversold": float(raw.get("oversold", 30)), "overbought": float(raw.get("overbought", 70)), "rr": float(raw.get("rr", 1.5)), "stop_atr": float(raw.get("stop_atr", 1.0))}
+    params = {"period": int(raw.get("period", 14)), "oversold": float(raw.get("oversold", 30)), "overbought": float(raw.get("overbought", 70)), "rr": float(raw.get("rr", 1.5)), "stop_atr": float(raw.get("stop_atr", 1.0)), **universal_execution_params(raw)}
     df = add_atr(load_candles(source, raw.get("date_from"), raw.get("date_till")), 14)
     df["rsi"] = _rsi(df["close"], params["period"])
     signals = []
@@ -93,11 +95,14 @@ def run_rsi_reversal(source: Path, raw: dict, results_dir: Path) -> dict:
             signals.append({"side":"long","entry_i":i+1,"signal_time":df.at[i,"begin"]})
         elif df.at[i-1,"rsi"] >= params["overbought"] and df.at[i,"rsi"] < params["overbought"]:
             signals.append({"side":"short","entry_i":i+1,"signal_time":df.at[i,"begin"]})
-    return save_run(results_dir, "Разворот RSI", source.name, params, _execute(df, signals, params["rr"], params["stop_atr"]))
+    trades = _execute(df, signals, params["rr"], params["stop_atr"], direction=params["direction"],
+                       volume_filter=params["volume_filter"], volume_multiplier=params["volume_multiplier"],
+                       trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"])
+    return save_run(results_dir, "Разворот RSI", source.name, params, trades)
 
 
 def run_inside_bar(source: Path, raw: dict, results_dir: Path) -> dict:
-    params = {"rr": float(raw.get("rr", 2)), "max_wait": int(raw.get("max_wait", 3))}
+    params = {"rr": float(raw.get("rr", 2)), "max_wait": int(raw.get("max_wait", 3)), **universal_execution_params(raw)}
     df = add_atr(load_candles(source, raw.get("date_from"), raw.get("date_till")), 14)
     signals = []
     for i in range(2, len(df)-params["max_wait"]-1):
@@ -109,11 +114,14 @@ def run_inside_bar(source: Path, raw: dict, results_dir: Path) -> dict:
                     signals.append({"side":"long","entry_i":j+1,"stop":float(mother["low"]),"signal_time":df.at[j,"begin"]}); break
                 if df.at[j,"low"] < mother["low"]:
                     signals.append({"side":"short","entry_i":j+1,"stop":float(mother["high"]),"signal_time":df.at[j,"begin"]}); break
-    return save_run(results_dir, "Внутренний бар", source.name, params, _execute(df, signals, params["rr"], 1.0))
+    trades = _execute(df, signals, params["rr"], 1.0, direction=params["direction"],
+                       volume_filter=params["volume_filter"], volume_multiplier=params["volume_multiplier"],
+                       trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"])
+    return save_run(results_dir, "Внутренний бар", source.name, params, trades)
 
 
 def run_pin_bar(source: Path, raw: dict, results_dir: Path) -> dict:
-    params = {"wick_ratio": float(raw.get("wick_ratio", 2.5)), "lookback": int(raw.get("lookback", 20)), "rr": float(raw.get("rr", 2)), "stop_atr": float(raw.get("stop_atr", 0.2))}
+    params = {"wick_ratio": float(raw.get("wick_ratio", 2.5)), "lookback": int(raw.get("lookback", 20)), "rr": float(raw.get("rr", 2)), "stop_atr": float(raw.get("stop_atr", 0.2)), **universal_execution_params(raw)}
     df = add_atr(load_candles(source, raw.get("date_from"), raw.get("date_till")), 14)
     signals=[]
     for i in range(params["lookback"], len(df)-1):
@@ -123,11 +131,14 @@ def run_pin_bar(source: Path, raw: dict, results_dir: Path) -> dict:
             signals.append({"side":"long","entry_i":i+1,"stop":l-params["stop_atr"]*float(df.at[i,"atr"]),"signal_time":df.at[i,"begin"]})
         elif upper/body >= params["wick_ratio"] and h >= df.iloc[i-params["lookback"]:i+1]["high"].max():
             signals.append({"side":"short","entry_i":i+1,"stop":h+params["stop_atr"]*float(df.at[i,"atr"]),"signal_time":df.at[i,"begin"]})
-    return save_run(results_dir, "Пин-бар", source.name, params, _execute(df, signals, params["rr"], 1.0))
+    trades = _execute(df, signals, params["rr"], params["stop_atr"], direction=params["direction"],
+                       volume_filter=params["volume_filter"], volume_multiplier=params["volume_multiplier"],
+                       trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"])
+    return save_run(results_dir, "Пин-бар", source.name, params, trades)
 
 
 def run_breakout_retest(source: Path, raw: dict, results_dir: Path) -> dict:
-    params = {"lookback":int(raw.get("lookback",50)),"retest_bars":int(raw.get("retest_bars",5)),"rr":float(raw.get("rr",2)),"stop_atr":float(raw.get("stop_atr",0.3))}
+    params = {"lookback":int(raw.get("lookback",50)),"retest_bars":int(raw.get("retest_bars",5)),"rr":float(raw.get("rr",2)),"stop_atr":float(raw.get("stop_atr",0.3)), **universal_execution_params(raw)}
     df=add_atr(load_candles(source, raw.get("date_from"), raw.get("date_till")),14); signals=[]
     i=params["lookback"]
     while i < len(df)-params["retest_bars"]-2:
@@ -141,7 +152,10 @@ def run_breakout_retest(source: Path, raw: dict, results_dir: Path) -> dict:
                 if df.at[j,"high"]>=low and df.at[j,"close"]<low:
                     signals.append({"side":"short","entry_i":j+1,"stop":low+params["stop_atr"]*float(df.at[j,"atr"]),"signal_time":df.at[j,"begin"]}); i=j; break
         i+=1
-    return save_run(results_dir,"Пробой с ретестом",source.name,params,_execute(df,signals,params["rr"],1.0))
+    trades = _execute(df, signals, params["rr"], params["stop_atr"], direction=params["direction"],
+                       volume_filter=params["volume_filter"], volume_multiplier=params["volume_multiplier"],
+                       trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"])
+    return save_run(results_dir,"Пробой с ретестом",source.name,params,trades)
 
 
 STRATEGY_CATALOG = {

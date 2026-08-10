@@ -41,6 +41,8 @@ from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
 from strategies.head_shoulders import run_head_shoulders
 from strategies.simple_strategies import RUNNERS,STRATEGY_CATALOG
+from strategies.param_schema import full_schema,full_presets
+import strategy_presets_db as spdb
 from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES
 
 BASE_DIR=Path(__file__).resolve().parent; DATA_DIR=BASE_DIR/"data"; RESULTS_DIR=BASE_DIR/"results"; STORAGE=BASE_DIR/"storage"
@@ -50,6 +52,7 @@ CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
+spdb.init_db(STORAGE/"strategy_presets.db")
 auth_db.init_db(STORAGE/"users.db")
 auth_routes.configure(PORTFOLIOS)
 
@@ -288,11 +291,15 @@ def _inspect_csv(path:Path)->tuple[int,float|None]:
     return len(df),last_close
 
 
+def _enriched_strategy_catalog()->dict:
+    return {sid:{**meta,"params":full_schema(sid),"presets":full_presets(sid)} for sid,meta in STRATEGY_CATALOG.items()}
+
+
 @app.get("/")
 def index():
     return render_template("index.html",
         defaults={"from_date":(date.today()-timedelta(days=365)).isoformat(),"till_date":date.today().isoformat()},
-        strategies=STRATEGY_CATALOG,security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
+        strategies=_enriched_strategy_catalog(),security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
         realtime_config=realtime_config())
 
 @app.get("/api/securities")
@@ -335,7 +342,7 @@ def security_info(ticker):
     return jsonify(get_instrument_info(ticker.strip().upper(),board))
 
 @app.get("/api/strategies")
-def strategies(): return jsonify(STRATEGY_CATALOG)
+def strategies(): return jsonify(_enriched_strategy_catalog())
 
 @app.get("/api/files")
 def files():
@@ -458,6 +465,45 @@ def _run_accessible(run:dict,user_id:str|None="__unset__")->bool:
     owner=run.get("user_id")
     return owner is None or owner==user_id
 
+def _clean_strategy_parameters(strategy_id:str,raw:dict)->tuple[dict,str|None]:
+    """Coerces a raw parameters dict to the types declared in that strategy's
+    param schema, drops unknown keys, and rejects values that don't fit -
+    so the backtest engine never receives NaN/wrong-typed values a UI form
+    slipped through, regardless of which endpoint the save came through."""
+    schema={f["key"]:f for f in full_schema(strategy_id)}
+    cleaned={}
+    for key,val in (raw or {}).items():
+        field=schema.get(key)
+        if not field:continue
+        t=field["type"]
+        try:
+            if t in ("number","slider"):cleaned[key]=float(val)
+            elif t=="checkbox":cleaned[key]=bool(val)
+            elif t=="select":
+                allowed={o["value"] for o in field.get("options",[])}
+                if val not in allowed:return {},f"Недопустимое значение параметра «{key}»"
+                cleaned[key]=val
+            else:cleaned[key]=val
+        except (TypeError,ValueError):
+            return {},f"Некорректное значение параметра «{key}»"
+    return cleaned,None
+
+def _validate_and_clean_ticker_strategies(ts)->tuple[dict|None,str|None]:
+    """Validates ticker_strategies (see portfolio_store.py schema v3+) and
+    cleans each assignment's `parameters` in place via _clean_strategy_parameters,
+    so saved portfolios never carry garbage the backtest engine would choke on."""
+    if ts is None:return None,None
+    if not isinstance(ts,dict):return None,"Некорректный формат назначения стратегий"
+    for ticker,assignments in ts.items():
+        if not isinstance(assignments,list):return None,f"Стратегии {ticker} должны быть списком"
+        for a in assignments:
+            sid=a.get("strategy_id") if isinstance(a,dict) else None
+            if not sid or sid not in STRATEGY_CATALOG:return None,f"Неизвестная стратегия «{sid}» у {ticker}"
+            cleaned,err=_clean_strategy_parameters(sid,a.get("parameters") or {})
+            if err:return None,f"{err} ({sid} у {ticker})"
+            a["parameters"]=cleaned
+    return ts,None
+
 def _validate_portfolio_payload(payload:dict)->str|None:
     """Returns an error message, or None if the payload is acceptable."""
     instruments=payload.get("instruments")
@@ -467,14 +513,10 @@ def _validate_portfolio_payload(payload:dict)->str|None:
             if not isinstance(inst,dict) or not inst.get("ticker") or not inst.get("file"):
                 return "У каждого инструмента должны быть тикер и файл данных"
             if int(inst.get("lot_count") or 0)<0:return f"Количество лотов {inst['ticker']} не может быть отрицательным"
-    ts=payload.get("ticker_strategies")
-    if ts is not None:
-        if not isinstance(ts,dict):return "Некорректный формат назначения стратегий"
-        for ticker,assignments in ts.items():
-            if not isinstance(assignments,list):return f"Стратегии {ticker} должны быть списком"
-            for a in assignments:
-                sid=a.get("strategy_id") if isinstance(a,dict) else None
-                if sid and sid not in STRATEGY_CATALOG:return f"Неизвестная стратегия «{sid}» у {ticker}"
+    if "ticker_strategies" in payload:
+        cleaned,err=_validate_and_clean_ticker_strategies(payload.get("ticker_strategies"))
+        if err:return err
+        payload["ticker_strategies"]=cleaned
     return None
 
 @app.put("/api/portfolios/<portfolio_id>")
@@ -606,9 +648,32 @@ def portfolio_set_strategies(portfolio_id):
     existing=PORTFOLIOS.get(portfolio_id)
     if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
-    portfolio=PORTFOLIOS.set_ticker_strategies(portfolio_id,p.get("default_strategy_id"),p.get("ticker_strategies"))
+    cleaned,err=_validate_and_clean_ticker_strategies(p.get("ticker_strategies"))
+    if err:return jsonify({"error":err}),400
+    portfolio=PORTFOLIOS.set_ticker_strategies(portfolio_id,p.get("default_strategy_id"),cleaned)
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
+
+@app.get("/api/strategy-presets/<strategy_id>")
+def get_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    preset=spdb.get_preset(_effective_user_id(),strategy_id)
+    return jsonify(preset or {"strategy_id":strategy_id,"parameters":None,"updated_at":None})
+
+@app.put("/api/strategy-presets/<strategy_id>")
+def put_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    p=request.get_json(force=True) or {}
+    if not isinstance(p.get("parameters"),dict):return jsonify({"error":"parameters должен быть объектом"}),400
+    cleaned,err=_clean_strategy_parameters(strategy_id,p["parameters"])
+    if err:return jsonify({"error":err}),400
+    return jsonify(spdb.save_preset(_effective_user_id(),strategy_id,cleaned))
+
+@app.delete("/api/strategy-presets/<strategy_id>")
+def delete_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    spdb.delete_preset(_effective_user_id(),strategy_id)
+    return jsonify({"ok":True})
 
 
 # ------------------------------------------------------- portfolio build --

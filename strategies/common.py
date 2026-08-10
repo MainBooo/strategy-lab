@@ -36,6 +36,73 @@ def add_atr(df: pd.DataFrame, period: int=14) -> pd.DataFrame:
     out["atr"]=tr.rolling(period,min_periods=period).mean(); return out
 
 
+def universal_execution_params(raw: dict) -> dict:
+    """Direction/volume/trailing-stop/max-holding knobs shared by every strategy.
+
+    Defaults reproduce the old, unfiltered behaviour exactly (both directions,
+    no volume filter, no trailing stop, no forced time exit) so existing saved
+    ticker_strategies configs and historical runs are unaffected.
+    """
+    return {
+        "direction": str(raw.get("direction", "both") or "both"),
+        "volume_filter": bool(raw.get("volume_filter", False)),
+        "volume_multiplier": float(raw.get("volume_multiplier", 1.5)),
+        "trailing_stop_atr": float(raw.get("trailing_stop_atr", 0) or 0),
+        "max_holding_bars": int(raw.get("max_holding_bars", 0) or 0),
+    }
+
+
+def filter_signals_by_direction(signals: list[dict], direction: str) -> list[dict]:
+    if direction not in ("long", "short"):
+        return signals
+    return [s for s in signals if s.get("side") == direction]
+
+
+def passes_volume_filter(df: pd.DataFrame, i: int, multiplier: float, window: int = 20) -> bool:
+    if "volume" not in df.columns:
+        return True
+    avg = df["volume"].iloc[max(0, i - window):i].mean()
+    if not np.isfinite(avg) or avg <= 0:
+        return True
+    return float(df.at[i, "volume"]) >= avg * multiplier
+
+
+def simulate_exit(df: pd.DataFrame, entry_i: int, side: str, stop: float, take: float, *,
+                   trailing_stop_atr: float = 0, max_holding_bars: int = 0,
+                   atr_col: str = "atr") -> tuple[int, float, str]:
+    """Walk bars forward from entry_i, applying an optional ATR trailing stop
+    and an optional forced time exit, on top of the plain stop/take check
+    shared by every strategy's exit loop. Stop is checked before take on a
+    bar where both are touched (conservative assumption, unchanged)."""
+    exit_i = len(df) - 1
+    exit_price = float(df.at[exit_i, "close"])
+    reason = "end_of_period"
+    trail_extreme = None
+    for k in range(entry_i, len(df)):
+        high, low = float(df.at[k, "high"]), float(df.at[k, "low"])
+        if trailing_stop_atr and atr_col in df.columns:
+            atr_k = float(df.at[k, atr_col])
+            if np.isfinite(atr_k) and atr_k > 0:
+                if side == "long":
+                    trail_extreme = high if trail_extreme is None else max(trail_extreme, high)
+                    stop = max(stop, trail_extreme - trailing_stop_atr * atr_k)
+                else:
+                    trail_extreme = low if trail_extreme is None else min(trail_extreme, low)
+                    stop = min(stop, trail_extreme + trailing_stop_atr * atr_k)
+        hit_stop = low <= stop if side == "long" else high >= stop
+        hit_take = high >= take if side == "long" else low <= take
+        if hit_stop:
+            exit_i, exit_price, reason = k, stop, "stop"
+            break
+        if hit_take:
+            exit_i, exit_price, reason = k, take, "take"
+            break
+        if max_holding_bars and (k - entry_i + 1) >= max_holding_bars:
+            exit_i, exit_price, reason = k, float(df.at[k, "close"]), "max_holding"
+            break
+    return exit_i, exit_price, reason
+
+
 def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
     params=params or {}
     starting_capital=float(params.get("starting_capital",1_000_000))

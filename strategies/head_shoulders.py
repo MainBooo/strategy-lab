@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategies.common import COMMISSION_SIDE, load_candles, save_run
+from strategies.common import (
+    COMMISSION_SIDE, add_atr, load_candles, save_run,
+    passes_volume_filter, simulate_exit, universal_execution_params,
+)
 
 
 def _pivots(df: pd.DataFrame, span: int):
@@ -45,9 +48,10 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
         "stop_pct": float(raw_params.get("stop_pct", 0.02)),
         "take_pct": float(raw_params.get("take_pct", 0.05)),
         "max_breakout_bars": int(raw_params.get("max_breakout_bars", 30)),
+        **universal_execution_params(raw_params),
     }
 
-    df = load_candles(source, raw_params.get("date_from"), raw_params.get("date_till"))
+    df = add_atr(load_candles(source, raw_params.get("date_from"), raw_params.get("date_till")), 14)
     pivots = _pivots(df, params["pivot_span"])
     signals = []
 
@@ -74,6 +78,8 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
 
         if not valid:
             continue
+        if params["direction"] in ("long", "short") and side != params["direction"]:
+            continue
 
         for k in range(max(e["confirm_i"], e["i"]+1), min(len(df)-2, e["i"]+params["max_breakout_bars"])+1):
             neck = _line(b["i"],b["price"],d["i"],d["price"],k)
@@ -85,6 +91,8 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
                 else df.at[k-1,"close"] <= prev and df.at[k,"close"] > neck
             )
             if crossed:
+                if params["volume_filter"] and not passes_volume_filter(df, k, params["volume_multiplier"]):
+                    break
                 signals.append((k+1, side, df.at[k,"begin"]))
                 break
 
@@ -100,20 +108,10 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
         else:
             stop, take = entry*(1+params["stop_pct"]), entry*(1-params["take_pct"])
 
-        exit_i = len(df)-1
-        exit_price = float(df.at[exit_i,"close"])
-        reason = "end_of_period"
-
-        for k in range(entry_i, len(df)):
-            high, low = float(df.at[k,"high"]), float(df.at[k,"low"])
-            hit_stop = low <= stop if side == "long" else high >= stop
-            hit_take = high >= take if side == "long" else low <= take
-            if hit_stop:
-                exit_i, exit_price, reason = k, stop, "stop"
-                break
-            if hit_take:
-                exit_i, exit_price, reason = k, take, "take"
-                break
+        exit_i, exit_price, reason = simulate_exit(
+            df, entry_i, side, stop, take,
+            trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"],
+        )
 
         gross = exit_price/entry-1 if side == "long" else entry/exit_price-1
         trades.append({

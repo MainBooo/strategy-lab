@@ -149,7 +149,7 @@
 </section>
 
 <section id="tab-strategies" class="tab-page hidden">
-  <article class="card"><div class="card-head"><div><span class="step">Шаг 2</span><h2>Библиотека стратегий</h2></div><div class="message" id="strategiesContext"></div></div><div id="strategyCards" class="strategy-grid"></div></article>
+  <article class="card"><div class="card-head"><div><span class="step">Шаг 2</span><h2>Библиотека стратегий</h2></div></div><p class="lead">Выберите стратегию, изучите принцип её работы и настройте параметры. Привязка стратегии к конкретным инструментам портфеля происходит на вкладке «Бэктест».</p><div id="strategyCards" class="strategy-grid"></div></article>
 </section>
 
 <section id="tab-backtest" class="tab-page hidden">
@@ -162,10 +162,9 @@
   <div id="backtestBody" class="hidden">
     <article class="card">
       <div class="card-head"><div><span class="step">Шаг 3</span><h2>Настройка бэктеста</h2></div></div>
-      <div class="form-grid three">
+      <div class="form-grid">
         <label>Портфель <select id="backtestPortfolioSelect"></select></label>
         <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
-        <label>&nbsp;<button class="secondary" id="applyStrategyPrompt" style="width:100%">Настроить стратегии портфеля</button></label>
       </div>
 
       <div class="ticker-select-head">
@@ -178,6 +177,12 @@
         </div>
       </div>
       <div id="backtestTickerChips" class="selected-tickers"></div>
+
+      <div class="strategy-assignment-head">
+        <strong>Стратегии по инструментам</strong>
+        <span class="muted-note">Можно назначить несколько стратегий одному инструменту и разные стратегии разным инструментам.</span>
+      </div>
+      <div id="backtestStrategyAssignments" class="strategy-assignment-list"></div>
 
       <div class="combo-estimate" id="comboEstimate"></div>
 

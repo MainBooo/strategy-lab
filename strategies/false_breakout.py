@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategies.common import COMMISSION_SIDE, add_atr, load_candles, save_run
+from strategies.common import (
+    COMMISSION_SIDE, add_atr, load_candles, save_run,
+    passes_volume_filter, simulate_exit, universal_execution_params,
+)
 
 
 def _touch_indices(values: pd.Series, level: float, tolerance: float, separation: int) -> list[int]:
@@ -37,6 +40,7 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
         "max_level_age": int(raw_params.get("max_level_age", 150)),
         "first_break_only": bool(raw_params.get("first_break_only", True)),
         "atr_filter": bool(raw_params.get("atr_filter", False)),
+        **universal_execution_params(raw_params),
     }
 
     df = add_atr(load_candles(source, raw_params.get("date_from"), raw_params.get("date_till")), params["atr_period"])
@@ -116,6 +120,14 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
             continue
 
         side, level, return_i, extreme, depth = signal
+
+        if params["direction"] in ("long", "short") and side != params["direction"]:
+            i += 1
+            continue
+        if params["volume_filter"] and not passes_volume_filter(df, i, params["volume_multiplier"]):
+            i += 1
+            continue
+
         confirm_i = return_i
 
         if params["confirmation"]:
@@ -151,23 +163,10 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
             i += 1
             continue
 
-        exit_i = len(df) - 1
-        exit_price = float(df.at[exit_i, "close"])
-        reason = "end_of_period"
-
-        for k in range(entry_i, len(df)):
-            high, low = float(df.at[k, "high"]), float(df.at[k, "low"])
-            if side == "long":
-                hit_stop, hit_take = low <= stop, high >= take
-            else:
-                hit_stop, hit_take = high >= stop, low <= take
-
-            if hit_stop:
-                exit_i, exit_price, reason = k, stop, "stop"
-                break
-            if hit_take:
-                exit_i, exit_price, reason = k, take, "take"
-                break
+        exit_i, exit_price, reason = simulate_exit(
+            df, entry_i, side, stop, take,
+            trailing_stop_atr=params["trailing_stop_atr"], max_holding_bars=params["max_holding_bars"],
+        )
 
         gross = exit_price / entry - 1 if side == "long" else entry / exit_price - 1
         net = gross - 2 * COMMISSION_SIDE
