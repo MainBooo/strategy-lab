@@ -713,32 +713,46 @@ async function saveEditor(portfolioId){
 }
 
 // ---------------------------------------------------------------- strategies
-const PRESET_RU_LABEL={standard:"Стандартный",conservative:"Консервативный",aggressive:"Агрессивный",custom:"Свои настройки"};
+const PRESET_RU_LABEL={standard:"Стандартный",conservative:"Консервативный",aggressive:"Агрессивный",custom:"Пользовательские настройки"};
+
+// Mirrors strategies/param_schema.py's SECTION_LABELS/SECTION_ORDER - keep the
+// keys in sync with the "section" tag on every schema field; labels are UI
+// text only, no need to round-trip them through the API.
+const PARAM_SECTION_ORDER=["basic","entry","filters","exit","risk"];
+const PARAM_SECTION_LABELS={basic:"Основные параметры",entry:"Условия входа",filters:"Фильтры",exit:"Условия выхода",risk:"Управление риском"};
 
 // ---- shared param-form building blocks (used by the Strategy Library card
 // accordion below, and by the per-ticker strategy assignment panels on the
 // Backtest tab) - each caller owns its own state object and persistence,
 // this just turns a strategy's schema + current values into markup/DOM events.
+function renderParamField(f,val,idPrefix){
+  const tip=f.tooltip?`<span class="tip" data-tip="${escapeHtml(f.tooltip)}">?</span>`:"";
+  const unit=f.unit?`<small class="param-unit">${escapeHtml(f.unit)}</small>`:"";
+  if(f.type==="checkbox"){
+    return `<div class="param-field param-field-checkbox">
+      <label class="toggle"><input type="checkbox" data-param-field="${f.key}" ${val?"checked":""}><span>${escapeHtml(f.label)} — ${val?"Вкл":"Выкл"}</span></label>${tip}
+    </div>`;
+  }
+  let input;
+  if(f.type==="select"){
+    input=`<select data-param-field="${f.key}">${(f.options||[]).map(o=>`<option value="${o.value}" ${o.value===val?"selected":""}>${escapeHtml(o.label)}</option>`).join("")}</select>`;
+  }else if(f.type==="slider"){
+    input=`<span class="range-inline param-slider"><input type="range" data-param-field="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${val}"><output id="${idPrefix}-out-${f.key}">${val}</output></span>`;
+  }else{
+    input=`<input type="number" data-param-field="${f.key}" min="${f.min ?? ""}" max="${f.max ?? ""}" step="${f.step ?? 1}" value="${val}">`;
+  }
+  return `<div class="param-field"><span class="param-field-label">${escapeHtml(f.label)}${tip}${unit}</span>${input}</div>`;
+}
 function paramFieldsHTML(strategyId,values,idPrefix){
   const schema=(window.STRATEGIES[strategyId]||{}).params||[];
-  return schema.map(f=>{
-    const val=values[f.key];
-    const tip=f.tooltip?`<span class="tip" data-tip="${escapeHtml(f.tooltip)}">?</span>`:"";
-    const unit=f.unit?`<small class="param-unit">${escapeHtml(f.unit)}</small>`:"";
-    if(f.type==="checkbox"){
-      return `<div class="param-field param-field-checkbox">
-        <label class="toggle"><input type="checkbox" data-param-field="${f.key}" ${val?"checked":""}><span>${escapeHtml(f.label)} — ${val?"Вкл":"Выкл"}</span></label>${tip}
-      </div>`;
-    }
-    let input;
-    if(f.type==="select"){
-      input=`<select data-param-field="${f.key}">${(f.options||[]).map(o=>`<option value="${o.value}" ${o.value===val?"selected":""}>${escapeHtml(o.label)}</option>`).join("")}</select>`;
-    }else if(f.type==="slider"){
-      input=`<span class="range-inline param-slider"><input type="range" data-param-field="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${val}"><output id="${idPrefix}-out-${f.key}">${val}</output></span>`;
-    }else{
-      input=`<input type="number" data-param-field="${f.key}" min="${f.min ?? ""}" max="${f.max ?? ""}" step="${f.step ?? 1}" value="${val}">`;
-    }
-    return `<div class="param-field"><span class="param-field-label">${escapeHtml(f.label)}${tip}${unit}</span>${input}</div>`;
+  const bySection={};
+  schema.forEach(f=>{const s=f.section||"basic";(bySection[s]=bySection[s]||[]).push(f)});
+  return PARAM_SECTION_ORDER.filter(s=>bySection[s]&&bySection[s].length).map(s=>{
+    const fields=bySection[s];
+    return `<details class="param-section" open>
+      <summary class="param-section-title"><span>${PARAM_SECTION_LABELS[s]}</span><span class="param-section-count">${fields.length}</span></summary>
+      <div class="param-grid">${fields.map(f=>renderParamField(f,values[f.key],idPrefix)).join("")}</div>
+    </details>`;
   }).join("");
 }
 function presetSwitcherHTML(presetName,hasUserPreset){
@@ -784,7 +798,7 @@ function fillStrategies(){
 function renderStrategyCard(strategyId,meta){
   const expanded=expandedStrategyCards.has(strategyId);
   const st=ensureStrategyFormState(strategyId);
-  const presetLabel=PRESET_RU_LABEL[st.presetName]||"Свои настройки";
+  const presetLabel=PRESET_RU_LABEL[st.presetName]||"Пользовательские настройки";
   return `<article class="strategy-card accordion ${meta.primary?"primary-strategy":""} ${expanded?"open":""}" data-strategy-card="${strategyId}">
     <div class="accordion-header" data-toggle-strategy="${strategyId}" role="button" tabindex="0" aria-expanded="${expanded}">
       <div class="strategy-card-main">
@@ -811,8 +825,11 @@ function renderStrategyParamsForm(strategyId){
   const userPreset=strategyUserPresets[strategyId];
   const idPrefix=`lib-${strategyId}`;
   return `
-    ${presetSwitcherHTML(st.presetName,!!userPreset)}
-    <div class="param-grid" data-param-grid="${strategyId}">${paramFieldsHTML(strategyId,st.values,idPrefix)}</div>
+    <div class="param-section param-section-presets">
+      <div class="param-section-title param-section-title-static"><span>Пресеты</span></div>
+      ${presetSwitcherHTML(st.presetName,!!userPreset)}
+    </div>
+    ${paramFieldsHTML(strategyId,st.values,idPrefix)}
     <div class="param-form-footer">
       <button type="button" class="secondary" data-param-reset="${strategyId}">Сбросить по умолчанию</button>
       <button type="button" class="primary" data-param-save="${strategyId}">Сохранить настройки</button>
@@ -885,9 +902,9 @@ function bindStrategyCardEvents(){
     if(e.target.closest("[data-no-toggle]"))return;
     toggleStrategyExpand(el.dataset.toggleStrategy);
   });
-  document.querySelectorAll("[data-param-grid],.param-preset-tabs").forEach(el=>{
-    const strategyId=el.dataset.paramGrid||el.closest("[data-strategy-card]")?.dataset.strategyCard;
-    if(strategyId)bindParamFieldEvents(el,`lib-${strategyId}`,(key,val)=>commitLibraryFieldChange(strategyId,key,val));
+  document.querySelectorAll("[data-strategy-card] .accordion-body").forEach(body=>{
+    const strategyId=body.closest("[data-strategy-card]")?.dataset.strategyCard;
+    if(strategyId)bindParamFieldEvents(body,`lib-${strategyId}`,(key,val)=>commitLibraryFieldChange(strategyId,key,val));
   });
   document.querySelectorAll("[data-param-reset]").forEach(b=>b.onclick=e=>{e.stopPropagation();applyPresetToLibrary(b.dataset.paramReset,"standard")});
   document.querySelectorAll("[data-param-save]").forEach(b=>b.onclick=e=>{e.stopPropagation();saveLibraryPreset(b.dataset.paramSave)});
@@ -1033,8 +1050,11 @@ function renderStrategyParamsFormFor(strategyId,parameters,ticker,idx){
   const presetName=assignmentPresetKey(strategyId,parameters);
   const hasUserPreset=!!strategyUserPresets[strategyId];
   const idPrefix=`bt-${ticker}-${idx}`;
-  return `${presetSwitcherHTML(presetName,hasUserPreset)}
-    <div class="param-grid">${paramFieldsHTML(strategyId,values,idPrefix)}</div>`;
+  return `<div class="param-section param-section-presets">
+      <div class="param-section-title param-section-title-static"><span>Пресеты</span></div>
+      ${presetSwitcherHTML(presetName,hasUserPreset)}
+    </div>
+    ${paramFieldsHTML(strategyId,values,idPrefix)}`;
 }
 
 function commitAssignmentFieldChange(ticker,idx,key,value){
