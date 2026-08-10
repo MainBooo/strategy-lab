@@ -27,6 +27,25 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+
+  /* Motion & elevation layer - every animated rule in this file reaches for
+     these instead of inlining its own numbers, so the whole app moves on
+     one consistent clock. Durations are tuned by what's moving: -fast for
+     hover/press feedback under the pointer, -base for content appearing,
+     -slow for anything spatial (panels, drawers). ease-spring is reserved
+     for small, single-element moves (indicator, toast) - using it on large
+     surfaces reads as wobbly rather than lively. */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 340ms;
+  --dur-slower: 480ms;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 10px 28px rgba(0,0,0,.34);
+  --shadow-3: 0 24px 64px rgba(0,0,0,.42);
+  --shadow-glow: 0 0 0 1px rgba(124,140,255,.45), 0 10px 32px rgba(124,140,255,.24);
 }
 
 * { box-sizing: border-box; }
@@ -334,14 +353,137 @@ pre {
 .trade-viewer:not(.hidden) .trade-viewer-backdrop { animation: fade-in .2s ease; }
 .build-success:not(.hidden) { animation: fade-scale-in .25s ease; }
 
+/* ============================================================
+   DESIGN SYSTEM: sliding tab indicator, hover-lift, toasts,
+   skeleton loading, staggered list entry, count-up numbers.
+   Everything here is transform/opacity only (no width/height/
+   top/left animation on real content) so it stays smooth on
+   the same low-power hardware the trading terminal already has
+   to run well on. Wired from app.js: positionTabIndicator(),
+   showToast(), animateNumber() - see comments near those. */
+
+#appPrimaryTabs { position: relative; }
+.tab-indicator {
+  position: absolute; top: 0; left: 0; height: 100%; z-index: 0;
+  border-radius: 12px; pointer-events: none;
+  background: linear-gradient(135deg, var(--accent), #5b68e6);
+  box-shadow: 0 6px 18px rgba(124,140,255,.28);
+  transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
+}
+.tab-indicator.no-anim { transition: none; }
+/* The indicator sits behind and reuses the exact fill .tab.active already
+   painted (see .tabs rules above) - once JS has a real measurement it hides
+   the per-button fill so only the sliding version shows; until then (no-JS,
+   or the one frame before first layout) the button's own active style is
+   the visible fallback, so nothing ever looks unstyled. */
+#appPrimaryTabs.indicator-ready .tab.active { background: transparent; box-shadow: none; }
+#appPrimaryTabs .tab { position: relative; z-index: 1; }
+
+/* ---------------------------------------------------------- hover-lift -- */
+.card, .strategy-card, .metric, .security-row, .portfolio-row, .portfolio-card,
+.status, .ticker-chip {
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out);
+}
+.strategy-card { cursor: default; }
+.strategy-card:hover { transform: translateY(-3px); border-color: rgba(124,140,255,.4); box-shadow: var(--shadow-2); }
+.strategy-card.primary-strategy:hover { border-color: rgba(77,212,172,.75); }
+.metric:hover { transform: translateY(-2px); border-color: rgba(124,140,255,.3); }
+.security-row:hover, .portfolio-row:hover { border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.05); }
+.security-row.selected-row:hover { border-color: rgba(77,212,172,.75); }
+
+/* ---------------------------------------------------------- button feel -- */
+button, .secondary, .primary {
+  position: relative; overflow: hidden;
+}
+.primary:not(:disabled):hover { box-shadow: 0 8px 24px rgba(124,140,255,.35); transform: translateY(-1px); }
+.secondary:hover { border-color: rgba(124,140,255,.5); background: rgba(124,140,255,.08); }
+button:active:not(:disabled), .secondary:active, .primary:active { transform: scale(.97) translateY(0); }
+
+/* ------------------------------------------------------------- toasts -- */
+.toast-stack {
+  position: fixed; right: 18px; bottom: 18px; z-index: 200;
+  display: flex; flex-direction: column-reverse; gap: 10px;
+  max-width: min(360px, calc(100vw - 36px)); pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 13px 15px; border-radius: 13px;
+  background: var(--surface-raised); border: 1px solid var(--border);
+  box-shadow: var(--shadow-3);
+  font-size: 13px; line-height: 1.45; color: var(--text);
+  animation: toast-in var(--dur-slow) var(--ease-spring);
+}
+.toast.leaving { animation: toast-out var(--dur-base) var(--ease-in-out) forwards; }
+.toast-icon { flex: none; width: 20px; height: 20px; margin-top: 1px; }
+.toast.success .toast-icon { color: var(--success); }
+.toast.error .toast-icon { color: var(--danger); }
+.toast.info .toast-icon { color: var(--accent); }
+.toast-body { flex: 1; min-width: 0; }
+.toast-close {
+  flex: none; background: none; border: none; color: var(--text-faint); cursor: pointer;
+  padding: 2px; margin: -2px -2px -2px 0; border-radius: 6px; line-height: 0;
+}
+.toast-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(24px); } }
+
+/* --------------------------------------------------------- skeletons -- */
+.skeleton-row {
+  height: 66px; border-radius: 12px; border: 1px solid var(--line);
+  background: linear-gradient(100deg, rgba(255,255,255,.03) 40%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.03) 60%);
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
+
+/* ----------------------------------------------- staggered list entry -- */
+/* Pure CSS, no JS wiring needed: these three containers already get fresh
+   innerHTML on every render (renderCatalog/renderStrategiesContext/
+   loadHistory in app.js), so nth-child alone is enough to restagger on
+   every re-render automatically. Capped at 14 - lists longer than that
+   would make the tail feel sluggish to appear, so items past it show
+   immediately (no rule = no animation-delay = animation still plays,
+   just without the stagger past this point isn't quite right either;
+   see the catch-all rule below that skips animation entirely past 14). */
+#securityList > *, #strategyCards > *, #historyTable tbody tr, #savedPortfolios > * {
+  animation: fade-rise var(--dur-slow) var(--ease-out) both;
+}
+#securityList > *:nth-child(n+15), #strategyCards > *:nth-child(n+15),
+#historyTable tbody tr:nth-child(n+15), #savedPortfolios > *:nth-child(n+15) { animation: none; }
+#securityList > :nth-child(1), #strategyCards > :nth-child(1), #historyTable tbody tr:nth-child(1), #savedPortfolios > :nth-child(1) { animation-delay: 0ms; }
+#securityList > :nth-child(2), #strategyCards > :nth-child(2), #historyTable tbody tr:nth-child(2), #savedPortfolios > :nth-child(2) { animation-delay: 20ms; }
+#securityList > :nth-child(3), #strategyCards > :nth-child(3), #historyTable tbody tr:nth-child(3), #savedPortfolios > :nth-child(3) { animation-delay: 40ms; }
+#securityList > :nth-child(4), #strategyCards > :nth-child(4), #historyTable tbody tr:nth-child(4), #savedPortfolios > :nth-child(4) { animation-delay: 60ms; }
+#securityList > :nth-child(5), #strategyCards > :nth-child(5), #historyTable tbody tr:nth-child(5), #savedPortfolios > :nth-child(5) { animation-delay: 80ms; }
+#securityList > :nth-child(6), #strategyCards > :nth-child(6), #historyTable tbody tr:nth-child(6), #savedPortfolios > :nth-child(6) { animation-delay: 100ms; }
+#securityList > :nth-child(7), #strategyCards > :nth-child(7), #historyTable tbody tr:nth-child(7), #savedPortfolios > :nth-child(7) { animation-delay: 120ms; }
+#securityList > :nth-child(8), #strategyCards > :nth-child(8), #historyTable tbody tr:nth-child(8), #savedPortfolios > :nth-child(8) { animation-delay: 140ms; }
+#securityList > :nth-child(9), #strategyCards > :nth-child(9), #historyTable tbody tr:nth-child(9), #savedPortfolios > :nth-child(9) { animation-delay: 160ms; }
+#securityList > :nth-child(10), #strategyCards > :nth-child(10), #historyTable tbody tr:nth-child(10), #savedPortfolios > :nth-child(10) { animation-delay: 180ms; }
+#securityList > :nth-child(11), #strategyCards > :nth-child(11), #historyTable tbody tr:nth-child(11), #savedPortfolios > :nth-child(11) { animation-delay: 200ms; }
+#securityList > :nth-child(12), #strategyCards > :nth-child(12), #historyTable tbody tr:nth-child(12), #savedPortfolios > :nth-child(12) { animation-delay: 220ms; }
+#securityList > :nth-child(13), #strategyCards > :nth-child(13), #historyTable tbody tr:nth-child(13), #savedPortfolios > :nth-child(13) { animation-delay: 240ms; }
+#securityList > :nth-child(14), #strategyCards > :nth-child(14), #historyTable tbody tr:nth-child(14), #savedPortfolios > :nth-child(14) { animation-delay: 260ms; }
+
+/* ------------------------------------------------------- count-up value -- */
+.count-up { font-variant-numeric: tabular-nums; }
+
 @media (prefers-reduced-motion: reduce) {
   .tab-page:not(.hidden),
   .account-dropdown:not(.hidden),
   .trade-viewer:not(.hidden) .trade-viewer-panel,
   .trade-viewer:not(.hidden) .trade-viewer-backdrop,
-  .build-success:not(.hidden) { animation: none; }
-  button, .secondary, .primary { transition: none; }
+  .build-success:not(.hidden),
+  .toast, .skeleton-row,
+  #securityList > *, #strategyCards > *, #historyTable tbody tr, #savedPortfolios > * { animation: none; }
+  button, .secondary, .primary,
+  .card, .strategy-card, .metric, .security-row, .portfolio-row, .portfolio-card,
+  .tab-indicator { transition: none; }
+  .strategy-card:hover, .metric:hover, .primary:not(:disabled):hover { transform: none; }
 }
+
 
 @media (max-width: 820px) {
   .hero { flex-direction: column; align-items: flex-start; gap: 12px; }

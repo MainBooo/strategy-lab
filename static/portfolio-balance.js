@@ -16,6 +16,7 @@
   let expanded = false;
   let lastData = null;
   let lastRequestedId = null;
+  let animatedFromValue = null; // last rendered final_capital, per portfolio id - reset on portfolio switch so a new one never counts up from a stale figure
 
   function activePortfolioId() {
     try {
@@ -65,7 +66,7 @@
     el.innerHTML = `
       <button class="pb-summary" id="pbToggle" aria-expanded="${expanded}" title="Показать детали">
         <div class="pb-label">${escapeHtml(lastData.portfolio_name || "Портфель")}</div>
-        <div class="pb-value">${fmtMoney(lastData.final_capital)}</div>
+        <div class="pb-value count-up" id="pbValue">${fmtMoney(lastData.final_capital)}</div>
         <div class="pb-change ${pnlClass}">${sign}${fmtMoney(Math.abs(profit))} · ${sign}${Math.abs(pct).toFixed(2)}%</div>
       </button>
       <div class="pb-detail ${expanded ? "" : "hidden"}" id="pbDetail">
@@ -80,6 +81,14 @@
     `;
     const toggle = document.getElementById("pbToggle");
     if (toggle) toggle.onclick = () => { expanded = !expanded; render(); };
+    // Count up from whatever was last shown for this portfolio (0 the first
+    // time it's ever displayed) rather than re-animating on every 60s poll
+    // when the figure hasn't actually moved.
+    const from = animatedFromValue == null ? 0 : animatedFromValue;
+    if (from !== lastData.final_capital && window.animateNumber) {
+      window.animateNumber(document.getElementById("pbValue"), from, lastData.final_capital, fmtMoney);
+    }
+    animatedFromValue = lastData.final_capital;
   }
 
   async function refresh() {
@@ -89,6 +98,7 @@
       render();
       return;
     }
+    if (id !== lastRequestedId) animatedFromValue = null; // switching portfolios - never count up from an unrelated one's balance
     lastRequestedId = id;
     try {
       const data = await fetch(`/api/portfolios/${id}/summary`).then((r) => r.json());

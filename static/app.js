@@ -39,7 +39,75 @@ let tvRunId=null,tvPage=1,tvPageSize=25;
 
 function setStatus(t,c=""){$("status").textContent=t;$("status").className=`status ${c}`}
 
+// ----------------------------------------------------------------- toast --
+// Transient, dismissable confirmations for actions the user just took
+// (backtest finished, strategy applied, portfolio saved) - separate from
+// .status, which stays as the persistent "current state of the page" chip
+// in the header. Container is created lazily so no template edit was
+// needed anywhere a toast might fire from.
+const TOAST_ICONS={
+  success:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>',
+  error:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>',
+  info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>'
+};
+function toastStack(){
+  let el=$("toastStack");
+  if(!el){el=document.createElement("div");el.id="toastStack";el.className="toast-stack";document.body.appendChild(el);}
+  return el;
+}
+function showToast(message,type="info",timeout=4200){
+  const stack=toastStack();
+  const el=document.createElement("div");
+  el.className=`toast ${type}`;
+  el.innerHTML=`<span class="toast-icon">${TOAST_ICONS[type]||TOAST_ICONS.info}</span><span class="toast-body">${message}</span><button class="toast-close" aria-label="Закрыть" type="button"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`;
+  const remove=()=>{el.classList.add("leaving");el.addEventListener("animationend",()=>el.remove(),{once:true});};
+  el.querySelector(".toast-close").onclick=remove;
+  stack.appendChild(el);
+  if(timeout)setTimeout(remove,timeout);
+  return el;
+}
+
+// ------------------------------------------------------------ count-up --
+// Short-lived rAF loop, not CSS - the target values (portfolio balance,
+// backtest metrics) come from the server as final numbers with no
+// intermediate frames to animate through, so the counting itself has to be
+// synthesized. Skipped entirely under prefers-reduced-motion (jumps
+// straight to the end value, single paint).
+function animateNumber(el,from,to,fmt,duration=600){
+  if(!el)return;
+  if(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches){el.textContent=fmt(to);return;}
+  const start=performance.now();
+  const step=now=>{
+    const p=Math.min(1,(now-start)/duration);
+    const eased=1-Math.pow(1-p,3);
+    el.textContent=fmt(from+(to-from)*eased);
+    if(p<1)requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // ------------------------------------------------------------------ tabs --
+// Sliding pill behind the active desktop tab (styles.css ".tab-indicator").
+// Reads real layout (offsetLeft/offsetWidth) rather than hardcoding widths
+// because the labels are Cyrillic and render at different widths per tab.
+function positionTabIndicator(){
+  const nav=$("appPrimaryTabs");
+  if(!nav)return;
+  const active=nav.querySelector(".tab.active");
+  const indicator=nav.querySelector(".tab-indicator");
+  if(!active||!indicator)return;
+  indicator.style.width=active.offsetWidth+"px";
+  indicator.style.transform=`translateX(${active.offsetLeft}px)`;
+  nav.classList.add("indicator-ready");
+  // First positioning must be instant (no slide-in from x:0) - the
+  // "no-anim" class set in the template disables the transition for
+  // exactly one frame, then this removes it so every later move animates.
+  if(indicator.classList.contains("no-anim")){
+    requestAnimationFrame(()=>indicator.classList.remove("no-anim"));
+  }
+}
+window.addEventListener("resize",()=>positionTabIndicator());
+
 let _activeTabName=null;
 function activateTab(name){
   const leaving=_activeTabName;
@@ -48,6 +116,7 @@ function activateTab(name){
   document.querySelectorAll(".tab-page").forEach(x=>x.classList.add("hidden"));
   $("tab-"+name).classList.remove("hidden");
   localStorage.setItem("moexlab_active_tab",name);
+  positionTabIndicator();
   // The charts terminal is a full-bleed workspace (no room for the hero/
   // ticker-tape chrome the rest of the app uses) - see styles.css
   // "charts terminal full-bleed" section.
@@ -701,6 +770,7 @@ async function applyStrategyToActivePortfolio(strategyId){
   await fetch(`/api/portfolios/${activePortfolioId}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({default_strategy_id:strategyId})});
   await loadPortfolios();
   setStatus("Стратегия по умолчанию применена к портфелю","success");
+  showToast(`Стратегия «${window.STRATEGIES[strategyId]?.name||strategyId}» применена к портфелю`,"success");
   activateTab("backtest");
 }
 
@@ -851,12 +921,14 @@ function pollBacktestJob(jobId){
         if(job.status==="completed"||job.status==="completed_with_errors"){
           renderBacktestResult(job.result);
           setStatus(job.status==="completed"?"Бэктест завершён":"Бэктест завершён с ошибками по части комбинаций","success");
+          showToast(job.status==="completed"?"Бэктест завершён — результаты готовы":"Бэктест завершён с ошибками по части комбинаций",job.status==="completed"?"success":"info");
           await loadPortfolios();
           loadHistory(1);
           if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
         }else{
           $("backtestMessage").textContent=`${job.status==="canceled"?"Отменено":"Ошибка"}: ${job.error?.message||"неизвестная ошибка"}`;
           setStatus(job.status==="canceled"?"Бэктест отменён":"Ошибка бэктеста","error");
+          if(job.status!=="canceled")showToast(`Ошибка бэктеста: ${job.error?.message||"неизвестная ошибка"}`,"error");
         }
         return;
       }
