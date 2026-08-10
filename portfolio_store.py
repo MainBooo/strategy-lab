@@ -181,6 +181,22 @@ class PortfolioStore:
                 return p
         return None
 
+    def update_instrument_file(self, portfolio_id: str, ticker: str, filename: str) -> dict | None:
+        """Point one existing instrument at a freshly-downloaded data file,
+        leaving its lot_count/lot_size and every other field untouched -
+        unlike add_instruments, which replaces the whole instrument dict."""
+        items = self._read()
+        for p in items:
+            if p.get("id") == portfolio_id:
+                for inst in p.get("instruments", []):
+                    if str(inst.get("ticker")) == str(ticker):
+                        inst["file"] = filename
+                        p["updated_at"] = time.time()
+                        self._write(items)
+                        return p
+                return None
+        return None
+
     def remove_instruments(self, portfolio_id: str, tickers: list[str]) -> dict | None:
         items = self._read()
         remove_set = {str(t).upper() for t in tickers}

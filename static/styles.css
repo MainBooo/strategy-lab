@@ -806,6 +806,14 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 .lot-cell{display:flex;align-items:center;gap:4px;white-space:nowrap}
 .lot-cell input{width:52px;padding:6px;text-align:center}
 .lot-btn{width:24px;height:24px;padding:0;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-weight:900;line-height:1}
+@media(max-width:640px){
+  /* Price/lot-size/share-count are secondary on a phone - collapsing them
+     out lets ticker, lot count, value and allocation share fit without
+     horizontal scroll for the numbers that actually drive editing. */
+  .instrument-editor-table th:nth-child(3),.instrument-editor-table td:nth-child(3),
+  .instrument-editor-table th:nth-child(4),.instrument-editor-table td:nth-child(4),
+  .instrument-editor-table th:nth-child(6),.instrument-editor-table td:nth-child(6){display:none}
+}
 .strategy-chips-cell{min-width:200px}
 .strategy-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:rgba(124,140,255,.12);border:1px solid rgba(124,140,255,.35);color:#c8d0ff;font-size:11px;margin:2px 4px 2px 0}
 .strategy-chip span{color:var(--muted)}
@@ -830,6 +838,14 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 .build-success{position:relative}
 .combo-estimate{font-size:13px;color:var(--muted);margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(124,140,255,.05)}
 .combo-estimate strong{color:var(--text)}
+
+.data-gaps{margin:14px 0;padding:12px 14px;border:1px solid rgba(240,209,106,.35);border-radius:12px;background:rgba(240,209,106,.06);font-size:13px}
+.data-gaps>strong{display:block;color:#f0d16a;margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:.02em}
+.data-gap-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0}
+.data-gap-row+.data-gap-row{border-top:1px solid rgba(255,255,255,.06)}
+.data-gap-row span{color:var(--text)}
+.data-gap-row strong{color:#f0d16a}
+.data-gap-row button{width:auto;font-size:12px;padding:7px 12px;flex-shrink:0}
 
 /* ---------- History table ---------- */
 .history-actions{display:flex;gap:8px;flex-wrap:wrap;white-space:nowrap}

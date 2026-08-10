@@ -23,6 +23,8 @@ let buildJobId=null,buildPollTimer=null;
 let activePortfolioId=localStorage.getItem("moexlab_active_portfolio")||null;
 let btPortfolio=null;
 let btIncluded=new Set();
+let dataGaps=[];
+let dataGapLoading=new Set();
 let backtestJobId=null,backtestPollTimer=null;
 let lastBacktestResult=null;
 let byTickerSort={key:"pnl_rub",dir:-1};
@@ -395,17 +397,13 @@ function showBuildSuccess(job){
 function strategyAssignmentCount(p){
   return Object.values(p.ticker_strategies||{}).reduce((sum,list)=>sum+(list||[]).filter(a=>a.enabled!==false).length,0);
 }
-function strategySummaryLabel(p){
+function portfolioStrategyLine(p){
   const overrideTickers=Object.keys(p.ticker_strategies||{}).filter(t=>(p.ticker_strategies[t]||[]).some(a=>a.enabled!==false));
-  return overrideTickers.length?`Индивидуальные стратегии (${overrideTickers.length})`:"Одна стратегия для всех";
-}
-function dataReadinessLabel(p){
-  const items=p.instruments||[];
-  const ready=items.filter(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return !sec||sec.DATA_STATUS==="fresh"}).length;
-  if(!items.length)return{text:"Нет инструментов",cls:"status-none"};
-  if(ready===items.length)return{text:"Данные готовы",cls:"status-fresh"};
-  if(ready===0)return{text:"Данные отсутствуют",cls:"status-none"};
-  return{text:`Готово ${ready} из ${items.length}`,cls:"status-stale"};
+  if(!overrideTickers.length){
+    const name=(window.STRATEGIES[p.default_strategy_id]||{}).name||p.default_strategy_id||"—";
+    return `Стратегия: ${name}`;
+  }
+  return `Назначено стратегий: ${strategyAssignmentCount(p)}`;
 }
 function formatDate(ts){return ts?new Date(ts*1000).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric"}):"—"}
 
@@ -477,16 +475,16 @@ function renderPortfolioList(){
 
 function renderPortfolioCard(p){
   const expanded=expandedPortfolios.has(p.id);
-  const readiness=dataReadinessLabel(p);
   const dirty=editorDirty.has(p.id);
+  const instrumentCount=(p.instruments||[]).length;
   const lastResultText=p.last_backtest_summary?`${p.last_backtest_summary>0?"+":""}${p.last_backtest_summary}%`:null;
   return `<article class="portfolio-card accordion ${expanded?'open':''}" data-portfolio-card="${p.id}">
     <div class="accordion-header" data-toggle-portfolio="${p.id}" role="button" tabindex="0" aria-expanded="${expanded}">
       <span class="accordion-arrow">${expanded?"▾":"▸"}</span>
       <div class="portfolio-card-main">
         <strong>${p.name}${dirty?' <span class="dirty-dot" title="Есть несохранённые изменения">●</span>':''}</strong>
-        <small>${(p.instruments||[]).length} инструментов · ${money(p.starting_capital)} ₽</small>
-        <small>${readiness.text} · ${strategySummaryLabel(p)}</small>
+        <small>${instrumentCount} инструмент${pluralSuffix(instrumentCount)} · ${money(p.starting_capital)} ₽</small>
+        <small>${portfolioStrategyLine(p)}</small>
         <small class="portfolio-dates">Последний бэктест: ${p.last_backtest_at?formatDate(p.last_backtest_at)+(lastResultText?` (${lastResultText})`:''):"не запускался"}</small>
       </div>
       <button class="danger delete-portfolio" data-id="${p.id}" data-no-toggle="1">Удалить</button>
@@ -544,9 +542,9 @@ function renderEditorHtml(portfolioId){
       <table>
         <thead><tr>
           <th></th><th>Тикер</th><th>Цена</th><th>Лот</th><th>Кол-во лотов</th><th>Акций</th>
-          <th>Стоимость</th><th>Доля</th><th>Данные</th><th>Стратегии</th>
+          <th>Стоимость</th><th>Доля</th><th>Стратегии</th>
         </tr></thead>
-        <tbody id="ed-rows-${portfolioId}">${rows||'<tr><td colspan="10" class="empty">Инструментов нет.</td></tr>'}</tbody>
+        <tbody id="ed-rows-${portfolioId}">${rows||'<tr><td colspan="9" class="empty">Инструментов нет.</td></tr>'}</tbody>
       </table>
     </div>
     <div class="editor-summary" id="ed-summary-${portfolioId}">${renderEditorSummary(totals,draft)}</div>
@@ -584,7 +582,6 @@ function renderInstrumentRow(portfolioId,inst){
   const draft=draftOf(portfolioId);
   const totals=computeEditorTotals(draft);
   const share=totals.positions>0&&value!=null?(value/totals.positions*100).toFixed(1)+"%":"—";
-  const dataStatus=sec?sec.DATA_STATUS:"none";
   const assignments=(draft.ticker_strategies||{})[inst.ticker]||[];
   const chips=assignments.filter(a=>a.enabled!==false).map((a,idx)=>{
     const name=(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id;
@@ -603,8 +600,6 @@ function renderInstrumentRow(portfolioId,inst){
     <td>${shares}</td>
     <td>${value!=null?money(value)+" ₽":"—"}</td>
     <td>${share}</td>
-    <td><span class="security-data-status ${DATA_STATUS_CLASS[dataStatus]||''}">${dataStatus==="none"?"Требуется загрузка":DATA_STATUS_LABEL[dataStatus]}</span>
-        ${dataStatus!=="fresh"?`<button class="link-btn" data-ed-prepare-data="${inst.ticker}">Подготовить данные</button>`:""}</td>
     <td class="strategy-chips-cell">${chips}<button class="link-btn" data-ed-add-strategy="${inst.ticker}">+ Добавить</button>
       <div class="strategy-add-panel hidden" data-ed-strategy-panel="${inst.ticker}"></div></td>
   </tr>`;
@@ -631,8 +626,6 @@ function bindRowEvents(portfolioId,ticker){
   row.querySelector("[data-ed-lot]").onchange=e=>setLots(Number(e.target.value||0));
   row.querySelector("[data-ed-lot-minus]").onclick=()=>setLots((inst.lot_count||0)-1);
   row.querySelector("[data-ed-lot-plus]").onclick=()=>setLots((inst.lot_count||0)+1);
-  const prep=row.querySelector("[data-ed-prepare-data]");
-  if(prep)prep.onclick=()=>{setBuildTarget(portfolioId);catalogSelected=new Set([ticker]);renderCatalog();activateTab("portfolio");$("securityList").scrollIntoView({behavior:"smooth"})};
   row.querySelectorAll("[data-ed-strategy-remove]").forEach(b=>b.onclick=()=>{
     const list=draft.ticker_strategies[ticker]||[];
     list.splice(Number(b.dataset.idx),1);
@@ -851,6 +844,69 @@ function renderBacktestChips(){
     renderBacktestChips();
   });
   renderComboEstimate();
+  refreshDataGaps();
+}
+
+// ---- pre-flight data coverage for the selected backtest period ----------
+function fmtGapRange(g){
+  if(g.missing_from&&g.missing_to)return`${g.missing_from} – ${g.missing_to}`;
+  return g.missing_from||g.missing_to||"выбранный период";
+}
+async function refreshDataGaps(){
+  if(!btPortfolio||!btIncluded.size){dataGaps=[];renderDataGaps();return}
+  const params=new URLSearchParams();
+  const df=$("backtestFrom").value,dt=$("backtestTill").value;
+  if(df)params.set("date_from",df);
+  if(dt)params.set("date_to",dt);
+  params.set("tickers",[...btIncluded].join(","));
+  const requestedPortfolioId=btPortfolio.id;
+  try{
+    const r=await fetch(`/api/portfolios/${requestedPortfolioId}/data-coverage?${params}`);
+    const d=await r.json();
+    if(!btPortfolio||btPortfolio.id!==requestedPortfolioId)return; // portfolio/tab changed while in flight
+    dataGaps=(d.items||[]).filter(i=>!i.covered);
+  }catch(e){dataGaps=[]}
+  renderDataGaps();
+}
+function renderDataGaps(){
+  const el=$("backtestDataGaps");
+  if(!el)return;
+  if(!dataGaps.length){el.classList.add("hidden");el.innerHTML="";return}
+  el.classList.remove("hidden");
+  el.innerHTML=`<strong>Не хватает исторических данных:</strong>`+dataGaps.map(g=>{
+    const loading=dataGapLoading.has(g.ticker);
+    return`<div class="data-gap-row" data-gap-row="${g.ticker}">
+      <span>Для <strong>${g.ticker}</strong> отсутствуют данные за ${fmtGapRange(g)}</span>
+      <button class="secondary" data-gap-load="${g.ticker}" ${loading?"disabled":""}>${loading?"Загрузка…":"Загрузить"}</button>
+    </div>`;
+  }).join("");
+  el.querySelectorAll("[data-gap-load]").forEach(b=>b.onclick=()=>loadGapData(b.dataset.gapLoad));
+}
+async function loadGapData(ticker){
+  if(!btPortfolio||dataGapLoading.has(ticker))return;
+  const gap=dataGaps.find(g=>g.ticker===ticker);
+  const oneYearAgo=new Date(Date.now()-365*86400000).toISOString().slice(0,10);
+  const today=new Date().toISOString().slice(0,10);
+  const date_from=$("backtestFrom").value||gap?.missing_from||oneYearAgo;
+  const date_to=$("backtestTill").value||gap?.missing_to||today;
+  dataGapLoading.add(ticker);renderDataGaps();
+  try{
+    const r=await fetch(`/api/portfolios/${btPortfolio.id}/instruments/${ticker}/download-data`,{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({date_from,date_to})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"Не удалось загрузить данные");
+    showToast(`Данные ${ticker} загружены`,"success");
+    const fresh=await fetch(`/api/portfolios/${btPortfolio.id}`).then(x=>x.json());
+    const idx=portfolios.findIndex(p=>p.id===fresh.id);
+    if(idx>=0)portfolios[idx]=fresh;
+    if(btPortfolio&&btPortfolio.id===fresh.id)btPortfolio=fresh;
+    dataGapLoading.delete(ticker);
+    await refreshDataGaps();
+  }catch(e){
+    dataGapLoading.delete(ticker);
+    setStatus(`Ошибка загрузки данных ${ticker}: ${e.message}`,"error");
+    renderDataGaps();
+  }
 }
 function renderBacktestSectorFilter(){
   const sectors=[...new Set((btPortfolio.instruments||[]).map(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return sec?sec.SECTOR:"Прочее"}))];
@@ -868,6 +924,8 @@ $("selectBySector").onchange=e=>{
   renderBacktestChips();
   e.target.value="";
 };
+$("backtestFrom").onchange=()=>refreshDataGaps();
+$("backtestTill").onchange=()=>refreshDataGaps();
 
 async function startBacktest(){
   if(!btIncluded.size)return;

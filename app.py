@@ -254,6 +254,17 @@ def enriched_catalog(refresh=False)->list[dict]:
                      "DATA_UPDATED_AT":local["till"] if local else None})
     return out
 
+def _instrument_file_range(filename:str|None)->tuple[str,str]|None:
+    """(from_date,till_date) actually covered by an instrument's pinned CSV,
+    read straight from the TICKER_Nm_FROM_TILL.csv filename - the ground
+    truth for "is there data for this period", independent of the catalog's
+    DATA_STATUS freshness heuristic (which only tracks how recently the file
+    was refreshed, not what range it covers)."""
+    if not filename:return None
+    m=FILENAME_RE.match(Path(filename).name)
+    if not m:return None
+    return m.group(3),m.group(4)
+
 def _find_reusable_file(ticker:str,interval:int,till_date:str)->str|None:
     idx=_local_data_index()
     local=idx.get(ticker)
@@ -492,6 +503,103 @@ def portfolio_remove_instruments(portfolio_id):
     portfolio=PORTFOLIOS.remove_instruments(portfolio_id,tickers)
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
+
+@app.get("/api/portfolios/<portfolio_id>/data-coverage")
+def portfolio_data_coverage(portfolio_id):
+    """Whether each instrument's pinned data file actually covers the
+    requested backtest period - checked against the real file range, not the
+    catalog freshness label, so this never reports "no data" for a period
+    that is already sitting in the CSV. Used right before a backtest run;
+    portfolio creation/editing no longer surfaces data readiness at all."""
+    portfolio=PORTFOLIOS.get(portfolio_id)
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
+    date_from=(request.args.get("date_from") or "").strip() or None
+    date_to=(request.args.get("date_to") or "").strip() or None
+    tickers_param=request.args.get("tickers")
+    wanted=({t.strip().upper() for t in tickers_param.split(",") if t.strip()} if tickers_param else None)
+
+    items=[]
+    for inst in portfolio.get("instruments",[]):
+        ticker=str(inst.get("ticker"))
+        if wanted is not None and ticker.upper() not in wanted:continue
+        filename=inst.get("file")
+        exists=bool(filename) and (DATA_DIR/Path(filename).name).exists()
+        file_range=_instrument_file_range(filename) if exists else None
+        missing_from=missing_to=None
+        if not exists:
+            covered=False
+            missing_from,missing_to=date_from,date_to
+        else:
+            ffrom,ftill=file_range
+            lo=date_from or ffrom;hi=date_to or ftill
+            if hi<ffrom or lo>ftill:
+                # requested window doesn't overlap the file at all
+                covered=False
+                missing_from,missing_to=date_from,date_to
+            else:
+                gap_from=date_from if(date_from and date_from<ffrom) else None
+                gap_to=date_to if(date_to and date_to>ftill) else None
+                covered=not(gap_from or gap_to)
+                if not covered:
+                    missing_from=gap_from or None
+                    missing_to=gap_to or None
+                    if gap_from and not gap_to:missing_to=ffrom
+                    if gap_to and not gap_from:missing_from=ftill
+        items.append({"ticker":ticker,"covered":covered,
+                       "file_from":file_range[0] if file_range else None,
+                       "file_till":file_range[1] if file_range else None,
+                       "missing_from":missing_from,"missing_to":missing_to})
+    return jsonify({"items":items})
+
+@app.post("/api/portfolios/<portfolio_id>/instruments/<ticker>/download-data")
+@heavy_sync
+def portfolio_instrument_download_data(portfolio_id,ticker):
+    """Fetch just the missing history for one instrument already in a saved
+    portfolio, triggered from the backtest tab's data-gap prompt. Merges with
+    whatever range is already covered so the new file supersedes the old one
+    without losing history, then repoints the instrument at it - lot_count,
+    lot_size and everything else about the instrument stays untouched."""
+    portfolio=PORTFOLIOS.get(portfolio_id)
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
+    ticker=str(ticker).upper()
+    instrument=next((i for i in portfolio.get("instruments",[]) if str(i.get("ticker")).upper()==ticker),None)
+    if not instrument:return jsonify({"error":f"{ticker} отсутствует в портфеле"}),404
+
+    p=request.get_json(force=True) or {}
+    date_from=str(p.get("date_from") or "").strip()
+    date_to=str(p.get("date_to") or "").strip()
+    if not date_from or not date_to:return jsonify({"error":"Не указан период для загрузки"}),400
+    try:
+        date.fromisoformat(date_from);date.fromisoformat(date_to)
+    except ValueError:return jsonify({"error":"Некорректный формат даты"}),400
+    if date_from>date_to:return jsonify({"error":"Начало периода позже его окончания"}),400
+
+    existing_range=_instrument_file_range(instrument.get("file"))
+    existing_exists=bool(instrument.get("file")) and (DATA_DIR/Path(instrument["file"]).name).exists()
+    if existing_range and existing_exists:
+        from_date=min(date_from,existing_range[0]);till_date=max(date_to,existing_range[1])
+    else:
+        from_date,till_date=date_from,date_to
+
+    interval=10;board="TQBR"
+    filename=f"{ticker}_{interval}m_{from_date}_{till_date}.csv"
+    if not FILENAME_RE.match(filename):
+        # Same path-traversal guard as /api/download-batch - ticker/dates feed
+        # straight into a filesystem path below.
+        return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
+
+    try:
+        info=download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
+    except Exception as exc:
+        app.logger.exception("Instrument data download failed for %s in portfolio %s",ticker,portfolio_id)
+        return jsonify({"error":f"Не удалось загрузить {ticker}: {exc}"}),502
+
+    if info.get("rows",0)<MIN_CANDLES:
+        return jsonify({"error":f"Недостаточно данных по {ticker}: {info.get('rows',0)} свечей (нужно от {MIN_CANDLES})"}),502
+
+    updated=PORTFOLIOS.update_instrument_file(portfolio_id,ticker,filename)
+    if not updated:return jsonify({"error":"Портфель не найден"}),404
+    return jsonify({"ok":True,"ticker":ticker,"file":filename,"from":from_date,"till":till_date,"rows":info.get("rows")})
 
 @app.patch("/api/portfolios/<portfolio_id>/strategies")
 def portfolio_set_strategies(portfolio_id):
