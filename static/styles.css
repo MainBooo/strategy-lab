@@ -288,6 +288,15 @@ button:active:not(:disabled), .secondary:active, .primary:active {
   text-align: center;
   border: 1px dashed var(--line);
   border-radius: 16px;
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+.empty:not(td)::before {
+  content: "";
+  display: block; margin: 0 auto 10px; width: 30px; height: 30px;
+  opacity: .5;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6'%3E%3Cpath d='M3 10l2.5-6h13L21 10M3 10v9a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-9M3 10h5a1 1 0 0 1 1 1v1a2 2 0 0 0 4 0v-1a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6'%3E%3Cpath d='M3 10l2.5-6h13L21 10M3 10v9a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-9M3 10h5a1 1 0 0 1 1 1v1a2 2 0 0 0 4 0v-1a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .metrics {
@@ -347,11 +356,13 @@ pre {
 @keyframes fade-scale-in { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
-.tab-page:not(.hidden) { animation: fade-rise .22s ease; }
-.account-dropdown:not(.hidden) { animation: fade-scale-in .15s ease; transform-origin: top right; }
-.trade-viewer:not(.hidden) .trade-viewer-panel { animation: fade-scale-in .2s ease; }
-.trade-viewer:not(.hidden) .trade-viewer-backdrop { animation: fade-in .2s ease; }
-.build-success:not(.hidden) { animation: fade-scale-in .25s ease; }
+.tab-page:not(.hidden) { animation: fade-rise var(--dur-slow) var(--ease-out); }
+.account-dropdown:not(.hidden) { animation: fade-scale-in var(--dur-base) var(--ease-spring); transform-origin: top right; }
+.trade-viewer:not(.hidden) .trade-viewer-panel { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.trade-viewer:not(.hidden) .trade-viewer-backdrop { animation: fade-in var(--dur-base) var(--ease-out); }
+.build-success:not(.hidden) { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.mdm-modal { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.mdm-backdrop { animation: fade-in var(--dur-base) var(--ease-out); }
 
 /* ============================================================
    DESIGN SYSTEM: sliding tab indicator, hover-lift, toasts,
@@ -620,7 +631,9 @@ td.num,th.num{text-align:right;font-family:ui-monospace,"SF Mono","Roboto Mono",
 textarea{width:100%;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:12px;padding:12px 13px;font:inherit;outline:none;resize:vertical;min-height:92px}
 textarea:focus{border-color:rgba(124,140,255,.85);box-shadow:0 0 0 3px rgba(124,140,255,.12)}
 .selected-tickers{display:flex;gap:7px;flex-wrap:wrap;min-height:48px;border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:13px;padding:10px;margin-bottom:13px}.selected-tickers.empty-selection{display:flex;align-items:center;color:var(--muted);font-size:13px}
-.ticker-chip{padding:7px 9px;border-radius:999px;background:rgba(77,212,172,.12);border:1px solid rgba(77,212,172,.35);color:#c7ffed;font-size:12px;gap:7px}.ticker-chip span{font-size:15px;color:var(--muted)}
+.ticker-chip{padding:7px 9px;border-radius:999px;background:rgba(77,212,172,.12);border:1px solid rgba(77,212,172,.35);color:#c7ffed;font-size:12px;gap:7px;animation:chip-pop var(--dur-base) var(--ease-spring) both}.ticker-chip span{font-size:15px;color:var(--muted);transition:color var(--dur-fast) var(--ease-out)}.ticker-chip:hover span{color:var(--danger)}
+@keyframes chip-pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.ticker-chip{animation:none}}
 .security-row.selected-row{border-color:rgba(77,212,172,.55);background:rgba(77,212,172,.07)}
 .security-list.selection-error{border:1px solid var(--danger);border-radius:14px;box-shadow:0 0 0 4px rgba(255,112,129,.1)}
 #downloadSelected:disabled{opacity:.45;cursor:not-allowed}
@@ -802,7 +815,8 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 @media(max-width:900px){.summary-grid{grid-template-columns:1fr 1fr}}
 
 /* ---------- Close button / combo estimate ---------- */
-.close-btn{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-size:18px;line-height:1;padding:0}
+.close-btn{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-size:18px;line-height:1;padding:0;transition:background var(--dur-fast) var(--ease-out),transform var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)}
+.close-btn:hover{background:rgba(255,112,129,.14);border-color:rgba(255,112,129,.4);transform:rotate(90deg)}
 .build-success{position:relative}
 .combo-estimate{font-size:13px;color:var(--muted);margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(124,140,255,.05)}
 .combo-estimate strong{color:var(--text)}
@@ -822,8 +836,8 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 /* ---------- Trade viewer modal ---------- */
 .trade-viewer{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center}
 .trade-viewer.hidden{display:none}
-.trade-viewer-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
-.trade-viewer-panel{position:relative;width:min(1100px,94vw);max-height:90vh;overflow:auto;background:#0d1220;border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
+.trade-viewer-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.trade-viewer-panel{position:relative;width:min(1100px,94vw);max-height:90vh;overflow:auto;background:#0d1220;border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
 .trade-detail{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}
 
 /* ---------- Market data manager modal ---------- */
@@ -836,8 +850,8 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
    regardless of an ancestor's box) but a real problem for anything that
    inspects this element's own bounding box (screen readers, automation). */
 #marketDataManagerRoot.mdm-open{display:contents}
-.mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
-.mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
+.mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
 .mdm-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line)}
 .mdm-head h3{margin:0;font-size:18px}
 .mdm-body{padding:20px 24px;overflow:auto}

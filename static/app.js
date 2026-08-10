@@ -141,8 +141,12 @@ window.addEventListener("beforeunload",e=>{
 });
 
 // --------------------------------------------------------------- catalog --
+function catalogSkeletonHtml(n){
+  return Array.from({length:n},()=>`<div class="skeleton-row"></div>`).join("");
+}
 async function loadSecurities(refresh=false){
   setStatus("Загрузка справочника…","working");
+  if($("securityList"))$("securityList").innerHTML=catalogSkeletonHtml(9);
   const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),45000);
   try{
     const r=await fetch(`/api/securities${refresh?"?refresh=1":""}`,{signal:ctrl.signal});
