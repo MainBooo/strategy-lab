@@ -389,10 +389,17 @@ pre {
 @media (max-width: 620px) {
   .tabs.app-primary-tabs { display: none; }
   .shell { padding-bottom: calc(66px + env(safe-area-inset-bottom)); }
-  body.charts-active .shell { padding-bottom: 0; }
-  body.charts-active .mobile-bottom-nav { display: none !important; }
+  /* Desktop keeps its top tab strip visible as a slim bar above the
+     full-bleed terminal during charts-active (see body.charts-active .tabs
+     in the non-mobile rules) - phones need the same escape hatch. Without
+     it, opening "Анализ графиков" on a phone was a dead end: the top bar is
+     already display:none below 620px, and this used to force-hide the
+     bottom bar too, leaving no tab control on screen at all to switch back
+     out (the browser back button doesn't help either - tab switches don't
+     touch history). Keep both the padding and the bar exactly as they are
+     everywhere else on mobile, sized for the terminal to sit above them. */
 
-  .mobile-bottom-nav {
+  .tabs.mobile-bottom-nav {
     display: flex; margin: 0; gap: 0;
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
     background: var(--surface); border-top: 1px solid var(--border);
