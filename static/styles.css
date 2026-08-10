@@ -725,7 +725,17 @@ input[type="checkbox"].error:checked,input[type="checkbox"]:invalid:checked{back
 #allocationExtra{margin-top:12px}
 
 .progress-bar{height:10px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden;margin:14px 0 10px}
-.progress-bar-fill{height:100%;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:999px;transition:width .4s ease;width:0%}
+.progress-bar-fill{height:100%;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:999px;transition:width var(--dur-slower) var(--ease-out);width:0%;position:relative;box-shadow:0 0 12px rgba(124,140,255,.5)}
+/* Diagonal moving stripe while a run is in flight - the width transition
+   alone already shows progress, this signals "actively working", not
+   stalled, during the stretches between percent updates from the poll. */
+.progress-bar-fill::after{
+  content:"";position:absolute;inset:0;
+  background:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 10px,transparent 10px 20px);
+  animation:progress-stripe 1s linear infinite;
+}
+@keyframes progress-stripe{from{background-position:0 0}to{background-position:28px 0}}
+@media(prefers-reduced-motion:reduce){.progress-bar-fill::after{animation:none}}
 .progress-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-bottom:12px}
 .progress-meta span:first-child{color:var(--text);font-weight:800}
 .build-progress,.backtest-progress{border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:18px;background:rgba(255,255,255,.02)}
