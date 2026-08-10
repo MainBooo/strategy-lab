@@ -31,6 +31,19 @@
     if (!el) return;
     el.textContent = text;
     el.className = "message " + (isError ? "error" : "success");
+    // A wrong password/duplicate email etc. is common enough on these forms
+    // that a purely textual message is easy to miss - the shake draws the
+    // eye to it without being alarming (CSS animation, auto-removes itself
+    // via animationend so re-triggering on a second failed attempt works).
+    if (isError && text) {
+      const form = el.closest("form");
+      if (form) {
+        form.classList.remove("shake");
+        void form.offsetWidth; // restart the animation if it's already mid-shake
+        form.classList.add("shake");
+        form.addEventListener("animationend", () => form.classList.remove("shake"), { once: true });
+      }
+    }
   }
 
   function wireForm(formId, messageId, submit, onSuccess) {
