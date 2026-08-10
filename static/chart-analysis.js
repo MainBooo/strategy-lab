@@ -19,6 +19,36 @@
 
   const CE = global.ChartEngine;
 
+  // Line-icon set for the top toolbar (Stage-2 unified bar) - swapped in for
+  // the emoji glyphs the toolbar shipped with, which read as a mismatched,
+  // dated accent against the rest of the app's monochrome stroke-icon
+  // language (see the mobile bottom nav in index.html for the same style).
+  // Deliberately NOT touching TOOL_BUTTONS below (the drawing-tool rail) -
+  // those are already plain technical symbols (╱ — ↗ …), not colorful
+  // emoji, and rendered through a different path (_buildToolRail) than the
+  // toolbar HTML this is inlined into. Each icon is intentionally tiny
+  // (16x16, 2px stroke) so it reads at a glance next to a text label
+  // without the button growing past its existing 32px box. data-icon
+  // attributes elsewhere in the toolbar (used only as a plain-text prefix
+  // in the collapsed "Ещё" popover list, see _renderMorePopover) are left
+  // as their original emoji on purpose - that's a compact text list, not a
+  // real icon slot, and mixing markup into dataset strings there would be
+  // a bigger, riskier change for a place these icons barely register.
+  const ICN = {
+    chart: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+    bell: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+    rewind: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 5v14L8 12l11-7z"/><line x1="5" y1="5" x2="5" y2="19"/></svg>',
+    grid: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+    save: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1l1.5-2h7L17 6h1a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8z"/><circle cx="12" cy="13" r="3.4"/></svg>',
+    expand: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
+    chevronDown: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+    panelRight: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>'
+  };
+
   const TOOL_BUTTONS = [
     { id: null, label: "Курсор", icon: "⇖" },
     { id: "trend_line", label: "Линия тренда", icon: "╱" },
@@ -207,33 +237,33 @@
               ${tile.listChartTypes().map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
             </select>
             <div class="gt-menu" id="gtIndicatorsMenu" data-key="indicators" data-priority="11" data-label="Индикаторы" data-icon="📈">
-              <button class="gt-btn" id="gtIndicatorsBtn" aria-haspopup="true" title="Индикаторы" aria-label="Индикаторы">📈 <span class="gt-btn-label">Индикаторы</span></button>
+              <button class="gt-btn" id="gtIndicatorsBtn" aria-haspopup="true" title="Индикаторы" aria-label="Индикаторы">${ICN.chart} <span class="gt-btn-label">Индикаторы</span></button>
               <div class="ca-popover hidden" id="gtIndicatorsPop"></div>
             </div>
             <div class="gt-menu" id="gtTemplatesMenu" data-key="templates" data-priority="10" data-label="Шаблоны" data-icon="🗂">
-              <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">🗂 <span class="gt-btn-label">Шаблоны</span></button>
+              <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">${ICN.folder} <span class="gt-btn-label">Шаблоны</span></button>
               <div class="ca-popover ca-popover-wide hidden" id="gtTemplatesPop"></div>
             </div>
             <div class="gt-menu" id="gtAlertsMenu" data-key="alerts" data-priority="9" data-label="Оповещения" data-icon="🔔">
-              <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">🔔<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
+              <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">${ICN.bell}<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
               <div class="ca-popover ca-popover-wide hidden" id="gtAlertsPop"></div>
             </div>
-            <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">⏮</button>
+            <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">${ICN.rewind}</button>
             <button class="icon-btn" id="caUndoBtn" data-key="undo" data-priority="8" data-label="Отменить" data-icon="↶" title="Отменить (Ctrl+Z)" aria-label="Отменить">↶</button>
             <button class="icon-btn" id="caRedoBtn" data-key="redo" data-priority="7" data-label="Повторить" data-icon="↷" title="Повторить (Ctrl+Shift+Z)" aria-label="Повторить">↷</button>
             <div class="gt-menu" id="gtLayoutMenu" data-priority-exempt>
-              <button class="icon-btn" id="gtLayoutBtn" title="Раскладка графиков" aria-label="Выбор раскладки графиков" aria-haspopup="true">▦</button>
+              <button class="icon-btn" id="gtLayoutBtn" title="Раскладка графиков" aria-label="Выбор раскладки графиков" aria-haspopup="true">${ICN.grid}</button>
               <div class="ca-popover ca-popover-layouts hidden" id="gtLayoutPop"></div>
             </div>
-            <button class="icon-btn" id="gtSaveBtn" data-key="save" data-priority="3" data-label="Сохранить шаблон" data-icon="💾" title="Сохранить шаблон" aria-label="Сохранить шаблон">💾</button>
-            <button class="icon-btn" id="gtSettingsBtn" data-key="settings" data-priority="4" data-label="Настройки графика" data-icon="⚙" title="Настройки графика" aria-label="Настройки графика">⚙</button>
-            <button class="icon-btn" id="caSnapshotBtn" data-key="snapshot" data-priority="5" data-label="Снимок графика" data-icon="📷" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">📷</button>
-            <button class="icon-btn" id="caFullscreenBtn" data-priority-exempt title="Полноэкранный режим рабочего пространства" aria-label="Полноэкранный режим рабочего пространства">⛶</button>
-            <button class="icon-btn" id="gtCollapseBottomBtn" data-key="collapseBottom" data-priority="2" data-label="Свернуть панель свойств" data-icon="︿" title="Свернуть панель свойств" aria-label="Свернуть/развернуть панель свойств и объектов">︿</button>
-            <button class="icon-btn" id="gtCollapseRightBtn" data-key="collapseRight" data-priority="1" data-label="Свернуть список инструментов" data-icon="▤" title="Свернуть список инструментов" aria-label="Свернуть/развернуть список инструментов">▤</button>
+            <button class="icon-btn" id="gtSaveBtn" data-key="save" data-priority="3" data-label="Сохранить шаблон" data-icon="💾" title="Сохранить шаблон" aria-label="Сохранить шаблон">${ICN.save}</button>
+            <button class="icon-btn" id="gtSettingsBtn" data-key="settings" data-priority="4" data-label="Настройки графика" data-icon="⚙" title="Настройки графика" aria-label="Настройки графика">${ICN.gear}</button>
+            <button class="icon-btn" id="caSnapshotBtn" data-key="snapshot" data-priority="5" data-label="Снимок графика" data-icon="📷" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">${ICN.camera}</button>
+            <button class="icon-btn" id="caFullscreenBtn" data-priority-exempt title="Полноэкранный режим рабочего пространства" aria-label="Полноэкранный режим рабочего пространства">${ICN.expand}</button>
+            <button class="icon-btn" id="gtCollapseBottomBtn" data-key="collapseBottom" data-priority="2" data-label="Свернуть панель свойств" data-icon="︿" title="Свернуть панель свойств" aria-label="Свернуть/развернуть панель свойств и объектов">${ICN.chevronDown}</button>
+            <button class="icon-btn" id="gtCollapseRightBtn" data-key="collapseRight" data-priority="1" data-label="Свернуть список инструментов" data-icon="▤" title="Свернуть список инструментов" aria-label="Свернуть/развернуть список инструментов">${ICN.panelRight}</button>
           </div>
           <div class="gt-menu gt-more" id="gtMoreMenu">
-            <button class="icon-btn" id="gtMoreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">⋯</button>
+            <button class="icon-btn" id="gtMoreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">${ICN.more}</button>
             <div class="ca-popover ca-popover-right ca-popover-wide hidden" id="gtMorePop"></div>
           </div>
         </div>

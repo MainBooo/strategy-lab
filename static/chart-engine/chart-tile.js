@@ -159,7 +159,7 @@
           <span class="ca-tile-tag" data-role="tag"></span>
           <div class="ca-tile-realtime-slot" data-role="realtimeSlot"></div>
           <span class="ca-tile-spacer"></span>
-          <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки">⛶</button>
+          <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
           <button class="ca-tile-btn ca-tile-close" data-role="close" title="Закрыть плитку" aria-label="Закрыть плитку">✕</button>
         </div>
         <div class="ca-tile-chart-host" data-role="chartHost">

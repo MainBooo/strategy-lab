@@ -41,6 +41,16 @@
 }
 .icon-btn.active { color: var(--accent); border-color: var(--accent); }
 .icon-btn:hover { color: var(--text); }
+/* .icon-btn/.gt-btn are flex containers (see the global "button, .secondary,
+   .primary" rule in styles.css) and their icon svg's the sole/first flex
+   item - a flex item's "auto" flex-basis is supposed to fall back to the
+   replaced element's intrinsic size (its width/height attributes), but
+   Chromium/WebKit don't reliably do that for inline <svg>, so without an
+   explicit CSS width the icon silently collapses to 0 width (height stays
+   correct, which is what makes this one easy to miss - buttons render as
+   empty boxes with a normal-sized empty slot, not obviously broken). Same
+   fix already used for the mobile bottom nav's svgs (styles.css). */
+.icon-btn svg, .gt-btn svg { flex-shrink: 0; width: 15px; height: 15px; }
 
 /* ---------------------------------------------------- realtime indicator -- */
 /* Its only mount point is the per-tile header (chart-tile.js), where it
@@ -233,6 +243,7 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 .ca-tile-spacer { flex: 1; min-width: 4px; }
 .ca-tile-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 4px 6px; line-height: 1; border-radius: 6px; min-width: 30px; min-height: 30px; }
 .ca-tile-btn:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.ca-tile-btn svg { flex-shrink: 0; width: 14px; height: 14px; }
 .ca-tile-close:hover { color: var(--danger); }
 .ca-tile-realtime-slot .rt-indicator-btn { padding: 4px 8px; font-size: 11px; }
 .ca-tile-chart-host { flex: 1 1 auto; min-height: 0; position: relative; }
