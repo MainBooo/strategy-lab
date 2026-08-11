@@ -923,9 +923,14 @@ const BACKTEST_TIMEFRAME_LABEL=Object.fromEntries(BACKTEST_TIMEFRAMES);
 function tfLabel(tf){return BACKTEST_TIMEFRAME_LABEL[tf||"10m"]||tf||"10 минут"}
 $("goToPortfolioTab").onclick=()=>activateTab("portfolio");
 $("backtestPortfolioSelect").onchange=e=>selectBacktestPortfolio(e.target.value);
-$("backtestTimeframe").innerHTML=BACKTEST_TIMEFRAMES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-$("backtestTimeframe").value="10m";
-$("backtestTimeframe").onchange=()=>refreshDataGaps();
+const backtestTimeframeEl=$("backtestTimeframe");
+if(backtestTimeframeEl){
+  backtestTimeframeEl.innerHTML=BACKTEST_TIMEFRAMES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  backtestTimeframeEl.value="10m";
+  backtestTimeframeEl.onchange=()=>refreshDataGaps();
+}else{
+  console.error("#backtestTimeframe missing from DOM - template/JS out of sync (needs a server restart to pick up the current template)");
+}
 
 function renderBacktestTab(){
   if(!portfolios.length){
