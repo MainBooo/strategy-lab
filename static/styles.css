@@ -856,30 +856,12 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
   .instrument-editor-table th:nth-child(4),.instrument-editor-table td:nth-child(4),
   .instrument-editor-table th:nth-child(6),.instrument-editor-table td:nth-child(6){display:none}
 }
-.strategy-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:rgba(124,140,255,.12);border:1px solid rgba(124,140,255,.35);color:#c8d0ff;font-size:11px;margin:2px 4px 2px 0}
-.strategy-chip span{color:var(--muted)}
 .muted-note{color:var(--muted);font-size:11px}
-.strategy-add-panel{margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel-2)}
-.strategy-add-list{display:flex;flex-wrap:wrap;gap:6px}
-.strategy-add-list button{font-size:11px;padding:7px 10px}
 
-/* backtest tab: per-ticker strategy assignment (moved here from the old
-   portfolio-editor table cell, see strategy-chips-cell removal) */
-.strategy-assignment-head{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin:18px 0 10px}
-.strategy-assignment-list{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
-.assignment-row{border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:13px;padding:12px 14px}
-.assignment-row-head{margin-bottom:8px;font-size:13px}
-.assignment-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
-.assignment-chip-wrap{display:flex;flex-direction:column;width:100%}
-.assignment-chip{display:inline-flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;border-radius:999px;background:rgba(124,140,255,.12);border:1px solid rgba(124,140,255,.35);color:#c8d0ff;font-size:12px;width:fit-content}
-.assignment-chip.off{opacity:.5;background:rgba(255,255,255,.03);border-color:var(--line)}
-.assignment-chip input[type="checkbox"]{width:auto;margin:0}
-.assignment-chip-name{cursor:pointer}
-.assignment-chip-name:hover{text-decoration:underline}
-.assignment-chip-remove{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px}
-.assignment-chip-remove:hover{color:var(--danger)}
+/* backtest tab: per-ticker strategy assignment summary strip + modal (see
+   .strategy-assign-modal below for the actual editor) */
+.strategy-assignment-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:18px 0 10px}
 .assignment-config-panel{margin-top:8px;border:1px solid var(--line);border-radius:12px;padding:14px;background:rgba(255,255,255,.012)}
-.assignment-add-wrap{position:relative}
 .editor-summary{margin:16px 0}
 .summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .summary-grid div{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:rgba(255,255,255,.02)}
@@ -975,3 +957,69 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
   .mdm-row-updated{width:100%;text-align:left}
 }
 @media(max-width:820px){.trade-viewer-panel{padding:18px;width:96vw}}
+
+/* ---------- Portfolio strategy assignment (summary strip + modal) ---------- */
+.assignment-summary{font-size:13px;color:var(--muted);margin:2px 0 0}
+.assignment-summary strong{color:var(--text);font-weight:600}
+.assignment-summary .assign-summary-empty{color:var(--muted)}
+.assignment-validation{margin:14px 0;padding:12px 14px;border:1px solid rgba(255,112,129,.35);border-radius:12px;background:rgba(255,112,129,.06);font-size:13px;color:#ffb0ba;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.assignment-validation button{width:auto;font-size:12px;padding:8px 12px;flex-shrink:0}
+
+.strategy-assign-modal{position:fixed;inset:0;z-index:210;display:flex;align-items:center;justify-content:center}
+.strategy-assign-modal.hidden{display:none}
+.strategy-assign-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.strategy-assign-modal:not(.hidden) .strategy-assign-backdrop{animation:fade-in var(--dur-base) var(--ease-out)}
+.strategy-assign-modal:not(.hidden) .strategy-assign-panel{animation:fade-scale-in var(--dur-slow) var(--ease-spring)}
+.strategy-assign-panel{position:relative;width:min(960px,92vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
+.strategy-assign-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:22px 60px 18px 24px;border-bottom:1px solid var(--line);flex-shrink:0}
+.strategy-assign-header h3{margin:0 0 6px;font-size:19px}
+.strategy-assign-header p{margin:0}
+.strategy-assign-header .close-btn{position:absolute;top:16px;right:16px}
+.strategy-assign-bulkbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid var(--line);background:rgba(124,140,255,.04);flex-shrink:0;font-size:13px;color:var(--muted)}
+.strategy-assign-bulkbar select{width:auto;flex:0 0 auto;padding:9px 11px;font-size:13px}
+.strategy-assign-bulkbar button{width:auto;font-size:12.5px;padding:9px 13px}
+.strategy-assign-bulkbar .assign-clear-link{margin-left:auto;color:#ff95a2}
+.strategy-assign-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:18px 24px calc(18px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px}
+
+.assign-ticker-card{flex-shrink:0;border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:14px;overflow:hidden}
+.assign-ticker-head{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer}
+.assign-ticker-head:hover{background:rgba(255,255,255,.02)}
+.assign-ticker-main{flex:1;min-width:0}
+.assign-ticker-toprow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.assign-ticker-toprow strong{font-size:14.5px}
+.assign-ticker-name{color:var(--muted);font-size:12px}
+.assign-ticker-excluded{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.assign-ticker-count{font-size:11px;font-weight:600;color:var(--accent-2);background:rgba(77,212,172,.12);border-radius:999px;padding:3px 10px;flex-shrink:0}
+.assign-ticker-count.zero{color:var(--muted);background:rgba(255,255,255,.05)}
+.assign-ticker-chevron{color:var(--accent-2);font-size:14px;transition:transform var(--dur-fast) var(--ease-out);flex-shrink:0}
+.assign-ticker-card.open .assign-ticker-chevron{transform:rotate(180deg)}
+.assign-ticker-body{border-top:1px solid var(--line);padding:14px 16px;background:rgba(255,255,255,.01)}
+.assign-ticker-quickactions{display:flex;gap:8px;margin-bottom:12px}
+.assign-ticker-quickactions button{width:auto;font-size:11.5px;padding:6px 11px}
+.assign-strategy-list{display:flex;flex-direction:column;gap:2px}
+.assign-strategy-row{border-radius:10px}
+.assign-strategy-row+.assign-strategy-row{border-top:1px solid rgba(255,255,255,.05)}
+.assign-strategy-main{display:flex;align-items:center;gap:10px;padding:9px 6px;cursor:pointer}
+.assign-strategy-main input[type="checkbox"]{width:18px;height:18px;flex-shrink:0;accent-color:var(--accent);margin:0}
+.assign-strategy-name{flex:1;font-size:13.5px}
+.assign-strategy-preset{font-size:11px;color:var(--muted);flex-shrink:0}
+.assign-strategy-configure{width:auto;flex-shrink:0;font-size:11.5px;padding:6px 10px}
+.assign-strategy-row .assignment-config-panel{margin:0 6px 10px}
+
+.strategy-assign-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 24px;border-top:1px solid var(--line);background:#0d1220;flex-shrink:0;flex-wrap:wrap}
+.strategy-assign-footer-stats{font-size:12.5px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+.strategy-assign-footer-stats strong{color:var(--text)}
+.strategy-assign-footer-actions{display:flex;gap:10px}
+.strategy-assign-footer-actions button{width:auto;padding:12px 18px}
+
+@media(max-width:620px){
+  .strategy-assign-modal{align-items:stretch;justify-content:stretch}
+  .strategy-assign-panel{width:100vw;max-height:none;height:100vh;height:100dvh;border-radius:0;border:none}
+  .strategy-assign-header{padding:calc(18px + env(safe-area-inset-top,0px)) 56px 14px 16px}
+  .strategy-assign-bulkbar{padding:12px 16px}
+  .strategy-assign-bulkbar .assign-clear-link{margin-left:0;flex:0 0 100%;order:5}
+  .strategy-assign-body{padding:14px 16px calc(28px + env(safe-area-inset-bottom,0px))}
+  .strategy-assign-footer{padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));flex-direction:column;align-items:stretch}
+  .strategy-assign-footer-actions{flex-direction:column-reverse}
+  .strategy-assign-footer-actions button{width:100%}
+}

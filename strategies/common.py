@@ -248,6 +248,14 @@ def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
 def save_run(results_dir: Path,strategy_name: str,source_file: str,params: dict,trades: pd.DataFrame) -> dict:
     run_id=uuid.uuid4().hex[:12]; run_dir=results_dir/run_id; run_dir.mkdir(parents=True,exist_ok=True)
     summary=summarize(trades,params); summary.update({"run_id":run_id,"strategy":strategy_name,"source_file":source_file,"params":params})
-    trades.to_csv(run_dir/"trades.csv",index=False)
+    # A strategy that finds zero trades builds `trades` from an empty list -
+    # pd.DataFrame([]) carries no column names, so to_csv() writes just a
+    # blank line, not valid CSV. Callers that later pd.read_csv() this file
+    # to check for an empty result (see app.py's _execute_combo_backtest_job)
+    # would hit EmptyDataError instead of reading back "zero trades". A
+    # placeholder header keeps the round trip parseable without inventing
+    # any trade data - readers only ever check .empty in this case.
+    out=trades if len(trades.columns) else pd.DataFrame(columns=["entry_time"])
+    out.to_csv(run_dir/"trades.csv",index=False)
     (run_dir/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
     return {"run_id":run_id,"summary":summary,"files":["trades.csv","summary.json"]}

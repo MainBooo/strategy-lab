@@ -20,6 +20,7 @@ let btPortfolio=null;
 let btIncluded=new Set();
 let dataGaps=[];
 let dataGapLoading=new Set();
+let timeframeGaps=[];
 let backtestJobId=null,backtestPollTimer=null;
 let lastBacktestResult=null;
 let byTickerSort={key:"pnl_rub",dir:-1};
@@ -911,8 +912,20 @@ function bindStrategyCardEvents(){
 }
 
 // ----------------------------------------------------------------- backtest
+// Mirrors timeframes.py's BACKTEST_TIMEFRAMES/BACKTEST_TIMEFRAME_LABELS -
+// this is a fixed, rarely-changing spec (same 8 options the backend
+// validates against in portfolio_backtest()), not data worth a round trip.
+const BACKTEST_TIMEFRAMES=[
+  ["1m","1 минута"],["5m","5 минут"],["10m","10 минут"],["15m","15 минут"],
+  ["30m","30 минут"],["60m","1 час"],["4h","4 часа"],["1d","1 день"],
+];
+const BACKTEST_TIMEFRAME_LABEL=Object.fromEntries(BACKTEST_TIMEFRAMES);
+function tfLabel(tf){return BACKTEST_TIMEFRAME_LABEL[tf||"10m"]||tf||"10 минут"}
 $("goToPortfolioTab").onclick=()=>activateTab("portfolio");
 $("backtestPortfolioSelect").onchange=e=>selectBacktestPortfolio(e.target.value);
+$("backtestTimeframe").innerHTML=BACKTEST_TIMEFRAMES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+$("backtestTimeframe").value="10m";
+$("backtestTimeframe").onchange=()=>refreshDataGaps();
 
 function renderBacktestTab(){
   if(!portfolios.length){
@@ -935,6 +948,7 @@ function selectBacktestPortfolio(id){
   activePortfolioId=id;localStorage.setItem("moexlab_active_portfolio",id);
   if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
   btIncluded=new Set((btPortfolio.instruments||[]).map(i=>i.ticker));
+  if(assignModalDraft)closeAssignmentModal(false);
   renderBacktestSectorFilter();
   renderBacktestChips();
   $("backtestResults").classList.add("hidden");
@@ -943,24 +957,39 @@ function selectBacktestPortfolio(id){
 }
 function pluralSuffix(n){const m10=n%10,m100=n%100;if(m100>=11&&m100<=14)return"ов";if(m10===1)return"";if(m10>=2&&m10<=4)return"а";return"ов"}
 
+// A ticker only contributes runs for strategies explicitly assigned to it -
+// no silent fallback to the portfolio's legacy default_strategy_id, so a
+// selected ticker with nothing assigned shows up in `missing` and blocks the
+// run instead of quietly picking an arbitrary strategy for it.
 function resolveComboCount(){
-  if(!btPortfolio)return{total:0,byTicker:[]};
+  if(!btPortfolio)return{total:0,byTicker:[],missing:[]};
   const ts=btPortfolio.ticker_strategies||{};
+  const missing=[];
   const byTicker=[...btIncluded].map(ticker=>{
     const enabled=(ts[ticker]||[]).filter(a=>a.enabled!==false);
-    const n=enabled.length||1;
-    const names=enabled.length?enabled.map(a=>(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id):
-      [(window.STRATEGIES[btPortfolio.default_strategy_id]||{}).name||btPortfolio.default_strategy_id];
-    return{ticker,count:n,names};
+    if(!enabled.length)missing.push(ticker);
+    const names=enabled.map(a=>(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id);
+    return{ticker,count:enabled.length,names};
   });
-  return{total:byTicker.reduce((s,x)=>s+x.count,0),byTicker};
+  return{total:byTicker.reduce((s,x)=>s+x.count,0),byTicker,missing};
 }
 function renderComboEstimate(){
   const est=resolveComboCount();
-  $("comboEstimate").innerHTML=est.total?`<strong>Будет выполнено ${est.total} расчёт${pluralSuffix(est.total)}:</strong> `+
-    est.byTicker.map(x=>`${x.ticker} × ${x.count}`).join(", "):"Выберите хотя бы один инструмент.";
-  $("runBacktestBtn").textContent=est.total?`Запустить бэктест (${est.total} расчёт${pluralSuffix(est.total)})`:"Выберите инструменты";
-  $("runBacktestBtn").disabled=est.total===0;
+  const valEl=$("assignmentValidation");
+  if(btIncluded.size&&est.missing.length){
+    valEl.classList.remove("hidden");
+    valEl.innerHTML=`<span>Для ${est.missing.map(escapeHtml).join(", ")} не выбрана стратегия.</span><button type="button" class="secondary" id="assignValidationFix">Настроить</button>`;
+    $("assignValidationFix").onclick=openAssignmentModal;
+  }else{
+    valEl.classList.add("hidden");
+    valEl.innerHTML="";
+  }
+  const runnable=est.total>0&&!est.missing.length;
+  $("comboEstimate").innerHTML=!btIncluded.size?"Выберите хотя бы один инструмент.":
+    est.missing.length?"Назначьте стратегии выбранным инструментам, чтобы запустить бэктест.":
+    `<strong>Будет выполнено ${est.total} расчёт${pluralSuffix(est.total)}:</strong> `+est.byTicker.map(x=>`${x.ticker} × ${x.count}`).join(", ");
+  $("runBacktestBtn").textContent=runnable?`Запустить бэктест (${est.total} расчёт${pluralSuffix(est.total)})`:(btIncluded.size?"Назначьте стратегии":"Выберите инструменты");
+  $("runBacktestBtn").disabled=!runnable;
   $("backtestSelectedCount").textContent=btIncluded.size;
   $("backtestTotalCount").textContent=(btPortfolio?.instruments||[]).length;
 }
@@ -975,16 +1004,27 @@ function renderBacktestChips(){
     btIncluded.has(t)?btIncluded.delete(t):btIncluded.add(t);
     renderBacktestChips();
   });
+  renderAssignmentSummary();
   renderComboEstimate();
-  renderBacktestStrategyAssignments();
   refreshDataGaps();
 }
 
-// ---- per-ticker strategy assignment (moved here from the old portfolio-tab
-// inline editor - same ticker_strategies schema, but with real parameter
-// inputs instead of always-empty {} and immediate autosave via PATCH) ------
-let expandedAssignmentPanels=new Set();  // "TICKER::idx" keys with an open inline param form
-let assignmentSaveTimer=null;
+// ---- per-ticker strategy assignment: portfolio -> ticker -> [strategies] --
+// Modal-based editor. Edits happen on a local deep-cloned draft
+// (assignModalDraft) while the dialog is open; nothing touches btPortfolio
+// until "Сохранить" does one PATCH of the whole ticker_strategies map. This
+// is the single place that reads/writes that schema on the Backtest tab.
+let assignModalDraft=null;              // ticker -> [{strategy_id,parameters,enabled}], only while modal is open
+let assignExpandedTickers=new Set();    // tickers whose accordion card is open in the modal
+let assignExpandedParams=new Set();     // "TICKER::strategy_id" keys with an open inline param form
+
+function pluralWord(n,forms){
+  const m10=n%10,m100=n%100;
+  if(m100>=11&&m100<=14)return forms[2];
+  if(m10===1)return forms[0];
+  if(m10>=2&&m10<=4)return forms[1];
+  return forms[2];
+}
 
 function assignmentPresetKey(strategyId,parameters){
   const meta=window.STRATEGIES[strategyId]||{};
@@ -1007,49 +1047,103 @@ function assignmentPresetLabel(strategyId,parameters){
   return PRESET_RU_LABEL[key];
 }
 
-function renderBacktestStrategyAssignments(){
-  const container=$("backtestStrategyAssignments");
-  if(!container)return;
-  if(!btPortfolio){container.innerHTML="";return}
-  btPortfolio.ticker_strategies=btPortfolio.ticker_strategies||{};
-  const tickers=[...btIncluded];
-  if(!tickers.length){container.innerHTML=`<p class="muted-note">Выберите хотя бы один инструмент выше, чтобы назначить стратегии.</p>`;return}
-  container.innerHTML=tickers.map(ticker=>renderTickerAssignmentRow(ticker,btPortfolio.ticker_strategies[ticker]||[])).join("");
-  bindBacktestAssignmentEvents();
+// ---- compact summary strip on the Backtest tab (always visible) ----------
+function renderAssignmentSummary(){
+  const el=$("assignmentSummary");
+  if(!el)return;
+  if(!btPortfolio){el.innerHTML="";return}
+  const ts=btPortfolio.ticker_strategies||{};
+  const parts=(btPortfolio.instruments||[]).map(i=>{
+    const n=(ts[i.ticker]||[]).filter(a=>a.enabled!==false).length;
+    return n?`<strong>${escapeHtml(i.ticker)}</strong> — ${n} ${pluralWord(n,["стратегия","стратегии","стратегий"])}`:null;
+  }).filter(Boolean);
+  el.innerHTML=parts.length?parts.join(" · "):`<span class="assign-summary-empty">Стратегии ещё не назначены — нажмите «Настроить стратегии портфеля».</span>`;
 }
 
-function renderTickerAssignmentRow(ticker,assignments){
-  const chips=assignments.map((a,idx)=>{
-    const meta=window.STRATEGIES[a.strategy_id]||{};
-    const key=`${ticker}::${idx}`;
-    const expanded=expandedAssignmentPanels.has(key);
-    return `<div class="assignment-chip-wrap">
-      <div class="assignment-chip ${a.enabled===false?"off":"on"}">
-        <input type="checkbox" data-assign-enabled="${ticker}" data-idx="${idx}" ${a.enabled!==false?"checked":""} title="Включить/выключить в расчёте">
-        <span class="assignment-chip-name" data-assign-toggle-panel="${ticker}" data-idx="${idx}">${escapeHtml(meta.name||a.strategy_id)} — ${assignmentPresetLabel(a.strategy_id,a.parameters||{})}</span>
-        <button type="button" class="assignment-chip-remove" data-assign-remove="${ticker}" data-idx="${idx}" title="Удалить стратегию">×</button>
+// ---- modal lifecycle -------------------------------------------------------
+function draftFor(ticker){
+  assignModalDraft[ticker]=assignModalDraft[ticker]||[];
+  return assignModalDraft[ticker];
+}
+function isAssignDraftDirty(){
+  return JSON.stringify(assignModalDraft)!==JSON.stringify(btPortfolio.ticker_strategies||{});
+}
+function openAssignmentModal(){
+  if(!btPortfolio)return;
+  assignModalDraft=JSON.parse(JSON.stringify(btPortfolio.ticker_strategies||{}));
+  assignExpandedTickers=new Set();
+  assignExpandedParams=new Set();
+  $("assignBulkStrategy").innerHTML=Object.entries(window.STRATEGIES).map(([k,v])=>`<option value="${k}">${escapeHtml(v.name)}</option>`).join("");
+  $("strategyAssignModal").classList.remove("hidden");
+  renderAssignmentModalBody();
+}
+function closeAssignmentModal(askConfirm){
+  if(!assignModalDraft)return;
+  if(askConfirm&&isAssignDraftDirty()&&!confirm("Закрыть без сохранения изменений?"))return;
+  $("strategyAssignModal").classList.add("hidden");
+  assignModalDraft=null;
+}
+
+// ---- body rendering ---------------------------------------------------
+function renderAssignmentModalBody(){
+  const body=$("strategyAssignBody");
+  if(!body||!btPortfolio||!assignModalDraft)return;
+  const tickers=(btPortfolio.instruments||[]).map(i=>i.ticker);
+  body.innerHTML=tickers.length?tickers.map(renderAssignTickerCard).join(""):`<p class="muted-note">В портфеле нет инструментов.</p>`;
+  bindAssignmentModalEvents();
+  renderAssignFooterStats();
+}
+
+function renderAssignTickerCard(ticker){
+  const list=assignModalDraft[ticker]||[];
+  const enabledCount=list.filter(a=>a.enabled!==false).length;
+  const open=assignExpandedTickers.has(ticker);
+  const sec=securities.find(s=>s.SECID===ticker);
+  const excluded=!btIncluded.has(ticker);
+  return `<div class="assign-ticker-card ${open?"open":""}" data-assign-ticker-card="${ticker}">
+    <div class="assign-ticker-head" data-assign-ticker-toggle="${ticker}" role="button" tabindex="0" aria-expanded="${open}">
+      <div class="assign-ticker-main">
+        <div class="assign-ticker-toprow">
+          <strong>${escapeHtml(ticker)}</strong>
+          ${excluded?`<span class="assign-ticker-excluded" title="Не выбран для текущего запуска бэктеста">не в тесте</span>`:""}
+        </div>
+        <div class="assign-ticker-name">${escapeHtml(sec?.SHORTNAME||"")}</div>
       </div>
-      ${expanded?`<div class="assignment-config-panel" data-param-grid-bt="${ticker}::${idx}">${renderStrategyParamsFormFor(a.strategy_id,a.parameters||{},ticker,idx)}</div>`:""}
-    </div>`;
-  }).join("");
-  return `<div class="assignment-row">
-    <div class="assignment-row-head"><strong>${escapeHtml(ticker)}</strong></div>
-    <div class="assignment-chips">
-      ${chips || `<span class="muted-note">Стратегии не назначены</span>`}
-      <div class="assignment-add-wrap">
-        <button type="button" class="link-btn" data-assign-add-toggle="${ticker}">+ Добавить стратегию</button>
-        <div class="strategy-add-panel hidden" data-assign-add-panel="${ticker}"></div>
-      </div>
+      <span class="assign-ticker-count ${enabledCount?"":"zero"}">${enabledCount?`${enabledCount} выбрано`:"не выбрано"}</span>
+      <span class="assign-ticker-chevron" aria-hidden="true">⌄</span>
     </div>
+    ${open?`<div class="assign-ticker-body" data-no-toggle="1">
+      <div class="assign-ticker-quickactions">
+        <button type="button" class="secondary" data-assign-select-all="${ticker}">Выбрать все</button>
+        <button type="button" class="secondary" data-assign-clear-ticker="${ticker}">Снять все</button>
+      </div>
+      <div class="assign-strategy-list">${Object.entries(window.STRATEGIES).map(([sid,meta])=>renderAssignStrategyRow(ticker,sid,meta)).join("")}</div>
+    </div>`:""}
   </div>`;
 }
 
-function renderStrategyParamsFormFor(strategyId,parameters,ticker,idx){
+function renderAssignStrategyRow(ticker,strategyId,meta){
+  const list=assignModalDraft[ticker]||[];
+  const a=list.find(x=>x.strategy_id===strategyId);
+  const checked=!!a&&a.enabled!==false;
+  const key=`${ticker}::${strategyId}`;
+  const paramsOpen=checked&&assignExpandedParams.has(key);
+  return `<div class="assign-strategy-row">
+    <div class="assign-strategy-main" data-assign-toggle-strategy="${ticker}" data-strategy-id="${strategyId}">
+      <input type="checkbox" data-assign-check="${ticker}" data-strategy-id="${strategyId}" ${checked?"checked":""}>
+      <span class="assign-strategy-name">${escapeHtml(meta.name)}</span>
+      ${checked?`<span class="assign-strategy-preset">${assignmentPresetLabel(strategyId,a.parameters||{})}</span>
+      <button type="button" class="secondary assign-strategy-configure" data-assign-configure="${ticker}" data-strategy-id="${strategyId}">Настроить</button>`:""}
+    </div>
+    ${paramsOpen?`<div class="assignment-config-panel" data-assign-param-grid="${ticker}::${strategyId}">${renderStrategyParamsFormFor(strategyId,a.parameters||{},`assign-${ticker}-${strategyId}`)}</div>`:""}
+  </div>`;
+}
+
+function renderStrategyParamsFormFor(strategyId,parameters,idPrefix){
   const meta=window.STRATEGIES[strategyId]||{};
   const values={...(meta.presets?.standard||{}),...(parameters||{})};
   const presetName=assignmentPresetKey(strategyId,parameters);
   const hasUserPreset=!!strategyUserPresets[strategyId];
-  const idPrefix=`bt-${ticker}-${idx}`;
   return `<div class="param-section param-section-presets">
       <div class="param-section-title param-section-title-static"><span>Пресеты</span></div>
       ${presetSwitcherHTML(presetName,hasUserPreset)}
@@ -1057,14 +1151,41 @@ function renderStrategyParamsFormFor(strategyId,parameters,ticker,idx){
     ${paramFieldsHTML(strategyId,values,idPrefix)}`;
 }
 
-function commitAssignmentFieldChange(ticker,idx,key,value){
-  const a=btPortfolio.ticker_strategies[ticker]?.[idx];
+// ---- draft mutation ------------------------------------------------------
+function setStrategyEnabled(ticker,strategyId,enabled){
+  const list=draftFor(ticker);
+  let a=list.find(x=>x.strategy_id===strategyId);
+  if(enabled){
+    if(!a){
+      const meta=window.STRATEGIES[strategyId]||{};
+      a={strategy_id:strategyId,parameters:{...(meta.presets?.standard||{})},enabled:true};
+      list.push(a);
+    }else a.enabled=true;
+  }else{
+    if(a)a.enabled=false;
+    assignExpandedParams.delete(`${ticker}::${strategyId}`);
+  }
+  renderAssignmentModalBody();
+}
+function toggleAssignParamPanel(ticker,strategyId){
+  const key=`${ticker}::${strategyId}`;
+  if(assignExpandedParams.has(key)){
+    assignExpandedParams.delete(key);
+  }else{
+    assignExpandedParams.add(key);
+    loadStrategyUserPreset(strategyId).then(()=>{if(assignExpandedParams.has(key))renderAssignmentModalBody()});
+  }
+  renderAssignmentModalBody();
+}
+function commitDraftFieldChange(ticker,strategyId,key,value){
+  const list=draftFor(ticker);
+  const a=list.find(x=>x.strategy_id===strategyId);
   if(!a)return;
-  const meta=window.STRATEGIES[a.strategy_id]||{};
+  const meta=window.STRATEGIES[strategyId]||{};
   const current={...(meta.presets?.standard||{}),...(a.parameters||{})};
   if(key==="__preset__"){
     if(value==="custom"){
-      const userPreset=strategyUserPresets[a.strategy_id];
+      const userPreset=strategyUserPresets[strategyId];
       a.parameters=userPreset?{...(meta.presets?.standard||{}),...userPreset.parameters}:current;
     }else{
       a.parameters={...(meta.presets?.[value]||meta.presets?.standard||{})};
@@ -1072,83 +1193,119 @@ function commitAssignmentFieldChange(ticker,idx,key,value){
   }else{
     a.parameters={...current,[key]:value};
   }
-  scheduleAssignmentSave();
-  renderBacktestStrategyAssignments();
-  renderComboEstimate();
+  renderAssignmentModalBody();
+}
+function selectAllForTicker(ticker){
+  const list=draftFor(ticker);
+  Object.keys(window.STRATEGIES).forEach(sid=>{
+    let a=list.find(x=>x.strategy_id===sid);
+    if(!a){
+      const meta=window.STRATEGIES[sid]||{};
+      list.push({strategy_id:sid,parameters:{...(meta.presets?.standard||{})},enabled:true});
+    }else a.enabled=true;
+  });
+  renderAssignmentModalBody();
+}
+function clearAllForTicker(ticker){
+  (assignModalDraft[ticker]||[]).forEach(a=>a.enabled=false);
+  renderAssignmentModalBody();
+}
+function applyBulkStrategyToAll(){
+  if(!btPortfolio||!assignModalDraft)return;
+  const strategyId=$("assignBulkStrategy").value;
+  if(!strategyId)return;
+  (btPortfolio.instruments||[]).forEach(i=>{
+    const list=draftFor(i.ticker);
+    let a=list.find(x=>x.strategy_id===strategyId);
+    if(!a){
+      const meta=window.STRATEGIES[strategyId]||{};
+      list.push({strategy_id:strategyId,parameters:{...(meta.presets?.standard||{})},enabled:true});
+    }else a.enabled=true;
+  });
+  renderAssignmentModalBody();
+  showToast(`«${window.STRATEGIES[strategyId]?.name||strategyId}» добавлена всем инструментам`,"success");
+}
+function clearAllAssignments(){
+  if(!confirm("Очистить все назначения стратегий во всём портфеле? Это затронет все инструменты."))return;
+  assignModalDraft={};
+  renderAssignmentModalBody();
 }
 
-function toggleAssignmentAddPanel(ticker){
-  const panel=document.querySelector(`[data-assign-add-panel="${ticker}"]`);
-  if(!panel)return;
-  if(!panel.classList.contains("hidden")){panel.classList.add("hidden");panel.innerHTML="";return}
-  document.querySelectorAll(".strategy-add-panel").forEach(p=>{p.classList.add("hidden");p.innerHTML=""});
-  const used=new Set((btPortfolio.ticker_strategies[ticker]||[]).map(a=>a.strategy_id));
-  const options=Object.entries(window.STRATEGIES).filter(([k])=>!used.has(k));
-  panel.innerHTML=`<div class="strategy-add-list">${options.map(([k,v])=>`<button type="button" class="secondary" data-assign-pick-strategy="${k}">${escapeHtml(v.name)}</button>`).join("")||"<span class='muted-note'>Все стратегии уже добавлены</span>"}</div>`;
-  panel.classList.remove("hidden");
-  panel.querySelectorAll("[data-assign-pick-strategy]").forEach(b=>b.onclick=()=>{
-    btPortfolio.ticker_strategies[ticker]=btPortfolio.ticker_strategies[ticker]||[];
-    btPortfolio.ticker_strategies[ticker].push({strategy_id:b.dataset.assignPickStrategy,parameters:{},enabled:true});
-    scheduleAssignmentSave();
-    renderBacktestStrategyAssignments();
-    renderComboEstimate();
+// ---- footer stats + save --------------------------------------------------
+function computeDraftFooterStats(){
+  const tickers=[...btIncluded];
+  let instrumentsWithStrategy=0,total=0;
+  tickers.forEach(t=>{
+    const n=(assignModalDraft[t]||[]).filter(a=>a.enabled!==false).length;
+    if(n){instrumentsWithStrategy++;total+=n}
   });
+  return{tickers:tickers.length,instrumentsWithStrategy,total};
 }
-
-function bindBacktestAssignmentEvents(){
-  document.querySelectorAll("[data-assign-enabled]").forEach(cb=>cb.onchange=()=>{
-    const ticker=cb.dataset.assignEnabled,idx=Number(cb.dataset.idx);
-    btPortfolio.ticker_strategies[ticker][idx].enabled=cb.checked;
-    scheduleAssignmentSave();
-    renderComboEstimate();
-  });
-  document.querySelectorAll("[data-assign-remove]").forEach(b=>b.onclick=()=>{
-    const ticker=b.dataset.assignRemove,idx=Number(b.dataset.idx);
-    btPortfolio.ticker_strategies[ticker].splice(idx,1);
-    if(!btPortfolio.ticker_strategies[ticker].length)delete btPortfolio.ticker_strategies[ticker];
-    expandedAssignmentPanels.delete(`${ticker}::${idx}`);
-    scheduleAssignmentSave();
-    renderBacktestStrategyAssignments();
-    renderComboEstimate();
-  });
-  document.querySelectorAll("[data-assign-toggle-panel]").forEach(el=>el.onclick=()=>{
-    const ticker=el.dataset.assignTogglePanel,idx=el.dataset.idx;
-    const key=`${ticker}::${idx}`;
-    if(expandedAssignmentPanels.has(key)){
-      expandedAssignmentPanels.delete(key);
-      renderBacktestStrategyAssignments();
-    }else{
-      expandedAssignmentPanels.add(key);
-      const a=btPortfolio.ticker_strategies[ticker][idx];
-      loadStrategyUserPreset(a.strategy_id).then(()=>{if(expandedAssignmentPanels.has(key))renderBacktestStrategyAssignments()});
-      renderBacktestStrategyAssignments();
-    }
-  });
-  document.querySelectorAll("[data-assign-add-toggle]").forEach(b=>b.onclick=()=>toggleAssignmentAddPanel(b.dataset.assignAddToggle));
-  document.querySelectorAll("[data-param-grid-bt]").forEach(panel=>{
-    const [ticker,idxStr]=panel.dataset.paramGridBt.split("::");
-    bindParamFieldEvents(panel,`bt-${ticker}-${idxStr}`,(key,val)=>commitAssignmentFieldChange(ticker,Number(idxStr),key,val));
-  });
+function renderAssignFooterStats(){
+  const st=computeDraftFooterStats();
+  $("assignFooterStats").innerHTML=`<span>Инструментов: <strong>${st.tickers}</strong></span><span>Назначено стратегий: <strong>${st.total}</strong></span><span>Будет выполнено: <strong>${st.total} расчёт${pluralSuffix(st.total)}</strong></span>`;
+  $("assignSaveBtn").textContent=st.total?`Сохранить — ${st.total} расчёт${pluralSuffix(st.total)}`:"Сохранить";
 }
-
-function scheduleAssignmentSave(){
-  clearTimeout(assignmentSaveTimer);
-  assignmentSaveTimer=setTimeout(saveAssignmentsNow,500);
-}
-async function saveAssignmentsNow(){
-  if(!btPortfolio)return;
+async function saveAssignmentModal(){
+  if(!btPortfolio||!assignModalDraft)return;
+  const btn=$("assignSaveBtn");
+  const original=btn.textContent;
+  btn.disabled=true;btn.textContent="Сохраняем…";
   try{
     const r=await fetch(`/api/portfolios/${btPortfolio.id}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ticker_strategies:btPortfolio.ticker_strategies})});
+      body:JSON.stringify({ticker_strategies:assignModalDraft})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось сохранить назначения стратегий");
     btPortfolio.ticker_strategies=d.ticker_strategies;
     const idx=portfolios.findIndex(p=>p.id===btPortfolio.id);
     if(idx>=0)portfolios[idx]=btPortfolio;
+    assignModalDraft=null;
+    $("strategyAssignModal").classList.add("hidden");
+    renderAssignmentSummary();
+    renderComboEstimate();
+    showToast("Стратегии портфеля сохранены","success");
   }catch(e){
     showToast(e.message,"error");
+  }finally{
+    btn.disabled=false;btn.textContent=original;
   }
 }
+
+// ---- event binding ----------------------------------------------------
+function bindAssignmentModalEvents(){
+  document.querySelectorAll("[data-assign-ticker-toggle]").forEach(el=>el.onclick=e=>{
+    if(e.target.closest("[data-no-toggle]"))return;
+    const t=el.dataset.assignTickerToggle;
+    assignExpandedTickers.has(t)?assignExpandedTickers.delete(t):assignExpandedTickers.add(t);
+    renderAssignmentModalBody();
+  });
+  document.querySelectorAll("[data-assign-select-all]").forEach(b=>b.onclick=e=>{e.stopPropagation();selectAllForTicker(b.dataset.assignSelectAll)});
+  document.querySelectorAll("[data-assign-clear-ticker]").forEach(b=>b.onclick=e=>{e.stopPropagation();clearAllForTicker(b.dataset.assignClearTicker)});
+  document.querySelectorAll("[data-assign-check]").forEach(cb=>{
+    cb.onclick=e=>e.stopPropagation();
+    cb.onchange=e=>{e.stopPropagation();setStrategyEnabled(cb.dataset.assignCheck,cb.dataset.strategyId,cb.checked)};
+  });
+  document.querySelectorAll("[data-assign-configure]").forEach(b=>b.onclick=e=>{e.stopPropagation();toggleAssignParamPanel(b.dataset.assignConfigure,b.dataset.strategyId)});
+  document.querySelectorAll("[data-assign-toggle-strategy]").forEach(el=>el.onclick=e=>{
+    if(e.target.closest("[data-assign-configure]")||e.target.matches('input[type="checkbox"]'))return;
+    const ticker=el.dataset.assignToggleStrategy,strategyId=el.dataset.strategyId;
+    const cb=el.querySelector(`input[data-strategy-id="${strategyId}"]`);
+    cb.checked=!cb.checked;
+    setStrategyEnabled(ticker,strategyId,cb.checked);
+  });
+  document.querySelectorAll("[data-assign-param-grid]").forEach(panel=>{
+    const [ticker,strategyId]=panel.dataset.assignParamGrid.split("::");
+    bindParamFieldEvents(panel,`assign-${ticker}-${strategyId}`,(key,val)=>commitDraftFieldChange(ticker,strategyId,key,val));
+  });
+}
+
+$("openAssignModalBtn").onclick=openAssignmentModal;
+$("strategyAssignClose").onclick=()=>closeAssignmentModal(true);
+$("strategyAssignBackdrop").onclick=()=>closeAssignmentModal(true);
+$("assignCancelBtn").onclick=()=>closeAssignmentModal(true);
+$("assignSaveBtn").onclick=saveAssignmentModal;
+$("assignBulkAddBtn").onclick=applyBulkStrategyToAll;
+$("assignClearAllBtn").onclick=clearAllAssignments;
 
 // ---- pre-flight data coverage for the selected backtest period ----------
 function fmtGapRange(g){
@@ -1156,33 +1313,49 @@ function fmtGapRange(g){
   return g.missing_from||g.missing_to||"выбранный период";
 }
 async function refreshDataGaps(){
-  if(!btPortfolio||!btIncluded.size){dataGaps=[];renderDataGaps();return}
+  if(!btPortfolio||!btIncluded.size){dataGaps=[];timeframeGaps=[];renderDataGaps();return}
   const params=new URLSearchParams();
   const df=$("backtestFrom").value,dt=$("backtestTill").value;
   if(df)params.set("date_from",df);
   if(dt)params.set("date_to",dt);
   params.set("tickers",[...btIncluded].join(","));
+  params.set("timeframe",$("backtestTimeframe").value||"10m");
   const requestedPortfolioId=btPortfolio.id;
   try{
     const r=await fetch(`/api/portfolios/${requestedPortfolioId}/data-coverage?${params}`);
     const d=await r.json();
     if(!btPortfolio||btPortfolio.id!==requestedPortfolioId)return; // portfolio/tab changed while in flight
     dataGaps=(d.items||[]).filter(i=>!i.covered);
-  }catch(e){dataGaps=[]}
+    // Distinct from dataGaps: the period is fine but the chosen non-10m
+    // timeframe honestly has nothing for this ticker (no native data, no
+    // finer base to aggregate from) - see backtest_candles.py. Never
+    // offered a "Загрузить" retry, since the coverage check above already
+    // attempted the same honest fetch/aggregate that would be retried.
+    timeframeGaps=(d.items||[]).filter(i=>i.timeframe_available===false);
+  }catch(e){dataGaps=[];timeframeGaps=[]}
   renderDataGaps();
 }
 function renderDataGaps(){
   const el=$("backtestDataGaps");
   if(!el)return;
-  if(!dataGaps.length){el.classList.add("hidden");el.innerHTML="";return}
+  if(!dataGaps.length&&!timeframeGaps.length){el.classList.add("hidden");el.innerHTML="";return}
   el.classList.remove("hidden");
-  el.innerHTML=`<strong>Не хватает исторических данных:</strong>`+dataGaps.map(g=>{
-    const loading=dataGapLoading.has(g.ticker);
-    return`<div class="data-gap-row" data-gap-row="${g.ticker}">
-      <span>Для <strong>${g.ticker}</strong> отсутствуют данные за ${fmtGapRange(g)}</span>
-      <button class="secondary" data-gap-load="${g.ticker}" ${loading?"disabled":""}>${loading?"Загрузка…":"Загрузить"}</button>
-    </div>`;
-  }).join("");
+  let html="";
+  if(dataGaps.length){
+    html+=`<strong>Не хватает исторических данных:</strong>`+dataGaps.map(g=>{
+      const loading=dataGapLoading.has(g.ticker);
+      return`<div class="data-gap-row" data-gap-row="${g.ticker}">
+        <span>Для <strong>${g.ticker}</strong> отсутствуют данные за ${fmtGapRange(g)}</span>
+        <button class="secondary" data-gap-load="${g.ticker}" ${loading?"disabled":""}>${loading?"Загрузка…":"Загрузить"}</button>
+      </div>`;
+    }).join("");
+  }
+  if(timeframeGaps.length){
+    html+=`<strong>Недоступен выбранный таймфрейм:</strong>`+timeframeGaps.map(g=>
+      `<div class="data-gap-row"><span>${escapeHtml(g.timeframe_reason||`Для ${g.ticker} нет данных на этом таймфрейме.`)}</span></div>`
+    ).join("");
+  }
+  el.innerHTML=html;
   el.querySelectorAll("[data-gap-load]").forEach(b=>b.onclick=()=>loadGapData(b.dataset.gapLoad));
 }
 async function loadGapData(ticker){
@@ -1232,6 +1405,7 @@ $("backtestTill").onchange=()=>refreshDataGaps();
 
 async function startBacktest(){
   if(!btIncluded.size)return;
+  if(resolveComboCount().missing.length)return;
   $("runBacktestBtn").disabled=true;
   $("backtestProgress").classList.remove("hidden");
   $("backtestResults").classList.add("hidden");
@@ -1239,7 +1413,8 @@ async function startBacktest(){
   const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),15000);
   try{
     const r=await fetch(`/api/portfolios/${btPortfolio.id}/backtest`,{method:"POST",headers:{"Content-Type":"application/json"},signal:ctrl.signal,
-      body:JSON.stringify({tickers:[...btIncluded],date_from:$("backtestFrom").value||undefined,date_to:$("backtestTill").value||undefined})});
+      body:JSON.stringify({tickers:[...btIncluded],date_from:$("backtestFrom").value||undefined,date_to:$("backtestTill").value||undefined,
+        timeframe:$("backtestTimeframe").value||"10m"})});
     clearTimeout(t);
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось запустить бэктест");
@@ -1398,7 +1573,7 @@ function renderHistoryTable(items){
     const retClass=it.return_percent>0?"pnl-pos":it.return_percent<0?"pnl-neg":"";
     return `<tr>
       <td>${fmtDateTime(it.created_at)}</td>
-      <td>${it.portfolio_name_snapshot||"—"}</td>
+      <td>${it.portfolio_name_snapshot||"—"}<div class="muted-note">${tfLabel(it.timeframe)}</div></td>
       <td class="num">${it.combinations_ok||0}/${it.combinations_count||0}</td>
       <td><span class="pill status-${it.status}">${HISTORY_STATUS_LABEL[it.status]||it.status}</span></td>
       <td class="num ${retClass}">${it.return_percent!=null?it.return_percent+"%":"—"}</td>
@@ -1456,7 +1631,7 @@ async function openTradeViewer(runId,focusTradeId){
   $("tradeViewer").classList.remove("hidden");
   $("tradeDetail").classList.add("hidden");
   const run=await fetch(`/api/backtests/${runId}`).then(r=>r.json());
-  $("tradeViewerHead").innerHTML=`<h3>Сделки: ${run.portfolio_name_snapshot||"портфель"}</h3><p class="muted-note">${fmtDateTime(run.created_at)} · ${run.combinations_ok}/${run.combinations_count} комбинаций</p>`;
+  $("tradeViewerHead").innerHTML=`<h3>Сделки: ${run.portfolio_name_snapshot||"портфель"}</h3><p class="muted-note">${fmtDateTime(run.created_at)} · ${run.combinations_ok}/${run.combinations_count} комбинаций · таймфрейм ${tfLabel(run.timeframe)}</p>`;
   $("tvFilterTicker").innerHTML=`<option value="">Все тикеры</option>`+[...new Set((run.results||[]).map(r=>r.ticker))].map(t=>`<option value="${t}">${t}</option>`).join("");
   window.TradeChart&&window.TradeChart.setRun(run);
   loadTrades();

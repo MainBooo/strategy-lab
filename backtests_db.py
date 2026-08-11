@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     error_message TEXT,
     configuration_json TEXT,
     created_at REAL NOT NULL,
-    user_id TEXT
+    user_id TEXT,
+    timeframe TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_portfolio ON backtest_runs(portfolio_id);
 CREATE INDEX IF NOT EXISTS idx_runs_created ON backtest_runs(created_at);
@@ -125,6 +126,15 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE backtest_runs ADD COLUMN user_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON backtest_runs(user_id)")
 
+    # timeframe predates this column too - NULL means "run made before the
+    # backtest-timeframe feature existed", which every such run in practice
+    # ran at 10m (the portfolio-builder pipeline's only interval at the
+    # time). Left NULL rather than backfilled to "10m" so "recorded
+    # explicitly" stays distinguishable from "we assumed" - read sites use
+    # `run.get("timeframe") or "10m"`.
+    if "timeframe" not in runs_existing:
+        conn.execute("ALTER TABLE backtest_runs ADD COLUMN timeframe TEXT")
+
 
 def _connect() -> sqlite3.Connection:
     # Short-lived connection per call rather than one shared across gunicorn
@@ -143,14 +153,15 @@ def new_run_id() -> str:
 
 def create_run(run_id: str, portfolio_id: str | None, portfolio_name: str, date_from: str | None,
                 date_to: str | None, initial_capital: float, combinations_count: int, configuration: dict,
-                user_id: str | None = None) -> None:
+                user_id: str | None = None, timeframe: str | None = None) -> None:
     now = time.time()
     with _connect() as conn:
         conn.execute(
             "INSERT INTO backtest_runs (id,portfolio_id,portfolio_name_snapshot,started_at,date_from,date_to,"
-            "status,initial_capital,combinations_count,configuration_json,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "status,initial_capital,combinations_count,configuration_json,created_at,user_id,timeframe) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, portfolio_id, portfolio_name, now, date_from, date_to, "running",
-             initial_capital, combinations_count, json.dumps(configuration, ensure_ascii=False), now, user_id),
+             initial_capital, combinations_count, json.dumps(configuration, ensure_ascii=False), now, user_id, timeframe),
         )
 
 

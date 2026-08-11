@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 from flask import Flask,jsonify,render_template,request,send_file,Response
 
+import backtest_candles
 import backtests_db as bdb
 import charts_db as cdb
 import legacy_candle_migration
@@ -43,11 +44,13 @@ from strategies.head_shoulders import run_head_shoulders
 from strategies.simple_strategies import RUNNERS,STRATEGY_CATALOG
 from strategies.param_schema import full_schema,full_presets
 import strategy_presets_db as spdb
-from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES
+from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES,BACKTEST_TIMEFRAMES,canonical,backtest_timeframe_label
 
 BASE_DIR=Path(__file__).resolve().parent; DATA_DIR=BASE_DIR/"data"; RESULTS_DIR=BASE_DIR/"results"; STORAGE=BASE_DIR/"storage"
 LOGS_DIR=Path(os.environ.get("MOEX_LAB_LOGS_DIR") or BASE_DIR/"logs")
+BACKTEST_CACHE_DIR=DATA_DIR/"backtest_cache"
 DATA_DIR.mkdir(exist_ok=True);RESULTS_DIR.mkdir(exist_ok=True);STORAGE.mkdir(exist_ok=True);LOGS_DIR.mkdir(parents=True,exist_ok=True)
+BACKTEST_CACHE_DIR.mkdir(exist_ok=True)
 CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"portfolios.json")
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
@@ -267,6 +270,15 @@ def _instrument_file_range(filename:str|None)->tuple[str,str]|None:
     m=FILENAME_RE.match(Path(filename).name)
     if not m:return None
     return m.group(3),m.group(4)
+
+def _pinned_file_interval(filename:str|None)->int|None:
+    """Interval-minutes baked into an instrument's pinned CSV filename
+    (TICKER_Nm_FROM_TILL.csv) - the native granularity backtest_candles'
+    get_or_build_source() compares the requested backtest timeframe against
+    to decide whether that pinned file can be used as-is."""
+    if not filename:return None
+    m=FILENAME_RE.match(Path(filename).name)
+    return int(m.group(2)) if m else None
 
 def _find_reusable_file(ticker:str,interval:int,till_date:str)->str|None:
     idx=_local_data_index()
@@ -547,18 +559,32 @@ def portfolio_remove_instruments(portfolio_id):
     return jsonify(portfolio)
 
 @app.get("/api/portfolios/<portfolio_id>/data-coverage")
+@heavy_sync
 def portfolio_data_coverage(portfolio_id):
     """Whether each instrument's pinned data file actually covers the
     requested backtest period - checked against the real file range, not the
     catalog freshness label, so this never reports "no data" for a period
     that is already sitting in the CSV. Used right before a backtest run;
-    portfolio creation/editing no longer surfaces data readiness at all."""
+    portfolio creation/editing no longer surfaces data readiness at all.
+
+    An optional ?timeframe= additionally checks whether that timeframe can
+    honestly be served for each ticker (native data or aggregation from a
+    strictly finer native base - see backtest_candles.py/timeframes.py).
+    Omitted or "10m" (the pinned-file default): zero extra cost, identical
+    to the pre-existing period-only behaviour. Any other value can trigger a
+    real MOEX sync attempt to know for sure - that is the only honest way to
+    ever report a timeframe as unavailable rather than "not yet checked",
+    which is why this route now carries @heavy_sync like the sibling
+    download-data endpoint."""
     portfolio=PORTFOLIOS.get(portfolio_id)
     if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     date_from=(request.args.get("date_from") or "").strip() or None
     date_to=(request.args.get("date_to") or "").strip() or None
     tickers_param=request.args.get("tickers")
     wanted=({t.strip().upper() for t in tickers_param.split(",") if t.strip()} if tickers_param else None)
+    timeframe=(request.args.get("timeframe") or "").strip() or None
+    check_timeframe=bool(timeframe) and canonical(timeframe)!=canonical("10m")
+    tf_label=backtest_timeframe_label(timeframe) if timeframe else None
 
     items=[]
     for inst in portfolio.get("instruments",[]):
@@ -587,10 +613,20 @@ def portfolio_data_coverage(portfolio_id):
                     missing_to=gap_to or None
                     if gap_from and not gap_to:missing_to=ffrom
                     if gap_to and not gap_from:missing_from=ftill
-        items.append({"ticker":ticker,"covered":covered,
-                       "file_from":file_range[0] if file_range else None,
-                       "file_till":file_range[1] if file_range else None,
-                       "missing_from":missing_from,"missing_to":missing_to})
+        item={"ticker":ticker,"covered":covered,
+              "file_from":file_range[0] if file_range else None,
+              "file_till":file_range[1] if file_range else None,
+              "missing_from":missing_from,"missing_to":missing_to}
+        if check_timeframe:
+            result=backtest_candles.fetch_full_range(
+                ticker=ticker,board="TQBR",timeframe=canonical(timeframe),
+                date_from=date_from or (file_range[0] if file_range else None) or "",
+                date_till=date_to or (file_range[1] if file_range else None) or "",
+            )
+            available=bool(result["candles"])
+            item["timeframe_available"]=available
+            item["timeframe_reason"]=None if available else f"Для {ticker} отсутствуют данные, необходимые для тестирования на {tf_label}."
+        items.append(item)
     return jsonify({"items":items})
 
 @app.post("/api/portfolios/<portfolio_id>/instruments/<ticker>/download-data")
@@ -961,8 +997,10 @@ def _trade_excursions(candles:pd.DataFrame,entry_time,exit_time,entry_price:floa
         return None,None
 
 
-def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date_from:str|None,date_till:str|None,run_id:str)->None:
+def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date_from:str|None,date_till:str|None,run_id:str,timeframe:str|None=None)->None:
     from strategies.common import COMMISSION_SIDE
+    tf=timeframe or "10m"
+    tf_label=backtest_timeframe_label(tf)
     total=len(combos)
     instruments_by_ticker={str(i["ticker"]):i for i in portfolio.get("instruments",[])}
     JOBS.update(job_id,status="running",stage="Запуск бэктеста",total=total)
@@ -1008,9 +1046,15 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
             instrument=instruments_by_ticker.get(ticker)
             if not instrument:
                 _record_failure(idx,ticker,strategy_id,strategy_name,combo,"validate","not_in_portfolio",f"{ticker} отсутствует в портфеле."); continue
-            source=DATA_DIR/Path(instrument["file"]).name
-            if not source.exists():
-                _record_failure(idx,ticker,strategy_id,strategy_name,combo,"load_data","missing_file",f"Файл с котировками {ticker} не найден. Скачайте данные заново."); continue
+            native_file=DATA_DIR/Path(instrument["file"]).name if instrument.get("file") else None
+            source=backtest_candles.get_or_build_source(
+                ticker=ticker,board="TQBR",timeframe=tf,date_from=date_from,date_till=date_till,
+                cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
+                native_file_interval=_pinned_file_interval(instrument.get("file")),
+            )
+            if source is None:
+                _record_failure(idx,ticker,strategy_id,strategy_name,combo,"load_data","timeframe_unavailable",
+                                 f"Для {ticker} отсутствуют данные, необходимые для тестирования на {tf_label}."); continue
 
             lots=int(combo.get("lots") if combo.get("lots") is not None else instrument.get("lot_count",1))
             lot_size=int(instrument.get("lot_size") or lot_size_for(ticker))
@@ -1133,6 +1177,10 @@ def portfolio_backtest(portfolio_id):
         if combo["ticker"] not in all_tickers:
             return jsonify({"error":f"{combo['ticker']} отсутствует в портфеле"}),400
 
+    timeframe=str(p.get("timeframe") or "10m")
+    if canonical(timeframe) not in {canonical(t) for t in BACKTEST_TIMEFRAMES}:
+        return jsonify({"error":f"Неизвестный таймфрейм: {timeframe}"}),400
+
     existing=JOBS.find_active_for_portfolio(portfolio_id,kind="backtest")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
@@ -1140,12 +1188,12 @@ def portfolio_backtest(portfolio_id):
     run_id=bdb.new_run_id()
     bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
                     float(portfolio.get("starting_capital") or 1_000_000),len(combos),
-                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to},
-                    user_id=auth.current_user_id())
+                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to,"timeframe":timeframe},
+                    user_id=auth.current_user_id(),timeframe=timeframe)
 
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
-    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,combos,date_from,date_to,run_id):
+    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,combos,date_from,date_to,run_id,timeframe):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
         bdb.finish_run(run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)
@@ -1202,20 +1250,27 @@ def get_backtest_results(run_id):
 
 @app.get("/api/backtests/<run_id>/candles")
 def get_backtest_candles(run_id):
-    """Candles for the trade chart: the same local file+range the backtest
-    engine actually read for this ticker, not a fresh MOEX fetch - so the
-    chart can never show a different history than what produced the trades."""
+    """Candles for the trade chart: the exact source the backtest engine
+    actually read for this ticker - the pinned native file when the run was
+    10m (byte-identical to the pre-existing behaviour), or the same honest
+    aggregate/native-fetch backtest_candles.py built for a non-10m run -
+    never a fresh ad-hoc fetch at a different granularity, so the chart can
+    never disagree with the trades drawn on top of it."""
     run=bdb.get_run(run_id)
     if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     ticker=(request.args.get("ticker") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
     portfolio=PORTFOLIOS.get(run["portfolio_id"])
     instrument_file=next((i["file"] for i in (portfolio or {}).get("instruments",[]) if i["ticker"]==ticker),None)
-    if not instrument_file:
-        return jsonify({"error":f"Файл котировок {ticker} для этого портфеля не найден"}),404
-    source=DATA_DIR/Path(instrument_file).name
-    if not source.exists():
-        return jsonify({"error":f"Файл котировок {ticker} отсутствует на диске"}),404
+    native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
+    tf=canonical(str(run.get("timeframe") or "10m"))
+    source=backtest_candles.get_or_build_source(
+        ticker=ticker,board="TQBR",timeframe=tf,date_from=run.get("date_from"),date_till=run.get("date_to"),
+        cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
+        native_file_interval=_pinned_file_interval(instrument_file),
+    )
+    if source is None:
+        return jsonify({"error":f"Котировки {ticker} на таймфрейме {backtest_timeframe_label(tf)} недоступны"}),404
     try:
         candles=load_candles(source,run.get("date_from"),run.get("date_to"))
     except Exception as exc:
@@ -1255,16 +1310,20 @@ def get_backtest_trade(run_id,trade_id):
     candles_window=[]
     if result and result.get("strategy_run_id"):
         instrument_file=next((i["file"] for p in PORTFOLIOS.list() for i in p.get("instruments",[]) if i["ticker"]==trade["ticker"]),None)
-        if instrument_file:
-            source=DATA_DIR/Path(instrument_file).name
-            if source.exists():
-                try:
-                    candles=load_candles(source)
-                    entry_ts=pd.to_datetime(trade["entry_datetime"]); exit_ts=pd.to_datetime(trade["exit_datetime"])
-                    window=candles[(candles["begin"]>=entry_ts-pd.Timedelta(hours=6))&(candles["begin"]<=exit_ts+pd.Timedelta(hours=6))]
-                    candles_window=[{"time":str(r["begin"]),"open":r["open"],"high":r["high"],"low":r["low"],"close":r["close"]} for _,r in window.iterrows()]
-                except Exception:
-                    app.logger.exception("Could not build candle window for trade %s",trade_id)
+        native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
+        source=backtest_candles.get_or_build_source(
+            ticker=trade["ticker"],board="TQBR",timeframe=canonical(str(run.get("timeframe") or "10m")),
+            date_from=run.get("date_from"),date_till=run.get("date_to"),cache_dir=BACKTEST_CACHE_DIR,
+            native_file=native_file,native_file_interval=_pinned_file_interval(instrument_file),
+        )
+        if source is not None:
+            try:
+                candles=load_candles(source)
+                entry_ts=pd.to_datetime(trade["entry_datetime"]); exit_ts=pd.to_datetime(trade["exit_datetime"])
+                window=candles[(candles["begin"]>=entry_ts-pd.Timedelta(hours=6))&(candles["begin"]<=exit_ts+pd.Timedelta(hours=6))]
+                candles_window=[{"time":str(r["begin"]),"open":r["open"],"high":r["high"],"low":r["low"],"close":r["close"]} for _,r in window.iterrows()]
+            except Exception:
+                app.logger.exception("Could not build candle window for trade %s",trade_id)
     trade["candles"]=candles_window[:200]
     return jsonify(trade)
 
@@ -1289,14 +1348,15 @@ def repeat_backtest(run_id):
     existing=JOBS.find_active_for_portfolio(portfolio["id"],kind="backtest")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
+    timeframe=config.get("timeframe") or "10m"
     new_run_id=bdb.new_run_id()
     bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
                     float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config,
-                    user_id=auth.current_user_id())
+                    user_id=auth.current_user_id(),timeframe=timeframe)
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
     if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,assignments,
-                             config.get("date_from"),config.get("date_to"),new_run_id):
+                             config.get("date_from"),config.get("date_to"),new_run_id,timeframe):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
         bdb.finish_run(new_run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)

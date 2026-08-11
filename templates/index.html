@@ -165,6 +165,7 @@
       <div class="form-grid">
         <label>Портфель <select id="backtestPortfolioSelect"></select></label>
         <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
+        <label>Таймфрейм <span class="tip" data-tip="На каких свечах считать стратегию. 10 минут — данные уже загружены для портфеля. Другие таймфреймы честно докачиваются или строятся агрегацией из более мелких свечей MOEX; если для тикера их нет, об этом будет предупреждение перед запуском.">?</span><select id="backtestTimeframe"></select></label>
       </div>
 
       <div class="ticker-select-head">
@@ -180,10 +181,11 @@
 
       <div class="strategy-assignment-head">
         <strong>Стратегии по инструментам</strong>
-        <span class="muted-note">Можно назначить несколько стратегий одному инструменту и разные стратегии разным инструментам.</span>
+        <button type="button" class="secondary" id="openAssignModalBtn">Настроить стратегии портфеля</button>
       </div>
-      <div id="backtestStrategyAssignments" class="strategy-assignment-list"></div>
+      <div id="assignmentSummary" class="assignment-summary"></div>
 
+      <div id="assignmentValidation" class="assignment-validation hidden"></div>
       <div class="combo-estimate" id="comboEstimate"></div>
 
       <div id="backtestDataGaps" class="data-gaps hidden"></div>
@@ -247,6 +249,33 @@
           <div id="tradeDetail" class="trade-detail hidden"></div>
         </div>
         <div id="tvChartView" class="hidden"></div>
+      </div>
+    </div>
+
+    <div class="strategy-assign-modal hidden" id="strategyAssignModal">
+      <div class="strategy-assign-backdrop" id="strategyAssignBackdrop"></div>
+      <div class="strategy-assign-panel" role="dialog" aria-modal="true" aria-label="Настройка стратегий портфеля">
+        <div class="strategy-assign-header">
+          <div>
+            <h3>Настройка стратегий портфеля</h3>
+            <p class="muted-note">Выберите одну или несколько стратегий для каждого инструмента</p>
+          </div>
+          <button class="close-btn" id="strategyAssignClose" aria-label="Закрыть">×</button>
+        </div>
+        <div class="strategy-assign-bulkbar">
+          <span>Применить ко всему портфелю:</span>
+          <select id="assignBulkStrategy"></select>
+          <button type="button" class="secondary" id="assignBulkAddBtn">Добавить всем</button>
+          <button type="button" class="link-btn assign-clear-link" id="assignClearAllBtn">Очистить все назначения</button>
+        </div>
+        <div class="strategy-assign-body" id="strategyAssignBody"></div>
+        <div class="strategy-assign-footer">
+          <div class="strategy-assign-footer-stats" id="assignFooterStats"></div>
+          <div class="strategy-assign-footer-actions">
+            <button type="button" class="secondary" id="assignCancelBtn">Отмена</button>
+            <button type="button" class="primary" id="assignSaveBtn">Сохранить</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
