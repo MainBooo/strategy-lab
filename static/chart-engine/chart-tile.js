@@ -39,6 +39,14 @@
    * exchange's trading week/month isn't a fixed multiple of a day (holidays
    * shift boundaries), so their "current bucket" can't be derived this way. */
   const LIVE_TICK_BUCKET_SECONDS = { "1m": 60, "10m": 600, "30m": 1800, "60m": 3600, "4h": 4 * 3600, "1d": 86400 };
+  // How often an active tile re-fetches the tail of /api/candles to pick up
+  // whatever the backend's freshness/gap-fill pass has done (a genuinely
+  // new real candle, an updated still-forming one, or a synthetic no-trade
+  // bar) - separate from _onRealtimeUpdate's in-memory live tick, which only
+  // ever reacts to the last-trade price and can't see a gap-filled bucket.
+  // 25s keeps well within MOEX's own ~15min publish cadence while staying
+  // inside a sane request budget for a 4-6 tile layout.
+  const TAIL_REFRESH_MS = 25000;
   // Rough MOEX trading-session bars/day per timeframe (~10:00-23:50 MSK,
   // ~830 minutes) - only used to translate a "days" quick-range preset into
   // a bar count for setVisibleBarCount(); doesn't need to be exact, just in
@@ -92,6 +100,10 @@
       this._liveTickCbs = [];
       this._applyingRange = false;
       this._applyingCrosshair = false;
+      this._tailTimer = null;
+      this._tailInFlight = false;
+      this._tailVisHandler = null;
+      this._tailFailures = 0;
     }
 
     // ---------------------------------------------------------- wiring ----
@@ -147,7 +159,7 @@
           <span class="ca-tile-tag" data-role="tag"></span>
           <div class="ca-tile-realtime-slot" data-role="realtimeSlot"></div>
           <span class="ca-tile-spacer"></span>
-          <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки">⛶</button>
+          <button class="ca-tile-btn" data-role="fs" title="Полноэкранный режим плитки" aria-label="Полноэкранный режим плитки"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
           <button class="ca-tile-btn ca-tile-close" data-role="close" title="Закрыть плитку" aria-label="Закрыть плитку">✕</button>
         </div>
         <div class="ca-tile-chart-host" data-role="chartHost">
@@ -259,6 +271,7 @@
     }
 
     destroy() {
+      this._stopTailRefresh();
       if (this.indicator) this.indicator.destroy();
       if (this.fsCtrl) this.fsCtrl.destroy();
       if (this.core) this.core.destroy();
@@ -533,9 +546,67 @@
 
     // ------------------------------------------------------------- live ---
 
-    startRealtime() { if (this.indicator && this.symbol) this.indicator.start(this.symbol); }
-    stopRealtime() { if (this.indicator) this.indicator.stop(); }
-    showReplayMode() { if (this.indicator) this.indicator.showReplayMode(); }
+    startRealtime() {
+      if (this.indicator && this.symbol) this.indicator.start(this.symbol);
+      this._startTailRefresh();
+    }
+    stopRealtime() {
+      if (this.indicator) this.indicator.stop();
+      this._stopTailRefresh();
+    }
+    showReplayMode() {
+      if (this.indicator) this.indicator.showReplayMode();
+      this._stopTailRefresh(); // Market Replay reads its own history - never poll live MOEX data over it
+    }
+
+    _startTailRefresh() {
+      this._stopTailRefresh();
+      const tick = async () => { await this._refreshTail(); this._tailTimer = setTimeout(tick, TAIL_REFRESH_MS); };
+      this._tailTimer = setTimeout(tick, TAIL_REFRESH_MS);
+      this._tailVisHandler = () => { if (document.visibilityState === "visible") this._refreshTail(); };
+      document.addEventListener("visibilitychange", this._tailVisHandler);
+    }
+
+    _stopTailRefresh() {
+      clearTimeout(this._tailTimer);
+      this._tailTimer = null;
+      if (this._tailVisHandler) { document.removeEventListener("visibilitychange", this._tailVisHandler); this._tailVisHandler = null; }
+    }
+
+    /** Fetches just the tail of /api/candles and merges it in via
+     * ChartCore.mergeTailCandles() - no fitContent, no zoom/scroll reset.
+     * Skipped for a tile deliberately viewing a fixed past window (custom
+     * range whose `to` isn't today), same rule _onRealtimeUpdate uses.
+     * Surfaces a persistent failure (2+ in a row - a single blip is not
+     * "Ошибка обновления", a genuinely broken poll is) via the same status
+     * banner _reload() uses, and clears it on the next successful poll. */
+    async _refreshTail() {
+      if (this._tailInFlight || !this.core || !this.core.candles.length) return;
+      if (document.visibilityState !== "visible") return;
+      if (this.rangeMode === "custom" && this.toDate && this.toDate < todayISO()) return;
+      this._tailInFlight = true;
+      try {
+        await this.core.refreshTail(10);
+        this._tailFailures = 0;
+        if (this.el) {
+          const status = this.el.querySelector(".ca-tile-status");
+          if (status && status.dataset.refreshError) { status.classList.add("hidden"); delete status.dataset.refreshError; }
+        }
+        this.updateHeader();
+      } catch (e) {
+        this._tailFailures++;
+        if (this._tailFailures >= 2 && this.el) {
+          const host = this.el.querySelector('[data-role="chartHost"]');
+          let status = host.querySelector(".ca-tile-status");
+          if (!status) { status = document.createElement("div"); status.className = "ca-tile-status"; host.appendChild(status); }
+          status.textContent = "Ошибка обновления";
+          status.dataset.refreshError = "1";
+          status.classList.remove("hidden");
+        }
+      } finally {
+        this._tailInFlight = false;
+      }
+    }
 
     /** Ticks this tile's current bar from its own realtime price, using
      * ChartCore.appendCandle() (a targeted series.update(), not setData())

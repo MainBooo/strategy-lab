@@ -9,6 +9,43 @@
   --accent: #7c8cff;
   --accent-2: #4dd4ac;
   --danger: #ff7081;
+
+  /* Semantic layer on top of the tokens above - aliases where an existing
+     token already means the same thing (zero visual diff, dozens of rules
+     still reference the names above directly and keep working unchanged),
+     plus a handful that are genuinely new because nothing filled that role
+     before (surface-raised, text-faint, warning, accent-hover). New shared
+     components should reach for these names; old rules migrate gradually. */
+  --surface: var(--panel-2);
+  --surface-raised: #161c2c;
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --text-faint: #5c6780;
+  --accent-hover: #909dff;
+  --success: var(--accent-2);
+  --warning: #f2a94e;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Motion & elevation layer - every animated rule in this file reaches for
+     these instead of inlining its own numbers, so the whole app moves on
+     one consistent clock. Durations are tuned by what's moving: -fast for
+     hover/press feedback under the pointer, -base for content appearing,
+     -slow for anything spatial (panels, drawers). ease-spring is reserved
+     for small, single-element moves (indicator, toast) - using it on large
+     surfaces reads as wobbly rather than lively. */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 340ms;
+  --dur-slower: 480ms;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 10px 28px rgba(0,0,0,.34);
+  --shadow-3: 0 24px 64px rgba(0,0,0,.42);
+  --shadow-glow: 0 0 0 1px rgba(124,140,255,.45), 0 10px 32px rgba(124,140,255,.24);
 }
 
 * { box-sizing: border-box; }
@@ -16,6 +53,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background:
     radial-gradient(circle at 15% 0%, rgba(85, 106, 255, .22), transparent 34rem),
@@ -25,7 +63,11 @@ body {
 }
 
 .shell {
-  width: min(1180px, calc(100% - 32px));
+  /* Strategy Lab is a data-dense trading/research tool, not a landing page -
+     tables, portfolio grids and backtest results need real width on desktop
+     instead of being letterboxed into a ~1180px column. Charts get their own
+     near-100% override further down (body.charts-active .shell). */
+  width: min(1600px, calc(100% - 48px));
   margin: 0 auto;
   padding: 28px 0 70px;
 }
@@ -34,11 +76,18 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 28px;
+  gap: 20px;
+  padding: 14px 0;
   margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
 }
 
 .hero-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* .primary/.secondary default to width:100% for full-bleed form buttons
+   (login/register submit) - the header reuses the same classes for the
+   Войти/Регистрация links, where a wrapped flex item blowing up to 100%
+   of the row looks broken. Scope them back down to their own width here. */
+.hero-meta .primary, .hero-meta .secondary { width: auto; margin-top: 0; }
 
 .eyebrow, .step {
   color: var(--accent-2);
@@ -48,11 +97,16 @@ body {
   font-weight: 800;
 }
 
-h1 {
-  margin: 6px 0 6px;
-  font-size: clamp(26px, 4vw, 44px);
-  line-height: 1;
-  letter-spacing: -.045em;
+/* Header reads as a compact application bar, not a marketing hero - the
+   eyebrow/title pair used to run up to 44px, sized for a landing page. */
+.hero-title .eyebrow { font-size: 10px; opacity: .75; }
+
+.hero-title h1 {
+  margin: 2px 0 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -.01em;
 }
 
 h2 {
@@ -117,12 +171,11 @@ p { color: var(--muted); max-width: 680px; line-height: 1.6; }
 }
 
 .card {
-  border: 1px solid var(--line);
-  background: linear-gradient(150deg, rgba(25,32,48,.9), rgba(14,19,30,.88));
-  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: 0 26px 90px rgba(0,0,0,.24);
-  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.28);
 }
 
 .card-head {
@@ -175,7 +228,7 @@ input:focus, select:focus {
 
 .checkbox-label input { width: auto; }
 
-button, .secondary {
+button, .secondary, .primary {
   border: 0;
   border-radius: 12px;
   padding: 13px 17px;
@@ -185,6 +238,10 @@ button, .secondary {
   display: inline-flex;
   justify-content: center;
   align-items: center;
+  transition: transform .1s ease, background .15s ease, border-color .15s ease, opacity .15s ease;
+}
+button:active:not(:disabled), .secondary:active, .primary:active {
+  transform: scale(.97);
 }
 
 .primary {
@@ -192,6 +249,7 @@ button, .secondary {
   color: white;
   background: linear-gradient(135deg, var(--accent), #5b68e6);
   margin-top: 7px;
+  text-decoration: none;
 }
 
 .primary:disabled { opacity: .55; cursor: wait; }
@@ -230,6 +288,15 @@ button, .secondary {
   text-align: center;
   border: 1px dashed var(--line);
   border-radius: 16px;
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+.empty:not(td)::before {
+  content: "";
+  display: block; margin: 0 auto 10px; width: 30px; height: 30px;
+  opacity: .5;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6'%3E%3Cpath d='M3 10l2.5-6h13L21 10M3 10v9a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-9M3 10h5a1 1 0 0 1 1 1v1a2 2 0 0 0 4 0v-1a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6'%3E%3Cpath d='M3 10l2.5-6h13L21 10M3 10v9a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-9M3 10h5a1 1 0 0 1 1 1v1a2 2 0 0 0 4 0v-1a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .metrics {
@@ -239,20 +306,28 @@ button, .secondary {
 }
 
 .metric {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   background: rgba(255,255,255,.035);
-  border-radius: 15px;
-  padding: 17px;
+  border-radius: var(--radius-md);
+  padding: 13px 15px;
 }
 
 .metric span {
   display: block;
-  color: var(--muted);
-  font-size: 12px;
-  margin-bottom: 9px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 6px;
 }
 
-.metric strong { font-size: 22px; }
+.metric strong {
+  font-size: 19px;
+  font-family: ui-monospace, "SF Mono", "Roboto Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+.metric strong.pos { color: var(--success); }
+.metric strong.neg { color: var(--danger); }
 
 .result-actions {
   display: flex;
@@ -272,6 +347,155 @@ pre {
 
 .hidden { display: none; }
 
+/* ------------------------------------------------------ restrained motion -- */
+/* Content already existed instantly (display:none <-> block via .hidden) -
+   these run automatically whenever that toggle makes an element visible
+   again, no JS changes needed. Kept short (150-250ms) and purely opacity/
+   transform so it reads as "settling in", not decoration. */
+@keyframes fade-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fade-scale-in { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.tab-page:not(.hidden) { animation: fade-rise var(--dur-slow) var(--ease-out); }
+.account-dropdown:not(.hidden) { animation: fade-scale-in var(--dur-base) var(--ease-spring); transform-origin: top right; }
+.trade-viewer:not(.hidden) .trade-viewer-panel { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.trade-viewer:not(.hidden) .trade-viewer-backdrop { animation: fade-in var(--dur-base) var(--ease-out); }
+.build-success:not(.hidden) { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.mdm-modal { animation: fade-scale-in var(--dur-slow) var(--ease-spring); }
+.mdm-backdrop { animation: fade-in var(--dur-base) var(--ease-out); }
+
+/* ============================================================
+   DESIGN SYSTEM: sliding tab indicator, hover-lift, toasts,
+   skeleton loading, staggered list entry, count-up numbers.
+   Everything here is transform/opacity only (no width/height/
+   top/left animation on real content) so it stays smooth on
+   the same low-power hardware the trading terminal already has
+   to run well on. Wired from app.js: positionTabIndicator(),
+   showToast(), animateNumber() - see comments near those. */
+
+#appPrimaryTabs { position: relative; }
+.tab-indicator {
+  position: absolute; top: 0; left: 0; height: 100%; z-index: 0;
+  border-radius: 12px; pointer-events: none;
+  background: linear-gradient(135deg, var(--accent), #5b68e6);
+  box-shadow: 0 6px 18px rgba(124,140,255,.28);
+  transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
+}
+.tab-indicator.no-anim { transition: none; }
+/* The indicator sits behind and reuses the exact fill .tab.active already
+   painted (see .tabs rules above) - once JS has a real measurement it hides
+   the per-button fill so only the sliding version shows; until then (no-JS,
+   or the one frame before first layout) the button's own active style is
+   the visible fallback, so nothing ever looks unstyled. */
+#appPrimaryTabs.indicator-ready .tab.active { background: transparent; box-shadow: none; }
+#appPrimaryTabs .tab { position: relative; z-index: 1; }
+
+/* ---------------------------------------------------------- hover-lift -- */
+.card, .strategy-card, .metric, .security-row, .portfolio-row, .portfolio-card,
+.status, .ticker-chip {
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out), background var(--dur-base) var(--ease-out);
+}
+.strategy-card { cursor: default; }
+.strategy-card:hover { transform: translateY(-3px); border-color: rgba(124,140,255,.4); box-shadow: var(--shadow-2); }
+.strategy-card.primary-strategy:hover { border-color: rgba(77,212,172,.75); }
+.metric:hover { transform: translateY(-2px); border-color: rgba(124,140,255,.3); }
+.security-row:hover, .portfolio-row:hover { border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.05); }
+.security-row.selected-row:hover { border-color: rgba(77,212,172,.75); }
+
+/* ---------------------------------------------------------- button feel -- */
+button, .secondary, .primary {
+  position: relative; overflow: hidden;
+}
+.primary:not(:disabled):hover { box-shadow: 0 8px 24px rgba(124,140,255,.35); transform: translateY(-1px); }
+.secondary:hover { border-color: rgba(124,140,255,.5); background: rgba(124,140,255,.08); }
+button:active:not(:disabled), .secondary:active, .primary:active { transform: scale(.97) translateY(0); }
+
+/* ------------------------------------------------------------- toasts -- */
+.toast-stack {
+  position: fixed; right: 18px; bottom: 18px; z-index: 200;
+  display: flex; flex-direction: column-reverse; gap: 10px;
+  max-width: min(360px, calc(100vw - 36px)); pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 13px 15px; border-radius: 13px;
+  background: var(--surface-raised); border: 1px solid var(--border);
+  box-shadow: var(--shadow-3);
+  font-size: 13px; line-height: 1.45; color: var(--text);
+  animation: toast-in var(--dur-slow) var(--ease-spring);
+}
+.toast.leaving { animation: toast-out var(--dur-base) var(--ease-in-out) forwards; }
+.toast-icon { flex: none; width: 20px; height: 20px; margin-top: 1px; }
+.toast.success .toast-icon { color: var(--success); }
+.toast.error .toast-icon { color: var(--danger); }
+.toast.info .toast-icon { color: var(--accent); }
+.toast-body { flex: 1; min-width: 0; }
+.toast-close {
+  flex: none; background: none; border: none; color: var(--text-faint); cursor: pointer;
+  padding: 2px; margin: -2px -2px -2px 0; border-radius: 6px; line-height: 0;
+}
+.toast-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes toast-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(24px); } }
+
+/* --------------------------------------------------------- skeletons -- */
+.skeleton-row {
+  height: 66px; border-radius: 12px; border: 1px solid var(--line);
+  background: linear-gradient(100deg, rgba(255,255,255,.03) 40%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.03) 60%);
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
+
+/* ----------------------------------------------- staggered list entry -- */
+/* Pure CSS, no JS wiring needed: these three containers already get fresh
+   innerHTML on every render (renderCatalog/renderStrategiesContext/
+   loadHistory in app.js), so nth-child alone is enough to restagger on
+   every re-render automatically. Capped at 14 - lists longer than that
+   would make the tail feel sluggish to appear, so items past it show
+   immediately (no rule = no animation-delay = animation still plays,
+   just without the stagger past this point isn't quite right either;
+   see the catch-all rule below that skips animation entirely past 14). */
+#securityList > *, #strategyCards > *, #historyTable tbody tr, #savedPortfolios > * {
+  animation: fade-rise var(--dur-slow) var(--ease-out) both;
+}
+#securityList > *:nth-child(n+15), #strategyCards > *:nth-child(n+15),
+#historyTable tbody tr:nth-child(n+15), #savedPortfolios > *:nth-child(n+15) { animation: none; }
+#securityList > :nth-child(1), #strategyCards > :nth-child(1), #historyTable tbody tr:nth-child(1), #savedPortfolios > :nth-child(1) { animation-delay: 0ms; }
+#securityList > :nth-child(2), #strategyCards > :nth-child(2), #historyTable tbody tr:nth-child(2), #savedPortfolios > :nth-child(2) { animation-delay: 20ms; }
+#securityList > :nth-child(3), #strategyCards > :nth-child(3), #historyTable tbody tr:nth-child(3), #savedPortfolios > :nth-child(3) { animation-delay: 40ms; }
+#securityList > :nth-child(4), #strategyCards > :nth-child(4), #historyTable tbody tr:nth-child(4), #savedPortfolios > :nth-child(4) { animation-delay: 60ms; }
+#securityList > :nth-child(5), #strategyCards > :nth-child(5), #historyTable tbody tr:nth-child(5), #savedPortfolios > :nth-child(5) { animation-delay: 80ms; }
+#securityList > :nth-child(6), #strategyCards > :nth-child(6), #historyTable tbody tr:nth-child(6), #savedPortfolios > :nth-child(6) { animation-delay: 100ms; }
+#securityList > :nth-child(7), #strategyCards > :nth-child(7), #historyTable tbody tr:nth-child(7), #savedPortfolios > :nth-child(7) { animation-delay: 120ms; }
+#securityList > :nth-child(8), #strategyCards > :nth-child(8), #historyTable tbody tr:nth-child(8), #savedPortfolios > :nth-child(8) { animation-delay: 140ms; }
+#securityList > :nth-child(9), #strategyCards > :nth-child(9), #historyTable tbody tr:nth-child(9), #savedPortfolios > :nth-child(9) { animation-delay: 160ms; }
+#securityList > :nth-child(10), #strategyCards > :nth-child(10), #historyTable tbody tr:nth-child(10), #savedPortfolios > :nth-child(10) { animation-delay: 180ms; }
+#securityList > :nth-child(11), #strategyCards > :nth-child(11), #historyTable tbody tr:nth-child(11), #savedPortfolios > :nth-child(11) { animation-delay: 200ms; }
+#securityList > :nth-child(12), #strategyCards > :nth-child(12), #historyTable tbody tr:nth-child(12), #savedPortfolios > :nth-child(12) { animation-delay: 220ms; }
+#securityList > :nth-child(13), #strategyCards > :nth-child(13), #historyTable tbody tr:nth-child(13), #savedPortfolios > :nth-child(13) { animation-delay: 240ms; }
+#securityList > :nth-child(14), #strategyCards > :nth-child(14), #historyTable tbody tr:nth-child(14), #savedPortfolios > :nth-child(14) { animation-delay: 260ms; }
+
+/* ------------------------------------------------------- count-up value -- */
+.count-up { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-page:not(.hidden),
+  .account-dropdown:not(.hidden),
+  .trade-viewer:not(.hidden) .trade-viewer-panel,
+  .trade-viewer:not(.hidden) .trade-viewer-backdrop,
+  .build-success:not(.hidden),
+  .toast, .skeleton-row,
+  #securityList > *, #strategyCards > *, #historyTable tbody tr, #savedPortfolios > * { animation: none; }
+  button, .secondary, .primary,
+  .card, .strategy-card, .metric, .security-row, .portfolio-row, .portfolio-card,
+  .tab-indicator { transition: none; }
+  .strategy-card:hover, .metric:hover, .primary:not(:disabled):hover { transform: none; }
+}
+
+
 @media (max-width: 820px) {
   .hero { flex-direction: column; align-items: flex-start; gap: 12px; }
   .hero-meta { width: 100%; }
@@ -287,16 +511,65 @@ pre {
   /* Compact mobile header (~45% shorter than the pre-cleanup layout):
      smaller title, no repeated marketing copy below it, balance card and
      MOEX-status pill sit side by side instead of stacking full-width. */
-  .hero { margin-bottom: 12px; gap: 8px; }
-  .eyebrow { font-size: 10px; letter-spacing: .1em; }
-  h1 { font-size: 22px; margin: 3px 0 4px; }
+  .hero { margin-bottom: 12px; padding: 10px 0; gap: 8px; }
+  .hero-title .eyebrow { font-size: 9px; letter-spacing: .1em; }
+  .hero-title h1 { font-size: 16px; margin: 2px 0 0; }
   .hero-title p { display: none; }
   .hero-meta { gap: 8px; }
+  /* "Инструментов MOEX: N" is pure decoration once the ticker tape below is
+     already conveying "this app has live data" - on a narrow header every
+     row costs real vertical space, so it's the one dropped, not shrunk. */
+  #status { display: none; }
   .status { padding: 7px 11px; font-size: 12px; }
   .pb-summary, .pb-loading { padding: 6px 11px; min-width: 0; }
   .pb-summary strong { font-size: 15px; }
   .ticker-tape { margin-bottom: 12px; }
   .ticker-tape-seq { padding: 7px 0; }
+
+  /* Войти/Регистрация as a matched pair of compact pill buttons instead of
+     full desktop button padding - they were the widest thing in .hero-meta
+     on a narrow screen. */
+  .hero-meta .primary, .hero-meta .secondary { padding: 9px 14px; font-size: 13px; }
+}
+
+/* ---------------------------------------- mobile bottom navigation -------- */
+/* The 5-item top tab bar (Портфель/Стратегии/Бэктест/Анализ графиков/Market
+   Replay) wraps to two rows under ~620px and reads as clutter above the
+   fold. Below that width it's replaced by a fixed bottom bar with the exact
+   same .tab/data-tab contract (see index.html) - initTabs() wires both from
+   one querySelectorAll(".tab") call, so no JS change was needed for this. */
+.tabs.mobile-bottom-nav { display: none; }
+@media (max-width: 620px) {
+  .tabs.app-primary-tabs { display: none; }
+  .shell { padding-bottom: calc(66px + env(safe-area-inset-bottom)); }
+  /* Desktop keeps its top tab strip visible as a slim bar above the
+     full-bleed terminal during charts-active (see body.charts-active .tabs
+     in the non-mobile rules) - phones need the same escape hatch. Without
+     it, opening "Анализ графиков" on a phone was a dead end: the top bar is
+     already display:none below 620px, and this used to force-hide the
+     bottom bar too, leaving no tab control on screen at all to switch back
+     out (the browser back button doesn't help either - tab switches don't
+     touch history). Keep both the padding and the bar exactly as they are
+     everywhere else on mobile, sized for the terminal to sit above them. */
+
+  .tabs.mobile-bottom-nav {
+    display: flex; margin: 0; gap: 0;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding: 4px 2px calc(4px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 24px rgba(0,0,0,.25);
+  }
+  .mobile-bottom-nav .tab {
+    flex: 1 1 0; min-width: 0; min-height: 46px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: transparent; border: none; color: var(--text-faint);
+    font-size: 10px; font-weight: 600; padding: 4px 2px; border-radius: 10px;
+    box-shadow: none;
+  }
+  .mobile-bottom-nav .tab svg { width: 19px; height: 19px; flex: none; }
+  .mobile-bottom-nav .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .mobile-bottom-nav .tab:hover { background: rgba(255,255,255,.05); color: var(--text-faint); }
+  .mobile-bottom-nav .tab.active { color: var(--accent); background: rgba(124,140,255,.1); }
 }
 
 
@@ -309,7 +582,8 @@ pre {
  * panels (watchlist, bottom panel) scroll internally past this point. */
 body.charts-active { overflow: hidden; }
 body.charts-active .hero,
-body.charts-active .ticker-tape { display: none; }
+body.charts-active .ticker-tape,
+body.charts-active .site-footer { display: none; }
 body.charts-active .shell {
   width: 100%; max-width: none; margin: 0; padding: 0;
   height: 100dvh; display: flex; flex-direction: column;
@@ -332,14 +606,62 @@ body.charts-active #tab-charts {
 .table-scroll tbody tr[data-row-id]{cursor:pointer}
 .table-scroll tbody tr[data-row-id]:hover{background:rgba(255,255,255,.04)}
 table{border-collapse:collapse;width:100%;font-size:12px}
-th,td{padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
-th{color:var(--muted);background:#0e1420;position:sticky;top:0}
+th,td{padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}
+th{color:var(--text-faint);background:var(--surface);position:sticky;top:0;text-transform:uppercase;letter-spacing:.05em;font-size:10.5px;font-weight:600}
+tbody tr{transition:background .15s ease}
+tbody tr:hover{background:rgba(255,255,255,.03)}
+td.num,th.num{text-align:right;font-family:ui-monospace,"SF Mono","Roboto Mono",monospace;font-variant-numeric:tabular-nums}
 @media(max-width:900px){.range-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.range-grid{grid-template-columns:1fr}}
-.tabs{display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap}.tab{background:rgba(255,255,255,.04);color:var(--muted);border:1px solid var(--line)}.tab.active{color:white;background:linear-gradient(135deg,var(--accent),#5b68e6)}
+.tabs{display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap}
+.tab{background:rgba(255,255,255,.04);color:var(--muted);border:1px solid var(--line);text-decoration:none;transition:border-color .15s ease,color .15s ease,background .15s ease}
+.tab:hover{color:var(--text);border-color:rgba(255,255,255,.22)}
+.tab.active{color:white;background:linear-gradient(135deg,var(--accent),#5b68e6);border-color:transparent;box-shadow:0 6px 18px rgba(124,140,255,.22)}
 .form-grid.three{grid-template-columns:repeat(3,1fr)}.tip{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;background:rgba(124,140,255,.18);color:#c8d0ff;font-size:11px;font-weight:900;cursor:help;position:relative;margin-left:4px}.tip:hover:after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);width:280px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#080d17;color:#dce3ef;line-height:1.45;font-weight:500;font-size:12px;z-index:100;box-shadow:0 15px 45px rgba(0,0,0,.5)}
 .security-toolbar{display:flex;gap:10px;align-items:center;margin:10px 0 14px;flex-wrap:wrap}.security-list{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:430px;overflow:auto;padding:2px;margin-bottom:16px}.security-row,.portfolio-row{display:flex;flex-direction:row;align-items:center;gap:10px;border:1px solid var(--line);background:rgba(255,255,255,.025);padding:11px;border-radius:12px;margin:0}.security-row input,.portfolio-row>input:first-child{width:auto}.security-row span,.portfolio-row span{display:flex;flex-direction:column;flex:1}.security-row small,.portfolio-row small{color:var(--muted);margin-top:3px}.security-row em{font-size:11px;color:var(--accent-2);font-style:normal}
-.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.strategy-card{border:1px solid var(--line);background:rgba(255,255,255,.025);padding:17px;border-radius:16px}.strategy-card.primary-strategy{border-color:rgba(77,212,172,.6);box-shadow:inset 0 0 0 1px rgba(77,212,172,.15)}.strategy-card span{font-size:11px;color:var(--accent-2);text-transform:uppercase;letter-spacing:.12em}.strategy-card h3{margin:9px 0 6px}.strategy-card p{font-size:13px;margin:0 0 14px}.strategy-visual{height:70px;display:grid;place-items:center;text-align:center;border-radius:12px;background:linear-gradient(135deg,rgba(124,140,255,.12),rgba(77,212,172,.08));color:#cbd4e7;font-family:ui-monospace,monospace;font-size:12px;margin-bottom:14px}.strategy-preview{border:1px solid var(--line);background:rgba(124,140,255,.06);padding:14px;border-radius:14px;margin-bottom:16px}.strategy-preview strong,.strategy-preview span{display:block}.strategy-preview span{font-family:ui-monospace,monospace;color:var(--accent-2);font-size:12px;margin:8px 0}.strategy-preview p{margin:0;font-size:13px}
+.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start}.strategy-card{border:1px solid var(--line);background:rgba(255,255,255,.025);border-radius:16px}.strategy-card.primary-strategy{border-color:rgba(77,212,172,.6);box-shadow:inset 0 0 0 1px rgba(77,212,172,.15)}.strategy-preview{border:1px solid var(--line);background:rgba(124,140,255,.06);padding:14px;border-radius:14px;margin-bottom:16px}.strategy-preview strong,.strategy-preview span{display:block}.strategy-preview span{font-family:ui-monospace,monospace;color:var(--accent-2);font-size:12px;margin:8px 0}.strategy-preview p{margin:0;font-size:13px}
+
+/* strategy library: accordion card + param-form (config-driven, see param_schema.py) */
+.strategy-card.accordion{padding:0;overflow:hidden}
+.strategy-grid .strategy-card.accordion.open{grid-column:1/-1}
+.strategy-card.accordion .accordion-header{display:block;padding:20px 22px;cursor:pointer}
+.strategy-card-main{flex:1;min-width:0}
+.strategy-card-toprow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.strategy-category{font-size:11px;color:var(--accent-2);text-transform:uppercase;letter-spacing:.12em;font-weight:600}
+.strategy-preset-chip{font-size:11px;color:var(--muted);background:rgba(255,255,255,.06);border:1px solid var(--line);padding:3px 10px;border-radius:999px;font-weight:500;white-space:nowrap;flex-shrink:0}
+.strategy-card-titlerow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px}
+.strategy-card h3{margin:0;font-size:16px;line-height:1.3}
+.strategy-chevron{flex-shrink:0;font-size:22px;line-height:1;color:var(--accent-2);transition:transform .2s ease}
+.strategy-card.open .strategy-chevron{transform:rotate(180deg)}
+.strategy-summary{margin:6px 0 0;font-size:13px;color:var(--muted);line-height:1.4}
+.strategy-visual{margin-top:14px;padding:0 14px;min-height:52px;max-height:64px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:10px;background:linear-gradient(135deg,rgba(124,140,255,.12),rgba(77,212,172,.08));color:#cbd4e7;font-family:ui-monospace,monospace;font-size:12px;line-height:1.35}
+.param-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px 18px;margin:14px 0}
+.param-field{display:flex;flex-direction:column;gap:6px}
+.param-field-label{font-size:12.5px;color:var(--muted);display:flex;align-items:center}
+.param-field-checkbox{justify-content:center}
+.param-field-checkbox .toggle{width:100%}
+.param-unit{color:var(--muted);font-weight:400;font-size:11px;margin-left:5px}
+.param-slider{display:flex;align-items:center;gap:10px}
+.param-slider input[type="range"]{flex:1;width:auto}
+.param-slider output{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--accent-2);min-width:2.5em;text-align:right}
+.param-preset-tabs{margin:2px 0 4px}
+.param-preset-tabs .mode-tab{padding:8px 14px;font-size:12.5px}
+.param-form-footer{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+@media(max-width:620px){.param-grid{grid-template-columns:1fr}}
+.param-section{border:1px solid var(--line);border-radius:12px;margin-bottom:12px;background:rgba(255,255,255,.015);overflow:hidden}
+.param-section:last-of-type{margin-bottom:14px}
+.param-section .param-grid{margin:0;padding:4px 16px 16px}
+.param-section-title{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;font-size:13px;font-weight:700;color:#dbe1f2;user-select:none}
+.param-section-title::-webkit-details-marker{display:none}
+.param-section-title::before{content:"";width:9px;height:9px;border-right:2px solid var(--accent-2);border-bottom:2px solid var(--accent-2);transform:rotate(45deg);transition:transform .15s ease;flex-shrink:0;order:-1;margin-right:2px}
+.param-section:not([open]) .param-section-title::before{transform:rotate(-45deg)}
+.param-section-title>span:first-child{flex:1;display:flex;align-items:center;gap:9px}
+.param-section-count{font-size:11px;font-weight:600;color:var(--muted);background:rgba(255,255,255,.06);border-radius:999px;padding:2px 8px;flex-shrink:0}
+.param-section-presets{background:rgba(124,140,255,.05);border-color:rgba(124,140,255,.18)}
+.param-section-title-static{padding:13px 16px 4px;font-weight:700}
+.param-section-title-static::before{display:none}
+.param-section-presets .param-preset-tabs{padding:0 16px 14px;margin:0}
+@media(max-width:620px){.param-section .param-grid{padding:4px 12px 14px}.param-section-title,.param-section-title-static{padding-left:12px;padding-right:12px}.param-section-presets .param-preset-tabs{padding-left:12px;padding-right:12px}}
 .portfolio-card{border:1px solid var(--line);border-radius:14px;margin-bottom:10px}.portfolio-card small{color:var(--muted);margin-top:5px}.danger{background:rgba(255,112,129,.1);color:#ff95a2;border:1px solid rgba(255,112,129,.25)}
 .portfolio-progress{font-size:12px;margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.portfolio-progress:empty{margin-top:0}.portfolio-progress.working{color:#f0d16a}.portfolio-progress.success{color:var(--accent-2)}.portfolio-progress.error{color:#ff95a2}.portfolio-progress button{font-size:11px;padding:3px 9px}
 @media(max-width:980px){.form-grid.three,.security-list,.strategy-grid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.form-grid.three,.security-list,.strategy-grid{grid-template-columns:1fr}.tip:hover:after{left:auto;right:0;transform:none;width:240px}}
@@ -351,7 +673,9 @@ th{color:var(--muted);background:#0e1420;position:sticky;top:0}
 textarea{width:100%;border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:12px;padding:12px 13px;font:inherit;outline:none;resize:vertical;min-height:92px}
 textarea:focus{border-color:rgba(124,140,255,.85);box-shadow:0 0 0 3px rgba(124,140,255,.12)}
 .selected-tickers{display:flex;gap:7px;flex-wrap:wrap;min-height:48px;border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:13px;padding:10px;margin-bottom:13px}.selected-tickers.empty-selection{display:flex;align-items:center;color:var(--muted);font-size:13px}
-.ticker-chip{padding:7px 9px;border-radius:999px;background:rgba(77,212,172,.12);border:1px solid rgba(77,212,172,.35);color:#c7ffed;font-size:12px;gap:7px}.ticker-chip span{font-size:15px;color:var(--muted)}
+.ticker-chip{padding:7px 9px;border-radius:999px;background:rgba(77,212,172,.12);border:1px solid rgba(77,212,172,.35);color:#c7ffed;font-size:12px;gap:7px;animation:chip-pop var(--dur-base) var(--ease-spring) both}.ticker-chip span{font-size:15px;color:var(--muted);transition:color var(--dur-fast) var(--ease-out)}.ticker-chip:hover span{color:var(--danger)}
+@keyframes chip-pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.ticker-chip{animation:none}}
 .security-row.selected-row{border-color:rgba(77,212,172,.55);background:rgba(77,212,172,.07)}
 .security-list.selection-error{border:1px solid var(--danger);border-radius:14px;box-shadow:0 0 0 4px rgba(255,112,129,.1)}
 #downloadSelected:disabled{opacity:.45;cursor:not-allowed}
@@ -443,7 +767,17 @@ input[type="checkbox"].error:checked,input[type="checkbox"]:invalid:checked{back
 #allocationExtra{margin-top:12px}
 
 .progress-bar{height:10px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden;margin:14px 0 10px}
-.progress-bar-fill{height:100%;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:999px;transition:width .4s ease;width:0%}
+.progress-bar-fill{height:100%;background:linear-gradient(135deg,var(--accent),var(--accent-2));border-radius:999px;transition:width var(--dur-slower) var(--ease-out);width:0%;position:relative;box-shadow:0 0 12px rgba(124,140,255,.5)}
+/* Diagonal moving stripe while a run is in flight - the width transition
+   alone already shows progress, this signals "actively working", not
+   stalled, during the stretches between percent updates from the poll. */
+.progress-bar-fill::after{
+  content:"";position:absolute;inset:0;
+  background:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 10px,transparent 10px 20px);
+  animation:progress-stripe 1s linear infinite;
+}
+@keyframes progress-stripe{from{background-position:0 0}to{background-position:28px 0}}
+@media(prefers-reduced-motion:reduce){.progress-bar-fill::after{animation:none}}
 .progress-meta{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-bottom:12px}
 .progress-meta span:first-child{color:var(--text);font-weight:800}
 .build-progress,.backtest-progress{border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:18px;background:rgba(255,255,255,.02)}
@@ -514,13 +848,20 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 .lot-cell{display:flex;align-items:center;gap:4px;white-space:nowrap}
 .lot-cell input{width:52px;padding:6px;text-align:center}
 .lot-btn{width:24px;height:24px;padding:0;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-weight:900;line-height:1}
-.strategy-chips-cell{min-width:200px}
-.strategy-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:rgba(124,140,255,.12);border:1px solid rgba(124,140,255,.35);color:#c8d0ff;font-size:11px;margin:2px 4px 2px 0}
-.strategy-chip span{color:var(--muted)}
+@media(max-width:640px){
+  /* Price/lot-size/share-count are secondary on a phone - collapsing them
+     out lets ticker, lot count, value and allocation share fit without
+     horizontal scroll for the numbers that actually drive editing. */
+  .instrument-editor-table th:nth-child(3),.instrument-editor-table td:nth-child(3),
+  .instrument-editor-table th:nth-child(4),.instrument-editor-table td:nth-child(4),
+  .instrument-editor-table th:nth-child(6),.instrument-editor-table td:nth-child(6){display:none}
+}
 .muted-note{color:var(--muted);font-size:11px}
-.strategy-add-panel{margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel-2)}
-.strategy-add-list{display:flex;flex-wrap:wrap;gap:6px}
-.strategy-add-list button{font-size:11px;padding:7px 10px}
+
+/* backtest tab: per-ticker strategy assignment summary strip + modal (see
+   .strategy-assign-modal below for the actual editor) */
+.strategy-assignment-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:18px 0 10px}
+.assignment-config-panel{margin-top:8px;border:1px solid var(--line);border-radius:12px;padding:14px;background:rgba(255,255,255,.012)}
 .editor-summary{margin:16px 0}
 .summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .summary-grid div{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:rgba(255,255,255,.02)}
@@ -533,10 +874,19 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 @media(max-width:900px){.summary-grid{grid-template-columns:1fr 1fr}}
 
 /* ---------- Close button / combo estimate ---------- */
-.close-btn{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-size:18px;line-height:1;padding:0}
+.close-btn{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--text);font-size:18px;line-height:1;padding:0;transition:background var(--dur-fast) var(--ease-out),transform var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)}
+.close-btn:hover{background:rgba(255,112,129,.14);border-color:rgba(255,112,129,.4);transform:rotate(90deg)}
 .build-success{position:relative}
 .combo-estimate{font-size:13px;color:var(--muted);margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(124,140,255,.05)}
 .combo-estimate strong{color:var(--text)}
+
+.data-gaps{margin:14px 0;padding:12px 14px;border:1px solid rgba(240,209,106,.35);border-radius:12px;background:rgba(240,209,106,.06);font-size:13px}
+.data-gaps>strong{display:block;color:#f0d16a;margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:.02em}
+.data-gap-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0}
+.data-gap-row+.data-gap-row{border-top:1px solid rgba(255,255,255,.06)}
+.data-gap-row span{color:var(--text)}
+.data-gap-row strong{color:#f0d16a}
+.data-gap-row button{width:auto;font-size:12px;padding:7px 12px;flex-shrink:0}
 
 /* ---------- History table ---------- */
 .history-actions{display:flex;gap:8px;flex-wrap:wrap;white-space:nowrap}
@@ -553,8 +903,8 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
 /* ---------- Trade viewer modal ---------- */
 .trade-viewer{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center}
 .trade-viewer.hidden{display:none}
-.trade-viewer-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
-.trade-viewer-panel{position:relative;width:min(1100px,94vw);max-height:90vh;overflow:auto;background:#0d1220;border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
+.trade-viewer-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.trade-viewer-panel{position:relative;width:min(1100px,94vw);max-height:90vh;overflow:auto;background:#0d1220;border:1px solid var(--line);border-radius:22px;padding:26px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
 .trade-detail{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}
 
 /* ---------- Market data manager modal ---------- */
@@ -567,8 +917,8 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
    regardless of an ancestor's box) but a real problem for anything that
    inspects this element's own bounding box (screen readers, automation). */
 #marketDataManagerRoot.mdm-open{display:contents}
-.mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)}
-.mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5)}
+.mdm-backdrop{position:fixed;inset:0;z-index:200;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.mdm-modal{position:fixed;z-index:201;top:50%;left:50%;transform:translate(-50%,-50%);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
 .mdm-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--line)}
 .mdm-head h3{margin:0;font-size:18px}
 .mdm-body{padding:20px 24px;overflow:auto}
@@ -607,3 +957,69 @@ button:focus-visible,.secondary:focus-visible,.tab:focus-visible,input:focus-vis
   .mdm-row-updated{width:100%;text-align:left}
 }
 @media(max-width:820px){.trade-viewer-panel{padding:18px;width:96vw}}
+
+/* ---------- Portfolio strategy assignment (summary strip + modal) ---------- */
+.assignment-summary{font-size:13px;color:var(--muted);margin:2px 0 0}
+.assignment-summary strong{color:var(--text);font-weight:600}
+.assignment-summary .assign-summary-empty{color:var(--muted)}
+.assignment-validation{margin:14px 0;padding:12px 14px;border:1px solid rgba(255,112,129,.35);border-radius:12px;background:rgba(255,112,129,.06);font-size:13px;color:#ffb0ba;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.assignment-validation button{width:auto;font-size:12px;padding:8px 12px;flex-shrink:0}
+
+.strategy-assign-modal{position:fixed;inset:0;z-index:210;display:flex;align-items:center;justify-content:center}
+.strategy-assign-modal.hidden{display:none}
+.strategy-assign-backdrop{position:absolute;inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(7px)}
+.strategy-assign-modal:not(.hidden) .strategy-assign-backdrop{animation:fade-in var(--dur-base) var(--ease-out)}
+.strategy-assign-modal:not(.hidden) .strategy-assign-panel{animation:fade-scale-in var(--dur-slow) var(--ease-spring)}
+.strategy-assign-panel{position:relative;width:min(960px,92vw);max-height:88vh;display:flex;flex-direction:column;background:#0d1220;border:1px solid var(--line);border-radius:22px;box-shadow:0 40px 120px rgba(0,0,0,.5),0 0 0 1px rgba(124,140,255,.08)}
+.strategy-assign-header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:22px 60px 18px 24px;border-bottom:1px solid var(--line);flex-shrink:0}
+.strategy-assign-header h3{margin:0 0 6px;font-size:19px}
+.strategy-assign-header p{margin:0}
+.strategy-assign-header .close-btn{position:absolute;top:16px;right:16px}
+.strategy-assign-bulkbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid var(--line);background:rgba(124,140,255,.04);flex-shrink:0;font-size:13px;color:var(--muted)}
+.strategy-assign-bulkbar select{width:auto;flex:0 0 auto;padding:9px 11px;font-size:13px}
+.strategy-assign-bulkbar button{width:auto;font-size:12.5px;padding:9px 13px}
+.strategy-assign-bulkbar .assign-clear-link{margin-left:auto;color:#ff95a2}
+.strategy-assign-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:18px 24px calc(18px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px}
+
+.assign-ticker-card{flex-shrink:0;border:1px solid var(--line);background:rgba(255,255,255,.018);border-radius:14px;overflow:hidden}
+.assign-ticker-head{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer}
+.assign-ticker-head:hover{background:rgba(255,255,255,.02)}
+.assign-ticker-main{flex:1;min-width:0}
+.assign-ticker-toprow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.assign-ticker-toprow strong{font-size:14.5px}
+.assign-ticker-name{color:var(--muted);font-size:12px}
+.assign-ticker-excluded{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.assign-ticker-count{font-size:11px;font-weight:600;color:var(--accent-2);background:rgba(77,212,172,.12);border-radius:999px;padding:3px 10px;flex-shrink:0}
+.assign-ticker-count.zero{color:var(--muted);background:rgba(255,255,255,.05)}
+.assign-ticker-chevron{color:var(--accent-2);font-size:14px;transition:transform var(--dur-fast) var(--ease-out);flex-shrink:0}
+.assign-ticker-card.open .assign-ticker-chevron{transform:rotate(180deg)}
+.assign-ticker-body{border-top:1px solid var(--line);padding:14px 16px;background:rgba(255,255,255,.01)}
+.assign-ticker-quickactions{display:flex;gap:8px;margin-bottom:12px}
+.assign-ticker-quickactions button{width:auto;font-size:11.5px;padding:6px 11px}
+.assign-strategy-list{display:flex;flex-direction:column;gap:2px}
+.assign-strategy-row{border-radius:10px}
+.assign-strategy-row+.assign-strategy-row{border-top:1px solid rgba(255,255,255,.05)}
+.assign-strategy-main{display:flex;align-items:center;gap:10px;padding:9px 6px;cursor:pointer}
+.assign-strategy-main input[type="checkbox"]{width:18px;height:18px;flex-shrink:0;accent-color:var(--accent);margin:0}
+.assign-strategy-name{flex:1;font-size:13.5px}
+.assign-strategy-preset{font-size:11px;color:var(--muted);flex-shrink:0}
+.assign-strategy-configure{width:auto;flex-shrink:0;font-size:11.5px;padding:6px 10px}
+.assign-strategy-row .assignment-config-panel{margin:0 6px 10px}
+
+.strategy-assign-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 24px;border-top:1px solid var(--line);background:#0d1220;flex-shrink:0;flex-wrap:wrap}
+.strategy-assign-footer-stats{font-size:12.5px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+.strategy-assign-footer-stats strong{color:var(--text)}
+.strategy-assign-footer-actions{display:flex;gap:10px}
+.strategy-assign-footer-actions button{width:auto;padding:12px 18px}
+
+@media(max-width:620px){
+  .strategy-assign-modal{align-items:stretch;justify-content:stretch}
+  .strategy-assign-panel{width:100vw;max-height:none;height:100vh;height:100dvh;border-radius:0;border:none}
+  .strategy-assign-header{padding:calc(18px + env(safe-area-inset-top,0px)) 56px 14px 16px}
+  .strategy-assign-bulkbar{padding:12px 16px}
+  .strategy-assign-bulkbar .assign-clear-link{margin-left:0;flex:0 0 100%;order:5}
+  .strategy-assign-body{padding:14px 16px calc(28px + env(safe-area-inset-bottom,0px))}
+  .strategy-assign-footer{padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));flex-direction:column;align-items:stretch}
+  .strategy-assign-footer-actions{flex-direction:column-reverse}
+  .strategy-assign-footer-actions button{width:100%}
+}

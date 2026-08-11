@@ -5,17 +5,67 @@
   <title>MOEX Strategy Lab V3</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='chart.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='auth.css') }}">
+  <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body>
 <main class="shell">
-<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div></div></header>
+<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>MOEX Strategy Lab V3</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div>
+  <span class="beta-badge">Public Beta · бесплатно</span>
+  {% if current_user %}
+    <div class="account-menu" id="accountMenu">
+      <button class="account-trigger" id="accountMenuBtn" type="button">
+        <span class="account-avatar">{{ current_user.display_name[:2]|upper }}</span>
+        {{ current_user.display_name }} ▾
+      </button>
+      <div class="account-dropdown hidden" id="accountDropdown">
+        <a href="/account">Личный кабинет</a>
+        <a href="/account/backtests">Мои бэктесты</a>
+        <a href="/account/portfolios">Мои портфели</a>
+        <a href="/account/favorites">Избранное</a>
+        <a href="/account/settings">Настройки</a>
+        <button type="button" id="logoutBtn">Выйти</button>
+      </div>
+    </div>
+  {% else %}
+    <a class="secondary" href="/login">Войти</a>
+    <a class="primary" href="/register">Регистрация</a>
+  {% endif %}
+</div></header>
 
 <section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
   <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
 </section>
 
-<nav class="tabs">
+<nav class="tabs app-primary-tabs" id="appPrimaryTabs">
+  <span class="tab-indicator no-anim" aria-hidden="true"></span>
   <button class="tab active" data-tab="portfolio">Портфель</button><button class="tab" data-tab="strategies">Стратегии</button><button class="tab" data-tab="backtest">Бэктест</button><button class="tab" data-tab="charts">Анализ графиков</button><button class="tab" data-tab="replay">Market Replay</button>
+</nav>
+
+<!-- Mobile-only: same .tab/data-tab contract as the bar above, so
+     initTabs()'s single querySelectorAll(".tab") wires both without any
+     JS changes. Hidden on desktop, fixed to the viewport bottom on phones -->
+<nav class="tabs mobile-bottom-nav" aria-label="Основная навигация">
+  <button class="tab active" data-tab="portfolio">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+    <span>Портфель</span>
+  </button>
+  <button class="tab" data-tab="strategies">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>
+    <span>Стратегии</span>
+  </button>
+  <button class="tab" data-tab="backtest">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+    <span>Бэктест</span>
+  </button>
+  <button class="tab" data-tab="charts">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 6h7v7"/></svg>
+    <span>Графики</span>
+  </button>
+  <button class="tab" data-tab="replay">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4V8z"/></svg>
+    <span>Replay</span>
+  </button>
 </nav>
 
 <section id="tab-portfolio" class="tab-page">
@@ -99,7 +149,7 @@
 </section>
 
 <section id="tab-strategies" class="tab-page hidden">
-  <article class="card"><div class="card-head"><div><span class="step">Шаг 2</span><h2>Библиотека стратегий</h2></div><div class="message" id="strategiesContext"></div></div><div id="strategyCards" class="strategy-grid"></div></article>
+  <article class="card"><div class="card-head"><div><span class="step">Шаг 2</span><h2>Библиотека стратегий</h2></div></div><p class="lead">Выберите стратегию, изучите принцип её работы и настройте параметры. Привязка стратегии к конкретным инструментам портфеля происходит на вкладке «Бэктест».</p><div id="strategyCards" class="strategy-grid"></div></article>
 </section>
 
 <section id="tab-backtest" class="tab-page hidden">
@@ -112,10 +162,10 @@
   <div id="backtestBody" class="hidden">
     <article class="card">
       <div class="card-head"><div><span class="step">Шаг 3</span><h2>Настройка бэктеста</h2></div></div>
-      <div class="form-grid three">
+      <div class="form-grid">
         <label>Портфель <select id="backtestPortfolioSelect"></select></label>
         <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
-        <label>&nbsp;<button class="secondary" id="applyStrategyPrompt" style="width:100%">Настроить стратегии портфеля</button></label>
+        <label>Таймфрейм <span class="tip" data-tip="На каких свечах считать стратегию. 10 минут — данные уже загружены для портфеля. Другие таймфреймы честно докачиваются или строятся агрегацией из более мелких свечей MOEX; если для тикера их нет, об этом будет предупреждение перед запуском.">?</span><select id="backtestTimeframe"></select></label>
       </div>
 
       <div class="ticker-select-head">
@@ -129,7 +179,16 @@
       </div>
       <div id="backtestTickerChips" class="selected-tickers"></div>
 
+      <div class="strategy-assignment-head">
+        <strong>Стратегии по инструментам</strong>
+        <button type="button" class="secondary" id="openAssignModalBtn">Настроить стратегии портфеля</button>
+      </div>
+      <div id="assignmentSummary" class="assignment-summary"></div>
+
+      <div id="assignmentValidation" class="assignment-validation hidden"></div>
       <div class="combo-estimate" id="comboEstimate"></div>
+
+      <div id="backtestDataGaps" class="data-gaps hidden"></div>
 
       <button class="primary" id="runBacktestBtn">Запустить бэктест</button>
       <div class="message" id="backtestMessage"></div>
@@ -148,6 +207,7 @@
     <article class="card results-card hidden" id="backtestResults">
       <div class="card-head"><div><span class="step">Итог</span><h2>Результат портфеля</h2></div></div>
       <div id="portfolioMetrics" class="metrics"></div>
+      <p class="hint">Модель исполнения: сигнал на закрытии бара → вход по цене открытия следующего бара. Комиссия 0.05% за сторону (0.1% за сделку) учтена. Проскальзывание не моделируется. Если в баре одновременно достигнуты стоп-лосс и тейк-профит — фиксируется срабатывание стоп-лосса (консервативное допущение).</p>
       <div id="backtestErrors" class="build-errors"></div>
       <div id="byTickerTable"></div>
       <div id="byStrategyTable"></div>
@@ -191,6 +251,33 @@
         <div id="tvChartView" class="hidden"></div>
       </div>
     </div>
+
+    <div class="strategy-assign-modal hidden" id="strategyAssignModal">
+      <div class="strategy-assign-backdrop" id="strategyAssignBackdrop"></div>
+      <div class="strategy-assign-panel" role="dialog" aria-modal="true" aria-label="Настройка стратегий портфеля">
+        <div class="strategy-assign-header">
+          <div>
+            <h3>Настройка стратегий портфеля</h3>
+            <p class="muted-note">Выберите одну или несколько стратегий для каждого инструмента</p>
+          </div>
+          <button class="close-btn" id="strategyAssignClose" aria-label="Закрыть">×</button>
+        </div>
+        <div class="strategy-assign-bulkbar">
+          <span>Применить ко всему портфелю:</span>
+          <select id="assignBulkStrategy"></select>
+          <button type="button" class="secondary" id="assignBulkAddBtn">Добавить всем</button>
+          <button type="button" class="link-btn assign-clear-link" id="assignClearAllBtn">Очистить все назначения</button>
+        </div>
+        <div class="strategy-assign-body" id="strategyAssignBody"></div>
+        <div class="strategy-assign-footer">
+          <div class="strategy-assign-footer-stats" id="assignFooterStats"></div>
+          <div class="strategy-assign-footer-actions">
+            <button type="button" class="secondary" id="assignCancelBtn">Отмена</button>
+            <button type="button" class="primary" id="assignSaveBtn">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -205,6 +292,10 @@
   </header>
   <div id="replayRoot"></div>
 </section>
+<footer class="site-footer">
+  <p>MOEX Strategy Lab предназначен для исследования и тестирования торговых стратегий на исторических данных. Результаты моделирования не гарантируют доходность в будущем и не являются индивидуальной инвестиционной рекомендацией.</p>
+  <p><a href="/terms">Условия использования</a> · <a href="/privacy">Конфиденциальность</a> · <a href="https://github.com/MainBooo/strategy-lab/issues" target="_blank" rel="noopener">Сообщить об ошибке</a></p>
+</footer>
 </main>
 <script>
 window.STRATEGIES={{ strategies|tojson }};
@@ -221,6 +312,7 @@ window.REALTIME_CONFIG={{ realtime_config|tojson }};
 <script src="{{ url_for('static',filename='chart-engine/trades.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-engine/drawings.js') }}"></script>
 <script src="{{ url_for('static',filename='chart-engine/persistence.js') }}"></script>
+<script src="{{ url_for('static',filename='auth.js') }}"></script>
 <script src="{{ url_for('static',filename='app.js') }}"></script>
 <script src="{{ url_for('static',filename='portfolio-balance.js') }}"></script>
 <script src="{{ url_for('static',filename='trade-chart.js') }}"></script>

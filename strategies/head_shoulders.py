@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategies.common import COMMISSION_SIDE, load_candles, save_run
+from strategies.common import (
+    COMMISSION_SIDE, TradeSlotGate, add_atr, load_candles, save_run,
+    passes_volume_filter, simulate_exit,
+)
+from strategies.param_schema import parse_params
 
 
 def _pivots(df: pd.DataFrame, span: int):
@@ -38,16 +42,9 @@ def _line(x1, y1, x2, y2, x):
 
 
 def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dict:
-    params = {
-        "pivot_span": int(raw_params.get("pivot_span", 3)),
-        "shoulder_tolerance": float(raw_params.get("shoulder_tolerance", 0.03)),
-        "head_min_distance": float(raw_params.get("head_min_distance", 0.01)),
-        "stop_pct": float(raw_params.get("stop_pct", 0.02)),
-        "take_pct": float(raw_params.get("take_pct", 0.05)),
-        "max_breakout_bars": int(raw_params.get("max_breakout_bars", 30)),
-    }
+    params = parse_params("head_shoulders", raw_params)
 
-    df = load_candles(source, raw_params.get("date_from"), raw_params.get("date_till"))
+    df = add_atr(load_candles(source, raw_params.get("date_from"), raw_params.get("date_till")), 14)
     pivots = _pivots(df, params["pivot_span"])
     signals = []
 
@@ -74,6 +71,8 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
 
         if not valid:
             continue
+        if params["direction"] in ("long", "short") and side != params["direction"]:
+            continue
 
         for k in range(max(e["confirm_i"], e["i"]+1), min(len(df)-2, e["i"]+params["max_breakout_bars"])+1):
             neck = _line(b["i"],b["price"],d["i"],d["price"],k)
@@ -85,13 +84,15 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
                 else df.at[k-1,"close"] <= prev and df.at[k,"close"] > neck
             )
             if crossed:
+                if params["volume_filter"] and not passes_volume_filter(df, k, params["volume_multiplier"]):
+                    break
                 signals.append((k+1, side, df.at[k,"begin"]))
                 break
 
     trades = []
-    available_from = 0
+    gate = TradeSlotGate(params["max_concurrent_trades"], params["reentry_cooldown_bars"])
     for entry_i, side, signal_time in sorted(signals):
-        if entry_i < available_from or entry_i >= len(df):
+        if entry_i >= len(df) or not gate.admit(entry_i):
             continue
 
         entry = float(df.at[entry_i,"open"])
@@ -100,20 +101,12 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
         else:
             stop, take = entry*(1+params["stop_pct"]), entry*(1-params["take_pct"])
 
-        exit_i = len(df)-1
-        exit_price = float(df.at[exit_i,"close"])
-        reason = "end_of_period"
-
-        for k in range(entry_i, len(df)):
-            high, low = float(df.at[k,"high"]), float(df.at[k,"low"])
-            hit_stop = low <= stop if side == "long" else high >= stop
-            hit_take = high >= take if side == "long" else low <= take
-            if hit_stop:
-                exit_i, exit_price, reason = k, stop, "stop"
-                break
-            if hit_take:
-                exit_i, exit_price, reason = k, take, "take"
-                break
+        exit_i, exit_price, reason = simulate_exit(
+            df, entry_i, side, stop, take, entry=entry,
+            trailing_stop_atr=params["trailing_stop_atr"], breakeven_at_r=params["breakeven_at_r"],
+            max_holding_bars=params["max_holding_bars"],
+        )
+        gate.register(exit_i)
 
         gross = exit_price/entry-1 if side == "long" else entry/exit_price-1
         trades.append({
@@ -122,12 +115,12 @@ def run_head_shoulders(source: Path, raw_params: dict, results_dir: Path) -> dic
             "entry_time": df.at[entry_i,"begin"],
             "exit_time": df.at[exit_i,"begin"],
             "entry_price": entry,
+            "stop_price": stop,
             "exit_price": exit_price,
             "net_return": gross - 2*COMMISSION_SIDE,
             "exit_reason": reason,
             "bars_held": exit_i-entry_i+1,
         })
-        available_from = exit_i+1
 
     return save_run(
         results_dir,

@@ -9,7 +9,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class PortfolioStore:
@@ -71,6 +71,14 @@ class PortfolioStore:
         if "last_backtest_at" not in p:
             p["last_backtest_at"] = None
             changed = True
+        # v3 -> v4: accounts (see auth_db.py) - every portfolio predating
+        # this migration was created in the app's original single-operator,
+        # no-login era, so it stays unowned/shared (None) rather than being
+        # guessed into belonging to whichever user happens to look at it
+        # first. Only portfolios created after this ship with a real owner.
+        if "user_id" not in p:
+            p["user_id"] = None
+            changed = True
         # v2 -> v3: {ticker: {strategy_id, parameters}} -> {ticker: [{strategy_id, parameters, enabled}]}
         ts = p.get("ticker_strategies") or {}
         for ticker, value in list(ts.items()):
@@ -124,7 +132,7 @@ class PortfolioStore:
     def get(self, portfolio_id: str) -> dict | None:
         return next((x for x in self._read() if x.get("id") == portfolio_id), None)
 
-    def create(self, payload: dict) -> dict:
+    def create(self, payload: dict, user_id: str | None = None) -> dict:
         items = self._read()
         now = time.time()
         default_strategy = str(payload.get("default_strategy_id") or payload.get("strategy") or "false_breakout")
@@ -141,6 +149,10 @@ class PortfolioStore:
             "updated_at": now,
             "last_backtest_at": None,
             "schema_version": SCHEMA_VERSION,
+            # None = unowned/shared, same as every portfolio created before
+            # accounts existed - only set when a logged-in user's session
+            # created this portfolio (see app.py's create_portfolio route).
+            "user_id": user_id,
         }
         items.append(portfolio)
         self._write(items)
@@ -167,6 +179,22 @@ class PortfolioStore:
                 p["updated_at"] = time.time()
                 self._write(items)
                 return p
+        return None
+
+    def update_instrument_file(self, portfolio_id: str, ticker: str, filename: str) -> dict | None:
+        """Point one existing instrument at a freshly-downloaded data file,
+        leaving its lot_count/lot_size and every other field untouched -
+        unlike add_instruments, which replaces the whole instrument dict."""
+        items = self._read()
+        for p in items:
+            if p.get("id") == portfolio_id:
+                for inst in p.get("instruments", []):
+                    if str(inst.get("ticker")) == str(ticker):
+                        inst["file"] = filename
+                        p["updated_at"] = time.time()
+                        self._write(items)
+                        return p
+                return None
         return None
 
     def remove_instruments(self, portfolio_id: str, tickers: list[str]) -> dict | None:

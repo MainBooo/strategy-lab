@@ -19,6 +19,36 @@
 
   const CE = global.ChartEngine;
 
+  // Line-icon set for the top toolbar (Stage-2 unified bar) - swapped in for
+  // the emoji glyphs the toolbar shipped with, which read as a mismatched,
+  // dated accent against the rest of the app's monochrome stroke-icon
+  // language (see the mobile bottom nav in index.html for the same style).
+  // Deliberately NOT touching TOOL_BUTTONS below (the drawing-tool rail) -
+  // those are already plain technical symbols (╱ — ↗ …), not colorful
+  // emoji, and rendered through a different path (_buildToolRail) than the
+  // toolbar HTML this is inlined into. Each icon is intentionally tiny
+  // (16x16, 2px stroke) so it reads at a glance next to a text label
+  // without the button growing past its existing 32px box. data-icon
+  // attributes elsewhere in the toolbar (used only as a plain-text prefix
+  // in the collapsed "Ещё" popover list, see _renderMorePopover) are left
+  // as their original emoji on purpose - that's a compact text list, not a
+  // real icon slot, and mixing markup into dataset strings there would be
+  // a bigger, riskier change for a place these icons barely register.
+  const ICN = {
+    chart: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+    bell: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+    rewind: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 5v14L8 12l11-7z"/><line x1="5" y1="5" x2="5" y2="19"/></svg>',
+    grid: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+    save: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1l1.5-2h7L17 6h1a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8z"/><circle cx="12" cy="13" r="3.4"/></svg>',
+    expand: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
+    chevronDown: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+    panelRight: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>'
+  };
+
   const TOOL_BUTTONS = [
     { id: null, label: "Курсор", icon: "⇖" },
     { id: "trend_line", label: "Линия тренда", icon: "╱" },
@@ -52,7 +82,7 @@
   const LAYOUT_TILE_COUNT = { "1": 1, "2v": 2, "2h": 2, "3": 3, "3b": 3, "4": 4, "6": 6 };
   const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "3", 4: "4", 5: "6", 6: "6" };
 
-  const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", timescale: "Временная шкала", range: "Диапазон отображения" };
+  const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", scroll: "Прокрутка (позиция)", zoom: "Масштаб (ширина свечей)", range: "Диапазон отображения" };
 
   const IND_PARAM_LABELS = { period: "Период", mult: "Множитель", fast: "Быстрая", slow: "Медленная", signal: "Сигнальная", kPeriod: "%K период", dPeriod: "%D период" };
   const IND_LINE_LABELS = {
@@ -134,7 +164,14 @@
     tiles: [],
     activeTileId: null,
     layoutMode: "1",
-    syncFlags: { ticker: false, interval: false, crosshair: false, timescale: false, range: false },
+    // Every sync channel independently OFF by default - a fresh workspace
+    // (and any workspace migrating from the old single syncEnabled toggle,
+    // see _restoreWorkspaceState below) always starts with fully
+    // independent tiles; the user must explicitly opt each one in via the
+    // "Синхронизация графиков" menu. scroll/zoom are deliberately separate
+    // keys (not one bundled "timescale") per spec: panning one tile must
+    // never imply anything about zoom sync, and vice versa.
+    syncFlags: { ticker: false, interval: false, crosshair: false, scroll: false, zoom: false, range: false },
     _archivedTiles: [],
     _built: false,
 
@@ -200,33 +237,33 @@
               ${tile.listChartTypes().map((t) => `<option value="${t.id}">${t.label}</option>`).join("")}
             </select>
             <div class="gt-menu" id="gtIndicatorsMenu" data-key="indicators" data-priority="11" data-label="Индикаторы" data-icon="📈">
-              <button class="gt-btn" id="gtIndicatorsBtn" aria-haspopup="true" title="Индикаторы" aria-label="Индикаторы">📈 <span class="gt-btn-label">Индикаторы</span></button>
+              <button class="gt-btn" id="gtIndicatorsBtn" aria-haspopup="true" title="Индикаторы" aria-label="Индикаторы">${ICN.chart} <span class="gt-btn-label">Индикаторы</span></button>
               <div class="ca-popover hidden" id="gtIndicatorsPop"></div>
             </div>
             <div class="gt-menu" id="gtTemplatesMenu" data-key="templates" data-priority="10" data-label="Шаблоны" data-icon="🗂">
-              <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">🗂 <span class="gt-btn-label">Шаблоны</span></button>
+              <button class="gt-btn" id="gtTemplatesBtn" aria-haspopup="true" title="Шаблоны" aria-label="Шаблоны">${ICN.folder} <span class="gt-btn-label">Шаблоны</span></button>
               <div class="ca-popover ca-popover-wide hidden" id="gtTemplatesPop"></div>
             </div>
             <div class="gt-menu" id="gtAlertsMenu" data-key="alerts" data-priority="9" data-label="Оповещения" data-icon="🔔">
-              <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">🔔<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
+              <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">${ICN.bell}<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
               <div class="ca-popover ca-popover-wide hidden" id="gtAlertsPop"></div>
             </div>
-            <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">⏮</button>
+            <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">${ICN.rewind}</button>
             <button class="icon-btn" id="caUndoBtn" data-key="undo" data-priority="8" data-label="Отменить" data-icon="↶" title="Отменить (Ctrl+Z)" aria-label="Отменить">↶</button>
             <button class="icon-btn" id="caRedoBtn" data-key="redo" data-priority="7" data-label="Повторить" data-icon="↷" title="Повторить (Ctrl+Shift+Z)" aria-label="Повторить">↷</button>
             <div class="gt-menu" id="gtLayoutMenu" data-priority-exempt>
-              <button class="icon-btn" id="gtLayoutBtn" title="Раскладка графиков" aria-label="Выбор раскладки графиков" aria-haspopup="true">▦</button>
+              <button class="icon-btn" id="gtLayoutBtn" title="Раскладка графиков" aria-label="Выбор раскладки графиков" aria-haspopup="true">${ICN.grid}</button>
               <div class="ca-popover ca-popover-layouts hidden" id="gtLayoutPop"></div>
             </div>
-            <button class="icon-btn" id="gtSaveBtn" data-key="save" data-priority="3" data-label="Сохранить шаблон" data-icon="💾" title="Сохранить шаблон" aria-label="Сохранить шаблон">💾</button>
-            <button class="icon-btn" id="gtSettingsBtn" data-key="settings" data-priority="4" data-label="Настройки графика" data-icon="⚙" title="Настройки графика" aria-label="Настройки графика">⚙</button>
-            <button class="icon-btn" id="caSnapshotBtn" data-key="snapshot" data-priority="5" data-label="Снимок графика" data-icon="📷" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">📷</button>
-            <button class="icon-btn" id="caFullscreenBtn" data-priority-exempt title="Полноэкранный режим рабочего пространства" aria-label="Полноэкранный режим рабочего пространства">⛶</button>
-            <button class="icon-btn" id="gtCollapseBottomBtn" data-key="collapseBottom" data-priority="2" data-label="Свернуть панель свойств" data-icon="︿" title="Свернуть панель свойств" aria-label="Свернуть/развернуть панель свойств и объектов">︿</button>
-            <button class="icon-btn" id="gtCollapseRightBtn" data-key="collapseRight" data-priority="1" data-label="Свернуть список инструментов" data-icon="▤" title="Свернуть список инструментов" aria-label="Свернуть/развернуть список инструментов">▤</button>
+            <button class="icon-btn" id="gtSaveBtn" data-key="save" data-priority="3" data-label="Сохранить шаблон" data-icon="💾" title="Сохранить шаблон" aria-label="Сохранить шаблон">${ICN.save}</button>
+            <button class="icon-btn" id="gtSettingsBtn" data-key="settings" data-priority="4" data-label="Настройки графика" data-icon="⚙" title="Настройки графика" aria-label="Настройки графика">${ICN.gear}</button>
+            <button class="icon-btn" id="caSnapshotBtn" data-key="snapshot" data-priority="5" data-label="Снимок графика" data-icon="📷" title="Скачать снимок активного графика (PNG)" aria-label="Снимок графика">${ICN.camera}</button>
+            <button class="icon-btn" id="caFullscreenBtn" data-priority-exempt title="Полноэкранный режим рабочего пространства" aria-label="Полноэкранный режим рабочего пространства">${ICN.expand}</button>
+            <button class="icon-btn" id="gtCollapseBottomBtn" data-key="collapseBottom" data-priority="2" data-label="Свернуть панель свойств" data-icon="︿" title="Свернуть панель свойств" aria-label="Свернуть/развернуть панель свойств и объектов">${ICN.chevronDown}</button>
+            <button class="icon-btn" id="gtCollapseRightBtn" data-key="collapseRight" data-priority="1" data-label="Свернуть список инструментов" data-icon="▤" title="Свернуть список инструментов" aria-label="Свернуть/развернуть список инструментов">${ICN.panelRight}</button>
           </div>
           <div class="gt-menu gt-more" id="gtMoreMenu">
-            <button class="icon-btn" id="gtMoreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">⋯</button>
+            <button class="icon-btn" id="gtMoreBtn" title="Ещё" aria-label="Дополнительные действия" aria-haspopup="true">${ICN.more}</button>
             <div class="ca-popover ca-popover-right ca-popover-wide hidden" id="gtMorePop"></div>
           </div>
         </div>
@@ -832,9 +869,14 @@
       const bottom = this.root.querySelector("#caBottom");
       const watchlist = this.root.querySelector("#caWatchlist");
 
-      let collapsed = false, height = BOTTOM_HEIGHT_DEFAULT, wlWidth = WATCHLIST_WIDTH_DEFAULT;
+      // Default to collapsed on phone-width screens (no saved preference yet) -
+      // the Свойства/Объекты panel used to default open everywhere, eating
+      // ~40% of the viewport height on first mobile visit. An explicit prior
+      // choice (localStorage already has a value) always wins over this.
+      let collapsed = window.innerWidth <= 620, height = BOTTOM_HEIGHT_DEFAULT, wlWidth = WATCHLIST_WIDTH_DEFAULT;
       try {
-        collapsed = localStorage.getItem(BOTTOM_COLLAPSED_KEY) === "1";
+        const savedCollapsed = localStorage.getItem(BOTTOM_COLLAPSED_KEY);
+        if (savedCollapsed !== null) collapsed = savedCollapsed === "1";
         const h = Number(localStorage.getItem(BOTTOM_HEIGHT_KEY));
         if (Number.isFinite(h) && h > 0) height = h;
         const w = Number(localStorage.getItem(WATCHLIST_WIDTH_KEY));
@@ -955,7 +997,7 @@
           tile.drawingMgr.onChange(() => {
             if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
           });
-          tile.onRangeChange((range) => { if (this.syncFlags.timescale) this._broadcastRange(tile, range); });
+          tile.onRangeChange((range) => { if (this.syncFlags.scroll || this.syncFlags.zoom) this._broadcastRange(tile, range); });
           tile.onCrosshairMove((time, price) => { if (this.syncFlags.crosshair) this._broadcastCrosshair(tile, time, price); });
           tile.onPriceUpdate((t, info) => {
             t._lastPriceInfo = info;
@@ -963,6 +1005,12 @@
           });
           tile.onLiveTick((symbol, price) => { if (global.AlertService) global.AlertService.evaluate(symbol, price); });
           tile.onStateChanged((t, detail) => {
+            // Any state change worth notifying about (symbol/timeframe/
+            // range/layout) can reload the series into an entirely
+            // different logical-index space - a stale _lastBroadcastRange
+            // from before that would compute a meaningless scroll delta on
+            // the next sync broadcast, so always drop it here.
+            t._lastBroadcastRange = null;
             this._saveWorkspaceState();
             if (t.id === this.activeTileId) {
               if (this.watchlist) this.watchlist.setActive(t.symbol);
@@ -976,8 +1024,39 @@
       });
     },
 
+    /** Applies `range` (source's new visible logical range) to the other
+     * tiles according to which of scroll/zoom sync is actually on - the two
+     * are never bundled into one "apply the whole range" call except when
+     * BOTH are enabled. Cycle-safe: each tile's own onRangeChange only
+     * re-fires from a genuine user interaction (ChartTile guards
+     * programmatic applyLogicalRange() calls via _applyingRange), so this
+     * can never re-trigger itself through another tile. */
     _broadcastRange(source, range) {
-      this.tiles.forEach((t) => { if (t !== source) t.applyLogicalRange(range); });
+      if (!range) return;
+      const prev = source._lastBroadcastRange || range;
+      source._lastBroadcastRange = range;
+      const deltaPos = range.from - prev.from;
+      const bothOn = this.syncFlags.scroll && this.syncFlags.zoom;
+      this.tiles.forEach((t) => {
+        if (t === source || !t.core) return;
+        if (bothOn) {
+          t.applyLogicalRange(range);
+          return;
+        }
+        const tRange = t.core.chart.timeScale().getVisibleLogicalRange();
+        if (!tRange) return;
+        if (this.syncFlags.zoom) {
+          // Match the source's new width, keep this tile's own center -
+          // scroll sync being off means this tile's position must not move.
+          const center = (tRange.from + tRange.to) / 2;
+          const width = range.to - range.from;
+          t.applyLogicalRange({ from: center - width / 2, to: center + width / 2 });
+        } else if (this.syncFlags.scroll) {
+          // Translate by the same delta, keep this tile's own width - zoom
+          // sync being off means this tile's own scale must not change.
+          t.applyLogicalRange({ from: tRange.from + deltaPos, to: tRange.to + deltaPos });
+        }
+      });
     },
     _broadcastCrosshair(source, time, price) {
       this.tiles.forEach((t) => { if (t !== source) t.applyCrosshair(time, price); });
@@ -1066,8 +1145,14 @@
         while (this.tiles.length < count) this.tiles.push(new CE.ChartTile({}));
         const activeIdx = Number.isInteger(state.activeIndex) && state.activeIndex >= 0 && state.activeIndex < this.tiles.length ? state.activeIndex : 0;
         this.activeTileId = this.tiles[activeIdx].id;
+        // A per-parameter syncFlags snapshot restores as-is (it only ever
+        // contains what the user explicitly turned on). A pre-syncFlags
+        // session ("syncEnabled" - one bundled toggle from an older
+        // version) does NOT get migrated to any sync being on: every sync
+        // channel must start OFF until explicitly re-enabled, even for a
+        // workspace that had the old toggle on - see the spec's "по
+        // умолчанию все виды синхронизации должны быть выключены".
         if (state.syncFlags) this.syncFlags = Object.assign({}, this.syncFlags, state.syncFlags);
-        else if (state.syncEnabled) this.syncFlags = { ticker: false, interval: false, crosshair: true, timescale: true, range: false }; // migrate old single toggle
         return true;
       } catch (e) {
         return false;

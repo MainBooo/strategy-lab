@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from strategies.common import COMMISSION_SIDE, add_atr, load_candles, save_run
+from strategies.common import (
+    COMMISSION_SIDE, TradeSlotGate, add_atr, load_candles, save_run,
+    passes_volume_filter, simulate_exit,
+)
+from strategies.param_schema import parse_params
 
 
 def _touch_indices(values: pd.Series, level: float, tolerance: float, separation: int) -> list[int]:
@@ -20,30 +24,14 @@ def _touch_indices(values: pd.Series, level: float, tolerance: float, separation
 
 
 def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dict:
-    params = {
-        "lookback": int(raw_params.get("lookback", 80)),
-        "atr_period": int(raw_params.get("atr_period", 14)),
-        "min_touches": int(raw_params.get("min_touches", 3)),
-        "touch_tolerance_atr": float(raw_params.get("touch_tolerance_atr", 0.15)),
-        "min_depth_atr": float(raw_params.get("min_depth_atr", 0.25)),
-        "max_depth_atr": float(raw_params.get("max_depth_atr", 0.70)),
-        "return_window": int(raw_params.get("return_window", 2)),
-        "stop_buffer_atr": float(raw_params.get("stop_buffer_atr", 0.05)),
-        "rr": float(raw_params.get("rr", 2.0)),
-        "confirmation": bool(raw_params.get("confirmation", True)),
-        "min_risk_pct": float(raw_params.get("min_risk_pct", 0.0025)),
-        "max_risk_pct": float(raw_params.get("max_risk_pct", 0.015)),
-        "min_touch_separation": int(raw_params.get("min_touch_separation", 10)),
-        "max_level_age": int(raw_params.get("max_level_age", 150)),
-        "first_break_only": bool(raw_params.get("first_break_only", True)),
-        "atr_filter": bool(raw_params.get("atr_filter", False)),
-    }
+    params = parse_params("false_breakout", raw_params)
 
     df = add_atr(load_candles(source, raw_params.get("date_from"), raw_params.get("date_till")), params["atr_period"])
     df["atr_ma50"] = df["atr"].rolling(50, min_periods=50).mean()
 
     trades = []
     used_levels: list[tuple[str, float]] = []
+    gate = TradeSlotGate(params["max_concurrent_trades"], params["reentry_cooldown_bars"])
     i = params["lookback"] + max(params["atr_period"], 50)
 
     while i < len(df) - 3:
@@ -116,6 +104,14 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
             continue
 
         side, level, return_i, extreme, depth = signal
+
+        if params["direction"] in ("long", "short") and side != params["direction"]:
+            i += 1
+            continue
+        if params["volume_filter"] and not passes_volume_filter(df, i, params["volume_multiplier"]):
+            i += 1
+            continue
+
         confirm_i = return_i
 
         if params["confirmation"]:
@@ -150,24 +146,16 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
         if risk <= 0 or not (params["min_risk_pct"] <= risk_pct <= params["max_risk_pct"]):
             i += 1
             continue
+        if not gate.admit(entry_i):
+            i = confirm_i + 1
+            continue
 
-        exit_i = len(df) - 1
-        exit_price = float(df.at[exit_i, "close"])
-        reason = "end_of_period"
-
-        for k in range(entry_i, len(df)):
-            high, low = float(df.at[k, "high"]), float(df.at[k, "low"])
-            if side == "long":
-                hit_stop, hit_take = low <= stop, high >= take
-            else:
-                hit_stop, hit_take = high >= stop, low <= take
-
-            if hit_stop:
-                exit_i, exit_price, reason = k, stop, "stop"
-                break
-            if hit_take:
-                exit_i, exit_price, reason = k, take, "take"
-                break
+        exit_i, exit_price, reason = simulate_exit(
+            df, entry_i, side, stop, take, entry=entry,
+            trailing_stop_atr=params["trailing_stop_atr"], breakeven_at_r=params["breakeven_at_r"],
+            max_holding_bars=params["max_holding_bars"],
+        )
+        gate.register(exit_i)
 
         gross = exit_price / entry - 1 if side == "long" else entry / exit_price - 1
         net = gross - 2 * COMMISSION_SIDE
@@ -193,7 +181,7 @@ def run_false_breakout(source: Path, raw_params: dict, results_dir: Path) -> dic
 
         if params["first_break_only"]:
             used_levels.append((side, level))
-        i = exit_i + 1
+        i = confirm_i + 1
 
     return save_run(
         results_dir,

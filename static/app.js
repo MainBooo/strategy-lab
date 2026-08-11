@@ -1,11 +1,6 @@
 const $=id=>document.getElementById(id);
 
-const tooltips={
-lookback:"Количество предыдущих свечей, по которым строится уровень. Малое значение даёт больше, но слабее уровней; большое — реже, но значимее.",atr_period:"Период Average True Range. ATR измеряет текущую волатильность и используется для нормализации глубины пробоя и стопа.",min_touches:"Минимальное число разнесённых касаний, необходимое для признания цены уровнем поддержки или сопротивления.",touch_tolerance_atr:"Максимальное расстояние от уровня, при котором свеча считается касанием. Измеряется в долях ATR.",min_depth_atr:"Минимальная глубина выхода цены за уровень. Слишком маленький прокол может быть обычным шумом.",max_depth_atr:"Максимальная глубина ложного пробоя. Более глубокое движение чаще оказывается настоящим пробоем.",return_window:"Максимальное число свечей, за которое цена должна закрыться обратно за уровень.",stop_buffer_atr:"Дополнительный запас за экстремумом ложного пробоя, чтобы стоп не стоял точно на минимуме или максимуме.",rr:"Отношение потенциальной прибыли к риску. Значение 2 означает тейк-профит на расстоянии двух размеров стопа.",min_risk_pct:"Минимально допустимая ширина стопа относительно цены. Отсекает слишком тесные стопы, чувствительные к шуму.",max_risk_pct:"Максимально допустимая ширина стопа. Отсекает сделки с чрезмерным риском.",min_touch_separation:"Минимальное расстояние между касаниями в свечах. Не позволяет считать соседние свечи отдельными подтверждениями уровня.",max_level_age:"Максимальный возраст уровня в свечах. Старые уровни могут терять актуальность.",confirmation:"Требовать дополнительную свечу в сторону возврата перед входом. Снижает число сигналов, но фильтрует слабые возвраты.",first_break_only:"После первой сделки по уровню больше его не использовать. Повторные тесты обычно ослабляют уровень.",atr_filter:"Торговать только когда текущий ATR выше своего среднего значения, то есть в более активном рынке.",fast:"Период быстрой экспоненциальной средней.",slow:"Период медленной экспоненциальной средней, задающей направление тренда.",period:"Период расчёта RSI.",oversold:"Нижняя граница RSI, ниже которой рынок считается перепроданным.",overbought:"Верхняя граница RSI, выше которой рынок считается перекупленным.",stop_atr:"Размер защитного стопа в единицах ATR.",max_wait:"Сколько свечей ждать пробоя после формирования внутреннего бара.",wick_ratio:"Минимальное отношение длины тени пин-бара к телу свечи.",retest_bars:"Сколько свечей ждать возврата цены к пробитому уровню."};
-const paramsByStrategy={
-false_breakout:[["lookback","Период уровня",80],["atr_period","ATR период",14],["min_touches","Минимум касаний",3],["touch_tolerance_atr","Допуск касания ATR",0.15],["min_depth_atr","Мин. глубина ATR",0.25],["max_depth_atr","Макс. глубина ATR",0.70],["return_window","Возврат за свечей",2],["stop_buffer_atr","Запас стопа ATR",0.05],["rr","Тейк R",2],["min_risk_pct","Мин. риск",0.0025],["max_risk_pct","Макс. риск",0.015],["min_touch_separation","Расстояние касаний",10],["max_level_age","Возраст уровня",150],["confirmation","Подтверждение",true,"checkbox"],["first_break_only","Только первый пробой",true,"checkbox"],["atr_filter","Фильтр ATR",false,"checkbox"]],
-head_shoulders:[["pivot_span","Радиус экстремума",3],["shoulder_tolerance","Допуск плеч",0.03],["head_min_distance","Выступ головы",0.01],["stop_pct","Стоп",0.02],["take_pct","Тейк",0.05],["max_breakout_bars","Окно пробоя",30]],
-breakout_retest:[["lookback","Период уровня",50],["retest_bars","Ожидание ретеста",5],["rr","Тейк R",2],["stop_atr","Запас стопа ATR",0.3]],ema_pullback:[["fast","Быстрая EMA",20],["slow","Медленная EMA",50],["rr","Тейк R",2],["stop_atr","Стоп ATR",1.2]],rsi_reversal:[["period","RSI период",14],["oversold","Перепроданность",30],["overbought","Перекупленность",70],["rr","Тейк R",1.5],["stop_atr","Стоп ATR",1]],inside_bar:[["rr","Тейк R",2],["max_wait","Ожидание пробоя",3]],pin_bar:[["wick_ratio","Отношение тени",2.5],["lookback","Период экстремума",20],["rr","Тейк R",2],["stop_atr","Запас стопа ATR",0.2]]};
+function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
 const DATA_STATUS_LABEL={fresh:"Данные актуальны",stale:"Требуют обновления",none:"Данных нет"};
 const DATA_STATUS_CLASS={fresh:"status-fresh",stale:"status-stale",none:"status-none"};
@@ -23,6 +18,9 @@ let buildJobId=null,buildPollTimer=null;
 let activePortfolioId=localStorage.getItem("moexlab_active_portfolio")||null;
 let btPortfolio=null;
 let btIncluded=new Set();
+let dataGaps=[];
+let dataGapLoading=new Set();
+let timeframeGaps=[];
 let backtestJobId=null,backtestPollTimer=null;
 let lastBacktestResult=null;
 let byTickerSort={key:"pnl_rub",dir:-1};
@@ -39,7 +37,75 @@ let tvRunId=null,tvPage=1,tvPageSize=25;
 
 function setStatus(t,c=""){$("status").textContent=t;$("status").className=`status ${c}`}
 
+// ----------------------------------------------------------------- toast --
+// Transient, dismissable confirmations for actions the user just took
+// (backtest finished, strategy applied, portfolio saved) - separate from
+// .status, which stays as the persistent "current state of the page" chip
+// in the header. Container is created lazily so no template edit was
+// needed anywhere a toast might fire from.
+const TOAST_ICONS={
+  success:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>',
+  error:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>',
+  info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>'
+};
+function toastStack(){
+  let el=$("toastStack");
+  if(!el){el=document.createElement("div");el.id="toastStack";el.className="toast-stack";document.body.appendChild(el);}
+  return el;
+}
+function showToast(message,type="info",timeout=4200){
+  const stack=toastStack();
+  const el=document.createElement("div");
+  el.className=`toast ${type}`;
+  el.innerHTML=`<span class="toast-icon">${TOAST_ICONS[type]||TOAST_ICONS.info}</span><span class="toast-body">${message}</span><button class="toast-close" aria-label="Закрыть" type="button"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`;
+  const remove=()=>{el.classList.add("leaving");el.addEventListener("animationend",()=>el.remove(),{once:true});};
+  el.querySelector(".toast-close").onclick=remove;
+  stack.appendChild(el);
+  if(timeout)setTimeout(remove,timeout);
+  return el;
+}
+
+// ------------------------------------------------------------ count-up --
+// Short-lived rAF loop, not CSS - the target values (portfolio balance,
+// backtest metrics) come from the server as final numbers with no
+// intermediate frames to animate through, so the counting itself has to be
+// synthesized. Skipped entirely under prefers-reduced-motion (jumps
+// straight to the end value, single paint).
+function animateNumber(el,from,to,fmt,duration=600){
+  if(!el)return;
+  if(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches){el.textContent=fmt(to);return;}
+  const start=performance.now();
+  const step=now=>{
+    const p=Math.min(1,(now-start)/duration);
+    const eased=1-Math.pow(1-p,3);
+    el.textContent=fmt(from+(to-from)*eased);
+    if(p<1)requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 // ------------------------------------------------------------------ tabs --
+// Sliding pill behind the active desktop tab (styles.css ".tab-indicator").
+// Reads real layout (offsetLeft/offsetWidth) rather than hardcoding widths
+// because the labels are Cyrillic and render at different widths per tab.
+function positionTabIndicator(){
+  const nav=$("appPrimaryTabs");
+  if(!nav)return;
+  const active=nav.querySelector(".tab.active");
+  const indicator=nav.querySelector(".tab-indicator");
+  if(!active||!indicator)return;
+  indicator.style.width=active.offsetWidth+"px";
+  indicator.style.transform=`translateX(${active.offsetLeft}px)`;
+  nav.classList.add("indicator-ready");
+  // First positioning must be instant (no slide-in from x:0) - the
+  // "no-anim" class set in the template disables the transition for
+  // exactly one frame, then this removes it so every later move animates.
+  if(indicator.classList.contains("no-anim")){
+    requestAnimationFrame(()=>indicator.classList.remove("no-anim"));
+  }
+}
+window.addEventListener("resize",()=>positionTabIndicator());
+
 let _activeTabName=null;
 function activateTab(name){
   const leaving=_activeTabName;
@@ -48,6 +114,7 @@ function activateTab(name){
   document.querySelectorAll(".tab-page").forEach(x=>x.classList.add("hidden"));
   $("tab-"+name).classList.remove("hidden");
   localStorage.setItem("moexlab_active_tab",name);
+  positionTabIndicator();
   // The charts terminal is a full-bleed workspace (no room for the hero/
   // ticker-tape chrome the rest of the app uses) - see styles.css
   // "charts terminal full-bleed" section.
@@ -57,7 +124,6 @@ function activateTab(name){
   // resumes it and fetches immediately instead of waiting for the next tick.
   if(leaving==="charts"&&leaving!==name&&window.ChartAnalysisPage&&window.ChartAnalysisPage.onTabLeave)window.ChartAnalysisPage.onTabLeave();
   if(name==="backtest")renderBacktestTab();
-  if(name==="strategies")renderStrategiesContext();
   if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
   if(name==="replay"&&window.MarketReplayPage)window.MarketReplayPage.init($("replayRoot"));
   if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
@@ -72,8 +138,12 @@ window.addEventListener("beforeunload",e=>{
 });
 
 // --------------------------------------------------------------- catalog --
+function catalogSkeletonHtml(n){
+  return Array.from({length:n},()=>`<div class="skeleton-row"></div>`).join("");
+}
 async function loadSecurities(refresh=false){
   setStatus("Загрузка справочника…","working");
+  if($("securityList"))$("securityList").innerHTML=catalogSkeletonHtml(9);
   const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),45000);
   try{
     const r=await fetch(`/api/securities${refresh?"?refresh=1":""}`,{signal:ctrl.signal});
@@ -322,17 +392,13 @@ function showBuildSuccess(job){
 function strategyAssignmentCount(p){
   return Object.values(p.ticker_strategies||{}).reduce((sum,list)=>sum+(list||[]).filter(a=>a.enabled!==false).length,0);
 }
-function strategySummaryLabel(p){
+function portfolioStrategyLine(p){
   const overrideTickers=Object.keys(p.ticker_strategies||{}).filter(t=>(p.ticker_strategies[t]||[]).some(a=>a.enabled!==false));
-  return overrideTickers.length?`Индивидуальные стратегии (${overrideTickers.length})`:"Одна стратегия для всех";
-}
-function dataReadinessLabel(p){
-  const items=p.instruments||[];
-  const ready=items.filter(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return !sec||sec.DATA_STATUS==="fresh"}).length;
-  if(!items.length)return{text:"Нет инструментов",cls:"status-none"};
-  if(ready===items.length)return{text:"Данные готовы",cls:"status-fresh"};
-  if(ready===0)return{text:"Данные отсутствуют",cls:"status-none"};
-  return{text:`Готово ${ready} из ${items.length}`,cls:"status-stale"};
+  if(!overrideTickers.length){
+    const name=(window.STRATEGIES[p.default_strategy_id]||{}).name||p.default_strategy_id||"—";
+    return `Стратегия: ${name}`;
+  }
+  return `Назначено стратегий: ${strategyAssignmentCount(p)}`;
 }
 function formatDate(ts){return ts?new Date(ts*1000).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric"}):"—"}
 
@@ -404,16 +470,16 @@ function renderPortfolioList(){
 
 function renderPortfolioCard(p){
   const expanded=expandedPortfolios.has(p.id);
-  const readiness=dataReadinessLabel(p);
   const dirty=editorDirty.has(p.id);
+  const instrumentCount=(p.instruments||[]).length;
   const lastResultText=p.last_backtest_summary?`${p.last_backtest_summary>0?"+":""}${p.last_backtest_summary}%`:null;
   return `<article class="portfolio-card accordion ${expanded?'open':''}" data-portfolio-card="${p.id}">
     <div class="accordion-header" data-toggle-portfolio="${p.id}" role="button" tabindex="0" aria-expanded="${expanded}">
       <span class="accordion-arrow">${expanded?"▾":"▸"}</span>
       <div class="portfolio-card-main">
         <strong>${p.name}${dirty?' <span class="dirty-dot" title="Есть несохранённые изменения">●</span>':''}</strong>
-        <small>${(p.instruments||[]).length} инструментов · ${money(p.starting_capital)} ₽</small>
-        <small>${readiness.text} · ${strategySummaryLabel(p)}</small>
+        <small>${instrumentCount} инструмент${pluralSuffix(instrumentCount)} · ${money(p.starting_capital)} ₽</small>
+        <small>${portfolioStrategyLine(p)}</small>
         <small class="portfolio-dates">Последний бэктест: ${p.last_backtest_at?formatDate(p.last_backtest_at)+(lastResultText?` (${lastResultText})`:''):"не запускался"}</small>
       </div>
       <button class="danger delete-portfolio" data-id="${p.id}" data-no-toggle="1">Удалить</button>
@@ -471,9 +537,9 @@ function renderEditorHtml(portfolioId){
       <table>
         <thead><tr>
           <th></th><th>Тикер</th><th>Цена</th><th>Лот</th><th>Кол-во лотов</th><th>Акций</th>
-          <th>Стоимость</th><th>Доля</th><th>Данные</th><th>Стратегии</th>
+          <th>Стоимость</th><th>Доля</th>
         </tr></thead>
-        <tbody id="ed-rows-${portfolioId}">${rows||'<tr><td colspan="10" class="empty">Инструментов нет.</td></tr>'}</tbody>
+        <tbody id="ed-rows-${portfolioId}">${rows||'<tr><td colspan="8" class="empty">Инструментов нет.</td></tr>'}</tbody>
       </table>
     </div>
     <div class="editor-summary" id="ed-summary-${portfolioId}">${renderEditorSummary(totals,draft)}</div>
@@ -511,12 +577,6 @@ function renderInstrumentRow(portfolioId,inst){
   const draft=draftOf(portfolioId);
   const totals=computeEditorTotals(draft);
   const share=totals.positions>0&&value!=null?(value/totals.positions*100).toFixed(1)+"%":"—";
-  const dataStatus=sec?sec.DATA_STATUS:"none";
-  const assignments=(draft.ticker_strategies||{})[inst.ticker]||[];
-  const chips=assignments.filter(a=>a.enabled!==false).map((a,idx)=>{
-    const name=(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id;
-    return `<button class="strategy-chip" data-ed-strategy-remove="${inst.ticker}" data-idx="${idx}" title="Убрать ${name}">${name}<span>×</span></button>`;
-  }).join("")||`<span class="muted-note">по умолчанию: ${(window.STRATEGIES[draft.default_strategy_id]||{}).name||draft.default_strategy_id}</span>`;
   return `<tr data-ed-row="${inst.ticker}">
     <td><input type="checkbox" data-ed-select="${inst.ticker}"></td>
     <td><strong>${inst.ticker}</strong><br><small>${sec?sec.SHORTNAME:""}</small></td>
@@ -530,10 +590,6 @@ function renderInstrumentRow(portfolioId,inst){
     <td>${shares}</td>
     <td>${value!=null?money(value)+" ₽":"—"}</td>
     <td>${share}</td>
-    <td><span class="security-data-status ${DATA_STATUS_CLASS[dataStatus]||''}">${dataStatus==="none"?"Требуется загрузка":DATA_STATUS_LABEL[dataStatus]}</span>
-        ${dataStatus!=="fresh"?`<button class="link-btn" data-ed-prepare-data="${inst.ticker}">Подготовить данные</button>`:""}</td>
-    <td class="strategy-chips-cell">${chips}<button class="link-btn" data-ed-add-strategy="${inst.ticker}">+ Добавить</button>
-      <div class="strategy-add-panel hidden" data-ed-strategy-panel="${inst.ticker}"></div></td>
   </tr>`;
 }
 
@@ -558,33 +614,6 @@ function bindRowEvents(portfolioId,ticker){
   row.querySelector("[data-ed-lot]").onchange=e=>setLots(Number(e.target.value||0));
   row.querySelector("[data-ed-lot-minus]").onclick=()=>setLots((inst.lot_count||0)-1);
   row.querySelector("[data-ed-lot-plus]").onclick=()=>setLots((inst.lot_count||0)+1);
-  const prep=row.querySelector("[data-ed-prepare-data]");
-  if(prep)prep.onclick=()=>{setBuildTarget(portfolioId);catalogSelected=new Set([ticker]);renderCatalog();activateTab("portfolio");$("securityList").scrollIntoView({behavior:"smooth"})};
-  row.querySelectorAll("[data-ed-strategy-remove]").forEach(b=>b.onclick=()=>{
-    const list=draft.ticker_strategies[ticker]||[];
-    list.splice(Number(b.dataset.idx),1);
-    if(!list.length)delete draft.ticker_strategies[ticker];
-    markDirty(portfolioId);refreshEditorRow(portfolioId,ticker);
-  });
-  const addBtn=row.querySelector("[data-ed-add-strategy]");
-  if(addBtn)addBtn.onclick=()=>toggleStrategyAddPanel(portfolioId,ticker);
-}
-
-function toggleStrategyAddPanel(portfolioId,ticker){
-  const panel=document.querySelector(`[data-ed-strategy-panel="${ticker}"]`);
-  if(!panel)return;
-  if(!panel.classList.contains("hidden")){panel.classList.add("hidden");panel.innerHTML="";return}
-  document.querySelectorAll(".strategy-add-panel").forEach(p=>{p.classList.add("hidden");p.innerHTML=""});
-  const draft=draftOf(portfolioId);
-  const used=new Set((draft.ticker_strategies[ticker]||[]).map(a=>a.strategy_id));
-  const options=Object.entries(window.STRATEGIES).filter(([k])=>!used.has(k));
-  panel.innerHTML=`<div class="strategy-add-list">${options.map(([k,v])=>`<button type="button" class="secondary" data-ed-pick-strategy="${k}">${v.name}</button>`).join("")||"<span class='muted-note'>Все стратегии уже добавлены</span>"}</div>`;
-  panel.classList.remove("hidden");
-  panel.querySelectorAll("[data-ed-pick-strategy]").forEach(b=>b.onclick=()=>{
-    draft.ticker_strategies[ticker]=draft.ticker_strategies[ticker]||[];
-    draft.ticker_strategies[ticker].push({strategy_id:b.dataset.edPickStrategy,parameters:{},enabled:true});
-    markDirty(portfolioId);refreshEditorRow(portfolioId,ticker);
-  });
 }
 
 function bindEditorEvents(portfolioId){
@@ -685,35 +714,223 @@ async function saveEditor(portfolioId){
 }
 
 // ---------------------------------------------------------------- strategies
-function fillStrategies(){
-  $("strategyCards").innerHTML=Object.entries(window.STRATEGIES).map(([k,v])=>`<article class="strategy-card ${v.primary?"primary-strategy":""}"><div class="strategy-visual">${v.visual}</div><span>${v.category}</span><h3>${v.name}</h3><p>${v.summary}</p><button class="secondary choose-strategy" data-strategy="${k}">Применить к портфелю</button></article>`).join("");
-  document.querySelectorAll(".choose-strategy").forEach(b=>b.onclick=()=>applyStrategyToActivePortfolio(b.dataset.strategy));
-}
-function renderStrategiesContext(){
-  const p=portfolios.find(x=>x.id===activePortfolioId);
-  $("strategiesContext").textContent=p?`Активный портфель: «${p.name}»`:"Портфель не выбран — сначала сформируйте его на вкладке «Портфель».";
-}
-async function applyStrategyToActivePortfolio(strategyId){
-  if(!activePortfolioId||!portfolios.some(p=>p.id===activePortfolioId)){
-    setStatus("Сначала сформируйте или откройте портфель на вкладке «Портфель»","error");
-    activateTab("portfolio");return;
+const PRESET_RU_LABEL={standard:"Стандартный",conservative:"Консервативный",aggressive:"Агрессивный",custom:"Пользовательские настройки"};
+
+// Mirrors strategies/param_schema.py's SECTION_LABELS/SECTION_ORDER - keep the
+// keys in sync with the "section" tag on every schema field; labels are UI
+// text only, no need to round-trip them through the API.
+const PARAM_SECTION_ORDER=["basic","entry","filters","exit","risk"];
+const PARAM_SECTION_LABELS={basic:"Основные параметры",entry:"Условия входа",filters:"Фильтры",exit:"Условия выхода",risk:"Управление риском"};
+
+// ---- shared param-form building blocks (used by the Strategy Library card
+// accordion below, and by the per-ticker strategy assignment panels on the
+// Backtest tab) - each caller owns its own state object and persistence,
+// this just turns a strategy's schema + current values into markup/DOM events.
+function renderParamField(f,val,idPrefix){
+  const tip=f.tooltip?`<span class="tip" data-tip="${escapeHtml(f.tooltip)}">?</span>`:"";
+  const unit=f.unit?`<small class="param-unit">${escapeHtml(f.unit)}</small>`:"";
+  if(f.type==="checkbox"){
+    return `<div class="param-field param-field-checkbox">
+      <label class="toggle"><input type="checkbox" data-param-field="${f.key}" ${val?"checked":""}><span>${escapeHtml(f.label)} — ${val?"Вкл":"Выкл"}</span></label>${tip}
+    </div>`;
   }
-  await fetch(`/api/portfolios/${activePortfolioId}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({default_strategy_id:strategyId})});
-  await loadPortfolios();
-  setStatus("Стратегия по умолчанию применена к портфелю","success");
-  activateTab("backtest");
+  let input;
+  if(f.type==="select"){
+    input=`<select data-param-field="${f.key}">${(f.options||[]).map(o=>`<option value="${o.value}" ${o.value===val?"selected":""}>${escapeHtml(o.label)}</option>`).join("")}</select>`;
+  }else if(f.type==="slider"){
+    input=`<span class="range-inline param-slider"><input type="range" data-param-field="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${val}"><output id="${idPrefix}-out-${f.key}">${val}</output></span>`;
+  }else{
+    input=`<input type="number" data-param-field="${f.key}" min="${f.min ?? ""}" max="${f.max ?? ""}" step="${f.step ?? 1}" value="${val}">`;
+  }
+  return `<div class="param-field"><span class="param-field-label">${escapeHtml(f.label)}${tip}${unit}</span>${input}</div>`;
+}
+function paramFieldsHTML(strategyId,values,idPrefix){
+  const schema=(window.STRATEGIES[strategyId]||{}).params||[];
+  const bySection={};
+  schema.forEach(f=>{const s=f.section||"basic";(bySection[s]=bySection[s]||[]).push(f)});
+  return PARAM_SECTION_ORDER.filter(s=>bySection[s]&&bySection[s].length).map(s=>{
+    const fields=bySection[s];
+    return `<details class="param-section" open>
+      <summary class="param-section-title"><span>${PARAM_SECTION_LABELS[s]}</span><span class="param-section-count">${fields.length}</span></summary>
+      <div class="param-grid">${fields.map(f=>renderParamField(f,values[f.key],idPrefix)).join("")}</div>
+    </details>`;
+  }).join("");
+}
+function presetSwitcherHTML(presetName,hasUserPreset){
+  const items=[["conservative","Консервативный"],["standard","Стандартный"],["aggressive","Агрессивный"]];
+  items.push(["custom",hasUserPreset?"Мои настройки":"Свои настройки"]);
+  return `<div class="mode-tabs param-preset-tabs">${items.map(([k,label])=>
+    (k==="custom"&&!hasUserPreset&&presetName!=="custom")?"":
+    `<button type="button" class="mode-tab ${presetName===k?"active":""}" data-preset-pick="${k}">${label}</button>`).join("")}</div>`;
+}
+function readFieldValue(el){
+  if(el.type==="checkbox")return el.checked;
+  if(el.tagName==="SELECT")return el.value;
+  return Number(el.value);
+}
+function bindParamFieldEvents(container,idPrefix,onFieldCommit){
+  container.querySelectorAll("[data-param-field]").forEach(el=>{
+    el.onchange=e=>{e.stopPropagation();onFieldCommit(el.dataset.paramField,readFieldValue(el))};
+    if(el.type==="range"){
+      el.oninput=()=>{const out=document.getElementById(`${idPrefix}-out-${el.dataset.paramField}`);if(out)out.textContent=el.value};
+      el.onclick=e=>e.stopPropagation();
+    }
+    if(el.tagName==="SELECT"||el.type==="checkbox")el.onclick=e=>e.stopPropagation();
+  });
+  container.querySelectorAll("[data-preset-pick]").forEach(b=>b.onclick=e=>{e.stopPropagation();onFieldCommit("__preset__",b.dataset.presetPick)});
+}
+let expandedStrategyCards=new Set();
+let strategyFormState={};       // strategyId -> {values, presetName}
+let strategyUserPresets={};     // strategyId -> {parameters:{...}} | null (loaded lazily)
+
+function ensureStrategyFormState(strategyId){
+  if(!strategyFormState[strategyId]){
+    const standard=(window.STRATEGIES[strategyId]||{}).presets?.standard||{};
+    strategyFormState[strategyId]={values:{...standard},presetName:"standard"};
+  }
+  return strategyFormState[strategyId];
+}
+
+function fillStrategies(){
+  $("strategyCards").innerHTML=Object.entries(window.STRATEGIES).map(([k,v])=>renderStrategyCard(k,v)).join("");
+  bindStrategyCardEvents();
+}
+
+function renderStrategyCard(strategyId,meta){
+  const expanded=expandedStrategyCards.has(strategyId);
+  const st=ensureStrategyFormState(strategyId);
+  const presetLabel=PRESET_RU_LABEL[st.presetName]||"Пользовательские настройки";
+  return `<article class="strategy-card accordion ${meta.primary?"primary-strategy":""} ${expanded?"open":""}" data-strategy-card="${strategyId}">
+    <div class="accordion-header" data-toggle-strategy="${strategyId}" role="button" tabindex="0" aria-expanded="${expanded}">
+      <div class="strategy-card-main">
+        <div class="strategy-card-toprow">
+          <span class="strategy-category">${meta.category}</span>
+          <span class="strategy-preset-chip">${presetLabel}</span>
+        </div>
+        <div class="strategy-card-titlerow">
+          <h3>${meta.name}</h3>
+          <span class="strategy-chevron" aria-hidden="true">⌄</span>
+        </div>
+        <p class="strategy-summary">${meta.summary}</p>
+        <div class="strategy-visual">${meta.visual}</div>
+      </div>
+    </div>
+    ${expanded
+      ?`<div class="accordion-body" data-no-toggle="1" id="strategy-body-${strategyId}">${renderStrategyParamsForm(strategyId)}</div>`
+      :""}
+  </article>`;
+}
+
+function renderStrategyParamsForm(strategyId){
+  const st=ensureStrategyFormState(strategyId);
+  const userPreset=strategyUserPresets[strategyId];
+  const idPrefix=`lib-${strategyId}`;
+  return `
+    <div class="param-section param-section-presets">
+      <div class="param-section-title param-section-title-static"><span>Пресеты</span></div>
+      ${presetSwitcherHTML(st.presetName,!!userPreset)}
+    </div>
+    ${paramFieldsHTML(strategyId,st.values,idPrefix)}
+    <div class="param-form-footer">
+      <button type="button" class="secondary" data-param-reset="${strategyId}">Сбросить по умолчанию</button>
+      <button type="button" class="primary" data-param-save="${strategyId}">Сохранить настройки</button>
+    </div>
+    <div class="message" id="param-message-${strategyId}"></div>`;
+}
+
+function toggleStrategyExpand(strategyId){
+  if(expandedStrategyCards.has(strategyId)){
+    expandedStrategyCards.delete(strategyId);
+  }else{
+    expandedStrategyCards.add(strategyId);
+    ensureStrategyFormState(strategyId);
+    loadStrategyUserPreset(strategyId);
+  }
+  fillStrategies();
+}
+
+async function loadStrategyUserPreset(strategyId){
+  if(strategyId in strategyUserPresets)return;
+  try{
+    const d=await fetch(`/api/strategy-presets/${strategyId}`).then(r=>r.json());
+    strategyUserPresets[strategyId]=d&&d.parameters?d:null;
+  }catch(e){strategyUserPresets[strategyId]=null}
+  if(expandedStrategyCards.has(strategyId))fillStrategies();
+}
+
+function applyPresetToLibrary(strategyId,presetName){
+  const st=ensureStrategyFormState(strategyId);
+  const meta=window.STRATEGIES[strategyId]||{};
+  if(presetName==="custom"){
+    const userPreset=strategyUserPresets[strategyId];
+    if(userPreset)st.values={...meta.presets.standard,...userPreset.parameters};
+    // no saved preset yet: field edits already put it in "custom" state, nothing to apply
+  }else{
+    st.values={...(meta.presets?.[presetName]||meta.presets?.standard||{})};
+  }
+  st.presetName=presetName;
+  fillStrategies();
+}
+
+function commitLibraryFieldChange(strategyId,key,value){
+  const st=ensureStrategyFormState(strategyId);
+  if(key==="__preset__"){applyPresetToLibrary(strategyId,value);return}
+  st.values={...st.values,[key]:value};
+  st.presetName="custom";
+  fillStrategies();
+}
+
+async function saveLibraryPreset(strategyId){
+  const st=ensureStrategyFormState(strategyId);
+  const btn=document.querySelector(`[data-param-save="${strategyId}"]`);
+  if(btn){btn.disabled=true;btn.textContent="Сохраняем…"}
+  try{
+    const r=await fetch(`/api/strategy-presets/${strategyId}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({parameters:st.values})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"Не удалось сохранить настройки");
+    strategyUserPresets[strategyId]=d;
+    st.presetName="custom";
+    showToast(`Настройки «${window.STRATEGIES[strategyId]?.name||strategyId}» сохранены`,"success");
+  }catch(e){
+    showToast(e.message,"error");
+  }finally{
+    fillStrategies();
+  }
+}
+
+function bindStrategyCardEvents(){
+  document.querySelectorAll("[data-toggle-strategy]").forEach(el=>el.onclick=e=>{
+    if(e.target.closest("[data-no-toggle]"))return;
+    toggleStrategyExpand(el.dataset.toggleStrategy);
+  });
+  document.querySelectorAll("[data-strategy-card] .accordion-body").forEach(body=>{
+    const strategyId=body.closest("[data-strategy-card]")?.dataset.strategyCard;
+    if(strategyId)bindParamFieldEvents(body,`lib-${strategyId}`,(key,val)=>commitLibraryFieldChange(strategyId,key,val));
+  });
+  document.querySelectorAll("[data-param-reset]").forEach(b=>b.onclick=e=>{e.stopPropagation();applyPresetToLibrary(b.dataset.paramReset,"standard")});
+  document.querySelectorAll("[data-param-save]").forEach(b=>b.onclick=e=>{e.stopPropagation();saveLibraryPreset(b.dataset.paramSave)});
 }
 
 // ----------------------------------------------------------------- backtest
+// Mirrors timeframes.py's BACKTEST_TIMEFRAMES/BACKTEST_TIMEFRAME_LABELS -
+// this is a fixed, rarely-changing spec (same 8 options the backend
+// validates against in portfolio_backtest()), not data worth a round trip.
+const BACKTEST_TIMEFRAMES=[
+  ["1m","1 минута"],["5m","5 минут"],["10m","10 минут"],["15m","15 минут"],
+  ["30m","30 минут"],["60m","1 час"],["4h","4 часа"],["1d","1 день"],
+];
+const BACKTEST_TIMEFRAME_LABEL=Object.fromEntries(BACKTEST_TIMEFRAMES);
+function tfLabel(tf){return BACKTEST_TIMEFRAME_LABEL[tf||"10m"]||tf||"10 минут"}
 $("goToPortfolioTab").onclick=()=>activateTab("portfolio");
-$("applyStrategyPrompt").onclick=()=>{
-  if(!btPortfolio)return;
-  expandedPortfolios.add(btPortfolio.id);
-  activateTab("portfolio");
-  renderPortfolioList();
-  document.querySelector(`[data-portfolio-card="${btPortfolio.id}"]`)?.scrollIntoView({behavior:"smooth"});
-};
 $("backtestPortfolioSelect").onchange=e=>selectBacktestPortfolio(e.target.value);
+const backtestTimeframeEl=$("backtestTimeframe");
+if(backtestTimeframeEl){
+  backtestTimeframeEl.innerHTML=BACKTEST_TIMEFRAMES.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  backtestTimeframeEl.value="10m";
+  backtestTimeframeEl.onchange=()=>refreshDataGaps();
+}else{
+  console.error("#backtestTimeframe missing from DOM - template/JS out of sync (needs a server restart to pick up the current template)");
+}
 
 function renderBacktestTab(){
   if(!portfolios.length){
@@ -736,6 +953,7 @@ function selectBacktestPortfolio(id){
   activePortfolioId=id;localStorage.setItem("moexlab_active_portfolio",id);
   if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
   btIncluded=new Set((btPortfolio.instruments||[]).map(i=>i.ticker));
+  if(assignModalDraft)closeAssignmentModal(false);
   renderBacktestSectorFilter();
   renderBacktestChips();
   $("backtestResults").classList.add("hidden");
@@ -744,24 +962,39 @@ function selectBacktestPortfolio(id){
 }
 function pluralSuffix(n){const m10=n%10,m100=n%100;if(m100>=11&&m100<=14)return"ов";if(m10===1)return"";if(m10>=2&&m10<=4)return"а";return"ов"}
 
+// A ticker only contributes runs for strategies explicitly assigned to it -
+// no silent fallback to the portfolio's legacy default_strategy_id, so a
+// selected ticker with nothing assigned shows up in `missing` and blocks the
+// run instead of quietly picking an arbitrary strategy for it.
 function resolveComboCount(){
-  if(!btPortfolio)return{total:0,byTicker:[]};
+  if(!btPortfolio)return{total:0,byTicker:[],missing:[]};
   const ts=btPortfolio.ticker_strategies||{};
+  const missing=[];
   const byTicker=[...btIncluded].map(ticker=>{
     const enabled=(ts[ticker]||[]).filter(a=>a.enabled!==false);
-    const n=enabled.length||1;
-    const names=enabled.length?enabled.map(a=>(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id):
-      [(window.STRATEGIES[btPortfolio.default_strategy_id]||{}).name||btPortfolio.default_strategy_id];
-    return{ticker,count:n,names};
+    if(!enabled.length)missing.push(ticker);
+    const names=enabled.map(a=>(window.STRATEGIES[a.strategy_id]||{}).name||a.strategy_id);
+    return{ticker,count:enabled.length,names};
   });
-  return{total:byTicker.reduce((s,x)=>s+x.count,0),byTicker};
+  return{total:byTicker.reduce((s,x)=>s+x.count,0),byTicker,missing};
 }
 function renderComboEstimate(){
   const est=resolveComboCount();
-  $("comboEstimate").innerHTML=est.total?`<strong>Будет выполнено ${est.total} расчёт${pluralSuffix(est.total)}:</strong> `+
-    est.byTicker.map(x=>`${x.ticker} × ${x.count}`).join(", "):"Выберите хотя бы один инструмент.";
-  $("runBacktestBtn").textContent=est.total?`Запустить бэктест (${est.total} расчёт${pluralSuffix(est.total)})`:"Выберите инструменты";
-  $("runBacktestBtn").disabled=est.total===0;
+  const valEl=$("assignmentValidation");
+  if(btIncluded.size&&est.missing.length){
+    valEl.classList.remove("hidden");
+    valEl.innerHTML=`<span>Для ${est.missing.map(escapeHtml).join(", ")} не выбрана стратегия.</span><button type="button" class="secondary" id="assignValidationFix">Настроить</button>`;
+    $("assignValidationFix").onclick=openAssignmentModal;
+  }else{
+    valEl.classList.add("hidden");
+    valEl.innerHTML="";
+  }
+  const runnable=est.total>0&&!est.missing.length;
+  $("comboEstimate").innerHTML=!btIncluded.size?"Выберите хотя бы один инструмент.":
+    est.missing.length?"Назначьте стратегии выбранным инструментам, чтобы запустить бэктест.":
+    `<strong>Будет выполнено ${est.total} расчёт${pluralSuffix(est.total)}:</strong> `+est.byTicker.map(x=>`${x.ticker} × ${x.count}`).join(", ");
+  $("runBacktestBtn").textContent=runnable?`Запустить бэктест (${est.total} расчёт${pluralSuffix(est.total)})`:(btIncluded.size?"Назначьте стратегии":"Выберите инструменты");
+  $("runBacktestBtn").disabled=!runnable;
   $("backtestSelectedCount").textContent=btIncluded.size;
   $("backtestTotalCount").textContent=(btPortfolio?.instruments||[]).length;
 }
@@ -776,7 +1009,385 @@ function renderBacktestChips(){
     btIncluded.has(t)?btIncluded.delete(t):btIncluded.add(t);
     renderBacktestChips();
   });
+  renderAssignmentSummary();
   renderComboEstimate();
+  refreshDataGaps();
+}
+
+// ---- per-ticker strategy assignment: portfolio -> ticker -> [strategies] --
+// Modal-based editor. Edits happen on a local deep-cloned draft
+// (assignModalDraft) while the dialog is open; nothing touches btPortfolio
+// until "Сохранить" does one PATCH of the whole ticker_strategies map. This
+// is the single place that reads/writes that schema on the Backtest tab.
+let assignModalDraft=null;              // ticker -> [{strategy_id,parameters,enabled}], only while modal is open
+let assignExpandedTickers=new Set();    // tickers whose accordion card is open in the modal
+let assignExpandedParams=new Set();     // "TICKER::strategy_id" keys with an open inline param form
+
+function pluralWord(n,forms){
+  const m10=n%10,m100=n%100;
+  if(m100>=11&&m100<=14)return forms[2];
+  if(m10===1)return forms[0];
+  if(m10>=2&&m10<=4)return forms[1];
+  return forms[2];
+}
+
+function assignmentPresetKey(strategyId,parameters){
+  const meta=window.STRATEGIES[strategyId]||{};
+  const values={...(meta.presets?.standard||{}),...(parameters||{})};
+  for(const name of ["standard","conservative","aggressive"]){
+    const preset=meta.presets?.[name];
+    if(preset&&Object.keys(preset).every(k=>preset[k]===values[k]))return name;
+  }
+  return "custom";
+}
+function matchesUserPreset(strategyId,parameters){
+  const userPreset=strategyUserPresets[strategyId];
+  if(!userPreset)return false;
+  const standard=window.STRATEGIES[strategyId]?.presets?.standard||{};
+  return JSON.stringify({...standard,...userPreset.parameters})===JSON.stringify({...standard,...(parameters||{})});
+}
+function assignmentPresetLabel(strategyId,parameters){
+  const key=assignmentPresetKey(strategyId,parameters);
+  if(key==="custom")return matchesUserPreset(strategyId,parameters)?"Мои настройки":"Пользовательские настройки";
+  return PRESET_RU_LABEL[key];
+}
+
+// ---- compact summary strip on the Backtest tab (always visible) ----------
+function renderAssignmentSummary(){
+  const el=$("assignmentSummary");
+  if(!el)return;
+  if(!btPortfolio){el.innerHTML="";return}
+  const ts=btPortfolio.ticker_strategies||{};
+  const parts=(btPortfolio.instruments||[]).map(i=>{
+    const n=(ts[i.ticker]||[]).filter(a=>a.enabled!==false).length;
+    return n?`<strong>${escapeHtml(i.ticker)}</strong> — ${n} ${pluralWord(n,["стратегия","стратегии","стратегий"])}`:null;
+  }).filter(Boolean);
+  el.innerHTML=parts.length?parts.join(" · "):`<span class="assign-summary-empty">Стратегии ещё не назначены — нажмите «Настроить стратегии портфеля».</span>`;
+}
+
+// ---- modal lifecycle -------------------------------------------------------
+function draftFor(ticker){
+  assignModalDraft[ticker]=assignModalDraft[ticker]||[];
+  return assignModalDraft[ticker];
+}
+function isAssignDraftDirty(){
+  return JSON.stringify(assignModalDraft)!==JSON.stringify(btPortfolio.ticker_strategies||{});
+}
+function openAssignmentModal(){
+  if(!btPortfolio)return;
+  assignModalDraft=JSON.parse(JSON.stringify(btPortfolio.ticker_strategies||{}));
+  assignExpandedTickers=new Set();
+  assignExpandedParams=new Set();
+  $("assignBulkStrategy").innerHTML=Object.entries(window.STRATEGIES).map(([k,v])=>`<option value="${k}">${escapeHtml(v.name)}</option>`).join("");
+  $("strategyAssignModal").classList.remove("hidden");
+  renderAssignmentModalBody();
+}
+function closeAssignmentModal(askConfirm){
+  if(!assignModalDraft)return;
+  if(askConfirm&&isAssignDraftDirty()&&!confirm("Закрыть без сохранения изменений?"))return;
+  $("strategyAssignModal").classList.add("hidden");
+  assignModalDraft=null;
+}
+
+// ---- body rendering ---------------------------------------------------
+function renderAssignmentModalBody(){
+  const body=$("strategyAssignBody");
+  if(!body||!btPortfolio||!assignModalDraft)return;
+  const tickers=(btPortfolio.instruments||[]).map(i=>i.ticker);
+  body.innerHTML=tickers.length?tickers.map(renderAssignTickerCard).join(""):`<p class="muted-note">В портфеле нет инструментов.</p>`;
+  bindAssignmentModalEvents();
+  renderAssignFooterStats();
+}
+
+function renderAssignTickerCard(ticker){
+  const list=assignModalDraft[ticker]||[];
+  const enabledCount=list.filter(a=>a.enabled!==false).length;
+  const open=assignExpandedTickers.has(ticker);
+  const sec=securities.find(s=>s.SECID===ticker);
+  const excluded=!btIncluded.has(ticker);
+  return `<div class="assign-ticker-card ${open?"open":""}" data-assign-ticker-card="${ticker}">
+    <div class="assign-ticker-head" data-assign-ticker-toggle="${ticker}" role="button" tabindex="0" aria-expanded="${open}">
+      <div class="assign-ticker-main">
+        <div class="assign-ticker-toprow">
+          <strong>${escapeHtml(ticker)}</strong>
+          ${excluded?`<span class="assign-ticker-excluded" title="Не выбран для текущего запуска бэктеста">не в тесте</span>`:""}
+        </div>
+        <div class="assign-ticker-name">${escapeHtml(sec?.SHORTNAME||"")}</div>
+      </div>
+      <span class="assign-ticker-count ${enabledCount?"":"zero"}">${enabledCount?`${enabledCount} выбрано`:"не выбрано"}</span>
+      <span class="assign-ticker-chevron" aria-hidden="true">⌄</span>
+    </div>
+    ${open?`<div class="assign-ticker-body" data-no-toggle="1">
+      <div class="assign-ticker-quickactions">
+        <button type="button" class="secondary" data-assign-select-all="${ticker}">Выбрать все</button>
+        <button type="button" class="secondary" data-assign-clear-ticker="${ticker}">Снять все</button>
+      </div>
+      <div class="assign-strategy-list">${Object.entries(window.STRATEGIES).map(([sid,meta])=>renderAssignStrategyRow(ticker,sid,meta)).join("")}</div>
+    </div>`:""}
+  </div>`;
+}
+
+function renderAssignStrategyRow(ticker,strategyId,meta){
+  const list=assignModalDraft[ticker]||[];
+  const a=list.find(x=>x.strategy_id===strategyId);
+  const checked=!!a&&a.enabled!==false;
+  const key=`${ticker}::${strategyId}`;
+  const paramsOpen=checked&&assignExpandedParams.has(key);
+  return `<div class="assign-strategy-row">
+    <div class="assign-strategy-main" data-assign-toggle-strategy="${ticker}" data-strategy-id="${strategyId}">
+      <input type="checkbox" data-assign-check="${ticker}" data-strategy-id="${strategyId}" ${checked?"checked":""}>
+      <span class="assign-strategy-name">${escapeHtml(meta.name)}</span>
+      ${checked?`<span class="assign-strategy-preset">${assignmentPresetLabel(strategyId,a.parameters||{})}</span>
+      <button type="button" class="secondary assign-strategy-configure" data-assign-configure="${ticker}" data-strategy-id="${strategyId}">Настроить</button>`:""}
+    </div>
+    ${paramsOpen?`<div class="assignment-config-panel" data-assign-param-grid="${ticker}::${strategyId}">${renderStrategyParamsFormFor(strategyId,a.parameters||{},`assign-${ticker}-${strategyId}`)}</div>`:""}
+  </div>`;
+}
+
+function renderStrategyParamsFormFor(strategyId,parameters,idPrefix){
+  const meta=window.STRATEGIES[strategyId]||{};
+  const values={...(meta.presets?.standard||{}),...(parameters||{})};
+  const presetName=assignmentPresetKey(strategyId,parameters);
+  const hasUserPreset=!!strategyUserPresets[strategyId];
+  return `<div class="param-section param-section-presets">
+      <div class="param-section-title param-section-title-static"><span>Пресеты</span></div>
+      ${presetSwitcherHTML(presetName,hasUserPreset)}
+    </div>
+    ${paramFieldsHTML(strategyId,values,idPrefix)}`;
+}
+
+// ---- draft mutation ------------------------------------------------------
+function setStrategyEnabled(ticker,strategyId,enabled){
+  const list=draftFor(ticker);
+  let a=list.find(x=>x.strategy_id===strategyId);
+  if(enabled){
+    if(!a){
+      const meta=window.STRATEGIES[strategyId]||{};
+      a={strategy_id:strategyId,parameters:{...(meta.presets?.standard||{})},enabled:true};
+      list.push(a);
+    }else a.enabled=true;
+  }else{
+    if(a)a.enabled=false;
+    assignExpandedParams.delete(`${ticker}::${strategyId}`);
+  }
+  renderAssignmentModalBody();
+}
+function toggleAssignParamPanel(ticker,strategyId){
+  const key=`${ticker}::${strategyId}`;
+  if(assignExpandedParams.has(key)){
+    assignExpandedParams.delete(key);
+  }else{
+    assignExpandedParams.add(key);
+    loadStrategyUserPreset(strategyId).then(()=>{if(assignExpandedParams.has(key))renderAssignmentModalBody()});
+  }
+  renderAssignmentModalBody();
+}
+function commitDraftFieldChange(ticker,strategyId,key,value){
+  const list=draftFor(ticker);
+  const a=list.find(x=>x.strategy_id===strategyId);
+  if(!a)return;
+  const meta=window.STRATEGIES[strategyId]||{};
+  const current={...(meta.presets?.standard||{}),...(a.parameters||{})};
+  if(key==="__preset__"){
+    if(value==="custom"){
+      const userPreset=strategyUserPresets[strategyId];
+      a.parameters=userPreset?{...(meta.presets?.standard||{}),...userPreset.parameters}:current;
+    }else{
+      a.parameters={...(meta.presets?.[value]||meta.presets?.standard||{})};
+    }
+  }else{
+    a.parameters={...current,[key]:value};
+  }
+  renderAssignmentModalBody();
+}
+function selectAllForTicker(ticker){
+  const list=draftFor(ticker);
+  Object.keys(window.STRATEGIES).forEach(sid=>{
+    let a=list.find(x=>x.strategy_id===sid);
+    if(!a){
+      const meta=window.STRATEGIES[sid]||{};
+      list.push({strategy_id:sid,parameters:{...(meta.presets?.standard||{})},enabled:true});
+    }else a.enabled=true;
+  });
+  renderAssignmentModalBody();
+}
+function clearAllForTicker(ticker){
+  (assignModalDraft[ticker]||[]).forEach(a=>a.enabled=false);
+  renderAssignmentModalBody();
+}
+function applyBulkStrategyToAll(){
+  if(!btPortfolio||!assignModalDraft)return;
+  const strategyId=$("assignBulkStrategy").value;
+  if(!strategyId)return;
+  (btPortfolio.instruments||[]).forEach(i=>{
+    const list=draftFor(i.ticker);
+    let a=list.find(x=>x.strategy_id===strategyId);
+    if(!a){
+      const meta=window.STRATEGIES[strategyId]||{};
+      list.push({strategy_id:strategyId,parameters:{...(meta.presets?.standard||{})},enabled:true});
+    }else a.enabled=true;
+  });
+  renderAssignmentModalBody();
+  showToast(`«${window.STRATEGIES[strategyId]?.name||strategyId}» добавлена всем инструментам`,"success");
+}
+function clearAllAssignments(){
+  if(!confirm("Очистить все назначения стратегий во всём портфеле? Это затронет все инструменты."))return;
+  assignModalDraft={};
+  renderAssignmentModalBody();
+}
+
+// ---- footer stats + save --------------------------------------------------
+function computeDraftFooterStats(){
+  const tickers=[...btIncluded];
+  let instrumentsWithStrategy=0,total=0;
+  tickers.forEach(t=>{
+    const n=(assignModalDraft[t]||[]).filter(a=>a.enabled!==false).length;
+    if(n){instrumentsWithStrategy++;total+=n}
+  });
+  return{tickers:tickers.length,instrumentsWithStrategy,total};
+}
+function renderAssignFooterStats(){
+  const st=computeDraftFooterStats();
+  $("assignFooterStats").innerHTML=`<span>Инструментов: <strong>${st.tickers}</strong></span><span>Назначено стратегий: <strong>${st.total}</strong></span><span>Будет выполнено: <strong>${st.total} расчёт${pluralSuffix(st.total)}</strong></span>`;
+  $("assignSaveBtn").textContent=st.total?`Сохранить — ${st.total} расчёт${pluralSuffix(st.total)}`:"Сохранить";
+}
+async function saveAssignmentModal(){
+  if(!btPortfolio||!assignModalDraft)return;
+  const btn=$("assignSaveBtn");
+  const original=btn.textContent;
+  btn.disabled=true;btn.textContent="Сохраняем…";
+  try{
+    const r=await fetch(`/api/portfolios/${btPortfolio.id}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ticker_strategies:assignModalDraft})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"Не удалось сохранить назначения стратегий");
+    btPortfolio.ticker_strategies=d.ticker_strategies;
+    const idx=portfolios.findIndex(p=>p.id===btPortfolio.id);
+    if(idx>=0)portfolios[idx]=btPortfolio;
+    assignModalDraft=null;
+    $("strategyAssignModal").classList.add("hidden");
+    renderAssignmentSummary();
+    renderComboEstimate();
+    showToast("Стратегии портфеля сохранены","success");
+  }catch(e){
+    showToast(e.message,"error");
+  }finally{
+    btn.disabled=false;btn.textContent=original;
+  }
+}
+
+// ---- event binding ----------------------------------------------------
+function bindAssignmentModalEvents(){
+  document.querySelectorAll("[data-assign-ticker-toggle]").forEach(el=>el.onclick=e=>{
+    if(e.target.closest("[data-no-toggle]"))return;
+    const t=el.dataset.assignTickerToggle;
+    assignExpandedTickers.has(t)?assignExpandedTickers.delete(t):assignExpandedTickers.add(t);
+    renderAssignmentModalBody();
+  });
+  document.querySelectorAll("[data-assign-select-all]").forEach(b=>b.onclick=e=>{e.stopPropagation();selectAllForTicker(b.dataset.assignSelectAll)});
+  document.querySelectorAll("[data-assign-clear-ticker]").forEach(b=>b.onclick=e=>{e.stopPropagation();clearAllForTicker(b.dataset.assignClearTicker)});
+  document.querySelectorAll("[data-assign-check]").forEach(cb=>{
+    cb.onclick=e=>e.stopPropagation();
+    cb.onchange=e=>{e.stopPropagation();setStrategyEnabled(cb.dataset.assignCheck,cb.dataset.strategyId,cb.checked)};
+  });
+  document.querySelectorAll("[data-assign-configure]").forEach(b=>b.onclick=e=>{e.stopPropagation();toggleAssignParamPanel(b.dataset.assignConfigure,b.dataset.strategyId)});
+  document.querySelectorAll("[data-assign-toggle-strategy]").forEach(el=>el.onclick=e=>{
+    if(e.target.closest("[data-assign-configure]")||e.target.matches('input[type="checkbox"]'))return;
+    const ticker=el.dataset.assignToggleStrategy,strategyId=el.dataset.strategyId;
+    const cb=el.querySelector(`input[data-strategy-id="${strategyId}"]`);
+    cb.checked=!cb.checked;
+    setStrategyEnabled(ticker,strategyId,cb.checked);
+  });
+  document.querySelectorAll("[data-assign-param-grid]").forEach(panel=>{
+    const [ticker,strategyId]=panel.dataset.assignParamGrid.split("::");
+    bindParamFieldEvents(panel,`assign-${ticker}-${strategyId}`,(key,val)=>commitDraftFieldChange(ticker,strategyId,key,val));
+  });
+}
+
+$("openAssignModalBtn").onclick=openAssignmentModal;
+$("strategyAssignClose").onclick=()=>closeAssignmentModal(true);
+$("strategyAssignBackdrop").onclick=()=>closeAssignmentModal(true);
+$("assignCancelBtn").onclick=()=>closeAssignmentModal(true);
+$("assignSaveBtn").onclick=saveAssignmentModal;
+$("assignBulkAddBtn").onclick=applyBulkStrategyToAll;
+$("assignClearAllBtn").onclick=clearAllAssignments;
+
+// ---- pre-flight data coverage for the selected backtest period ----------
+function fmtGapRange(g){
+  if(g.missing_from&&g.missing_to)return`${g.missing_from} – ${g.missing_to}`;
+  return g.missing_from||g.missing_to||"выбранный период";
+}
+async function refreshDataGaps(){
+  if(!btPortfolio||!btIncluded.size){dataGaps=[];timeframeGaps=[];renderDataGaps();return}
+  const params=new URLSearchParams();
+  const df=$("backtestFrom").value,dt=$("backtestTill").value;
+  if(df)params.set("date_from",df);
+  if(dt)params.set("date_to",dt);
+  params.set("tickers",[...btIncluded].join(","));
+  params.set("timeframe",$("backtestTimeframe").value||"10m");
+  const requestedPortfolioId=btPortfolio.id;
+  try{
+    const r=await fetch(`/api/portfolios/${requestedPortfolioId}/data-coverage?${params}`);
+    const d=await r.json();
+    if(!btPortfolio||btPortfolio.id!==requestedPortfolioId)return; // portfolio/tab changed while in flight
+    dataGaps=(d.items||[]).filter(i=>!i.covered);
+    // Distinct from dataGaps: the period is fine but the chosen non-10m
+    // timeframe honestly has nothing for this ticker (no native data, no
+    // finer base to aggregate from) - see backtest_candles.py. Never
+    // offered a "Загрузить" retry, since the coverage check above already
+    // attempted the same honest fetch/aggregate that would be retried.
+    timeframeGaps=(d.items||[]).filter(i=>i.timeframe_available===false);
+  }catch(e){dataGaps=[];timeframeGaps=[]}
+  renderDataGaps();
+}
+function renderDataGaps(){
+  const el=$("backtestDataGaps");
+  if(!el)return;
+  if(!dataGaps.length&&!timeframeGaps.length){el.classList.add("hidden");el.innerHTML="";return}
+  el.classList.remove("hidden");
+  let html="";
+  if(dataGaps.length){
+    html+=`<strong>Не хватает исторических данных:</strong>`+dataGaps.map(g=>{
+      const loading=dataGapLoading.has(g.ticker);
+      return`<div class="data-gap-row" data-gap-row="${g.ticker}">
+        <span>Для <strong>${g.ticker}</strong> отсутствуют данные за ${fmtGapRange(g)}</span>
+        <button class="secondary" data-gap-load="${g.ticker}" ${loading?"disabled":""}>${loading?"Загрузка…":"Загрузить"}</button>
+      </div>`;
+    }).join("");
+  }
+  if(timeframeGaps.length){
+    html+=`<strong>Недоступен выбранный таймфрейм:</strong>`+timeframeGaps.map(g=>
+      `<div class="data-gap-row"><span>${escapeHtml(g.timeframe_reason||`Для ${g.ticker} нет данных на этом таймфрейме.`)}</span></div>`
+    ).join("");
+  }
+  el.innerHTML=html;
+  el.querySelectorAll("[data-gap-load]").forEach(b=>b.onclick=()=>loadGapData(b.dataset.gapLoad));
+}
+async function loadGapData(ticker){
+  if(!btPortfolio||dataGapLoading.has(ticker))return;
+  const gap=dataGaps.find(g=>g.ticker===ticker);
+  const oneYearAgo=new Date(Date.now()-365*86400000).toISOString().slice(0,10);
+  const today=new Date().toISOString().slice(0,10);
+  const date_from=$("backtestFrom").value||gap?.missing_from||oneYearAgo;
+  const date_to=$("backtestTill").value||gap?.missing_to||today;
+  dataGapLoading.add(ticker);renderDataGaps();
+  try{
+    const r=await fetch(`/api/portfolios/${btPortfolio.id}/instruments/${ticker}/download-data`,{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({date_from,date_to})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||"Не удалось загрузить данные");
+    showToast(`Данные ${ticker} загружены`,"success");
+    const fresh=await fetch(`/api/portfolios/${btPortfolio.id}`).then(x=>x.json());
+    const idx=portfolios.findIndex(p=>p.id===fresh.id);
+    if(idx>=0)portfolios[idx]=fresh;
+    if(btPortfolio&&btPortfolio.id===fresh.id)btPortfolio=fresh;
+    dataGapLoading.delete(ticker);
+    await refreshDataGaps();
+  }catch(e){
+    dataGapLoading.delete(ticker);
+    setStatus(`Ошибка загрузки данных ${ticker}: ${e.message}`,"error");
+    renderDataGaps();
+  }
 }
 function renderBacktestSectorFilter(){
   const sectors=[...new Set((btPortfolio.instruments||[]).map(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return sec?sec.SECTOR:"Прочее"}))];
@@ -794,9 +1405,12 @@ $("selectBySector").onchange=e=>{
   renderBacktestChips();
   e.target.value="";
 };
+$("backtestFrom").onchange=()=>refreshDataGaps();
+$("backtestTill").onchange=()=>refreshDataGaps();
 
 async function startBacktest(){
   if(!btIncluded.size)return;
+  if(resolveComboCount().missing.length)return;
   $("runBacktestBtn").disabled=true;
   $("backtestProgress").classList.remove("hidden");
   $("backtestResults").classList.add("hidden");
@@ -804,7 +1418,8 @@ async function startBacktest(){
   const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),15000);
   try{
     const r=await fetch(`/api/portfolios/${btPortfolio.id}/backtest`,{method:"POST",headers:{"Content-Type":"application/json"},signal:ctrl.signal,
-      body:JSON.stringify({tickers:[...btIncluded],date_from:$("backtestFrom").value||undefined,date_to:$("backtestTill").value||undefined})});
+      body:JSON.stringify({tickers:[...btIncluded],date_from:$("backtestFrom").value||undefined,date_to:$("backtestTill").value||undefined,
+        timeframe:$("backtestTimeframe").value||"10m"})});
     clearTimeout(t);
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось запустить бэктест");
@@ -851,12 +1466,14 @@ function pollBacktestJob(jobId){
         if(job.status==="completed"||job.status==="completed_with_errors"){
           renderBacktestResult(job.result);
           setStatus(job.status==="completed"?"Бэктест завершён":"Бэктест завершён с ошибками по части комбинаций","success");
+          showToast(job.status==="completed"?"Бэктест завершён — результаты готовы":"Бэктест завершён с ошибками по части комбинаций",job.status==="completed"?"success":"info");
           await loadPortfolios();
           loadHistory(1);
           if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
         }else{
           $("backtestMessage").textContent=`${job.status==="canceled"?"Отменено":"Ошибка"}: ${job.error?.message||"неизвестная ошибка"}`;
           setStatus(job.status==="canceled"?"Бэктест отменён":"Ошибка бэктеста","error");
+          if(job.status!=="canceled")showToast(`Ошибка бэктеста: ${job.error?.message||"неизвестная ошибка"}`,"error");
         }
         return;
       }
@@ -883,13 +1500,14 @@ function resumeBacktestJobIfAny(){
 
 function renderMetrics(s,target){
   const pnl=(s.final_capital_rub||0)-(s.starting_capital_rub||0);
+  const signClass=(n)=>n>0?"pos":n<0?"neg":"";
   const fields=[
-    ["Доходность",`${s.return_pct??0}%`],["Прибыль/убыток",`${money(pnl)} ₽`],
-    ["Просадка",`${s.max_drawdown_pct??0}%`],["Сделок",s.trades??0],["Win Rate",`${s.win_rate??0}%`],
-    ["Profit Factor",s.profit_factor??"—"],["Sharpe (оценка)",s.sharpe_ratio??"—"],
-    ["Использование капитала",`${s.capital_utilization_pct??0}%`],["Капитал",`${money(s.final_capital_rub)} ₽`],
+    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} ₽`,signClass(pnl)],
+    ["Просадка",`${s.max_drawdown_pct??0}%`,""],["Сделок",s.trades??0,""],["Win Rate",`${s.win_rate??0}%`,""],
+    ["Profit Factor",s.profit_factor??"—",""],["Sharpe (оценка)",s.sharpe_ratio??"—",""],
+    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} ₽`,""],
   ];
-  $(target).innerHTML=fields.map(([a,b])=>`<div class="metric"><span>${a}</span><strong>${b}</strong></div>`).join("");
+  $(target).innerHTML=fields.map(([a,b,c])=>`<div class="metric"><span>${a}</span><strong class="${c}">${b}</strong></div>`).join("");
 }
 function renderBacktestResult(result){
   lastBacktestResult=result;
@@ -901,6 +1519,7 @@ function renderBacktestResult(result){
   renderByStrategyTable(result.by_strategy||[]);
 }
 const BY_TICKER_COLUMNS=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub","Прибыль ₽"],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
+const BY_TICKER_NUM_KEYS=new Set(["trades","pnl_rub","win_rate","max_drawdown_pct"]);
 function renderByTickerTable(){
   if(!lastBacktestResult)return;
   const rows=[...(lastBacktestResult.by_ticker||[])].sort((a,b)=>{
@@ -908,8 +1527,8 @@ function renderByTickerTable(){
     const cmp=typeof av==="number"&&typeof bv==="number"?av-bv:String(av).localeCompare(String(bv));
     return cmp*byTickerSort.dir;
   });
-  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${BY_TICKER_COLUMNS.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
-    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy_name||"—"}</td><td>${r.trades}</td><td>${r.pnl_rub}</td><td>${r.win_rate}%</td><td>${r.max_drawdown_pct}%</td><td>${r.run_id?`<button class="link-btn" data-open-run="${r.run_id}">Подробнее</button>`:"—"}</td></tr>`).join("")
+  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${BY_TICKER_COLUMNS.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${BY_TICKER_NUM_KEYS.has(k)?'num':''} ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
+    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy_name||"—"}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.win_rate}%</td><td class="num">${r.max_drawdown_pct}%</td><td>${r.run_id?`<button class="link-btn" data-open-run="${r.run_id}">Подробнее</button>`:"—"}</td></tr>`).join("")
   }</tbody></table></div>`;
   document.querySelectorAll("[data-sort-key]").forEach(th=>th.onclick=()=>{
     const key=th.dataset.sortKey;
@@ -920,8 +1539,8 @@ function renderByTickerTable(){
 }
 function renderByStrategyTable(rows){
   if(!rows.length){$("byStrategyTable").innerHTML="";return}
-  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th>Тикеров</th><th>Сделок</th><th>Прибыль ₽</th><th>Средний Win Rate</th></tr></thead><tbody>${
-    rows.map(r=>`<tr><td>${r.strategy_name}</td><td>${r.tickers}</td><td>${r.trades}</td><td>${r.pnl_rub}</td><td>${r.avg_win_rate}%</td></tr>`).join("")
+  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль ₽</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
+    rows.map(r=>`<tr><td>${r.strategy_name}</td><td class="num">${r.tickers}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.avg_win_rate}%</td></tr>`).join("")
   }</tbody></table></div>`;
 }
 
@@ -953,18 +1572,19 @@ async function loadHistory(page){
 function renderHistoryTable(items){
   if(!items.length){$("historyTable").innerHTML="<div class='empty'>Запусков пока нет.</div>";return}
   $("historyTable").innerHTML=`<div class="table-scroll"><table><thead><tr>
-    <th>Дата</th><th>Портфель</th><th>Комбинаций</th><th>Статус</th><th>Доходность</th><th>Просадка</th><th>Сделок</th><th>Длительность</th><th></th>
+    <th>Дата</th><th>Портфель</th><th class="num">Комбинаций</th><th>Статус</th><th class="num">Доходность</th><th class="num">Просадка</th><th class="num">Сделок</th><th class="num">Длительность</th><th></th>
   </tr></thead><tbody>${items.map(it=>{
     const duration=it.completed_at&&it.started_at?`${(it.completed_at-it.started_at).toFixed(1)}с`:"—";
+    const retClass=it.return_percent>0?"pnl-pos":it.return_percent<0?"pnl-neg":"";
     return `<tr>
       <td>${fmtDateTime(it.created_at)}</td>
-      <td>${it.portfolio_name_snapshot||"—"}</td>
-      <td>${it.combinations_ok||0}/${it.combinations_count||0}</td>
+      <td>${it.portfolio_name_snapshot||"—"}<div class="muted-note">${tfLabel(it.timeframe)}</div></td>
+      <td class="num">${it.combinations_ok||0}/${it.combinations_count||0}</td>
       <td><span class="pill status-${it.status}">${HISTORY_STATUS_LABEL[it.status]||it.status}</span></td>
-      <td>${it.return_percent!=null?it.return_percent+"%":"—"}</td>
-      <td>${it.max_drawdown!=null?it.max_drawdown+"%":"—"}</td>
-      <td>${it.trades_count??"—"}</td>
-      <td>${duration}</td>
+      <td class="num ${retClass}">${it.return_percent!=null?it.return_percent+"%":"—"}</td>
+      <td class="num">${it.max_drawdown!=null?it.max_drawdown+"%":"—"}</td>
+      <td class="num">${it.trades_count??"—"}</td>
+      <td class="num">${duration}</td>
       <td class="history-actions">
         <button class="link-btn" data-hist-trades="${it.id}">Сделки</button>
         <button class="link-btn" data-hist-repeat="${it.id}">Повторить</button>
@@ -1016,7 +1636,7 @@ async function openTradeViewer(runId,focusTradeId){
   $("tradeViewer").classList.remove("hidden");
   $("tradeDetail").classList.add("hidden");
   const run=await fetch(`/api/backtests/${runId}`).then(r=>r.json());
-  $("tradeViewerHead").innerHTML=`<h3>Сделки: ${run.portfolio_name_snapshot||"портфель"}</h3><p class="muted-note">${fmtDateTime(run.created_at)} · ${run.combinations_ok}/${run.combinations_count} комбинаций</p>`;
+  $("tradeViewerHead").innerHTML=`<h3>Сделки: ${run.portfolio_name_snapshot||"портфель"}</h3><p class="muted-note">${fmtDateTime(run.created_at)} · ${run.combinations_ok}/${run.combinations_count} комбинаций · таймфрейм ${tfLabel(run.timeframe)}</p>`;
   $("tvFilterTicker").innerHTML=`<option value="">Все тикеры</option>`+[...new Set((run.results||[]).map(r=>r.ticker))].map(t=>`<option value="${t}">${t}</option>`).join("");
   window.TradeChart&&window.TradeChart.setRun(run);
   loadTrades();
@@ -1052,12 +1672,12 @@ async function loadTrades(){
 function renderTradesTable(items,total){
   if(!items.length){$("tvTable").innerHTML="<div class='empty'>Сделок не найдено по текущим фильтрам.</div>";$("tvPagination").innerHTML="";return}
   $("tvTable").innerHTML=`<div class="table-scroll"><table><thead><tr>
-    <th>#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th>Лоты</th><th>Прибыль</th><th>Доходность</th><th>Причина</th><th></th>
+    <th class="num">#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th class="num">Лоты</th><th class="num">Прибыль</th><th class="num">Доходность</th><th>Причина</th><th></th>
   </tr></thead><tbody>${items.map((t,i)=>`<tr data-row-id="${t.id}">
-      <td>${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
+      <td class="num">${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
       <td>${t.direction}</td><td>${t.entry_datetime}<br><small>${money(t.entry_price)} ₽</small></td>
-      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td>${t.quantity_lots}</td>
-      <td class="${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td>${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
+      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td class="num">${t.quantity_lots}</td>
+      <td class="num ${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td class="num ${t.return_percent>0?'pnl-pos':t.return_percent<0?'pnl-neg':''}">${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
       <td><button class="link-btn" data-trade-detail="${t.id}">Подробнее</button> <button class="link-btn" data-trade-chart="${t.id}">На графике</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-trade-detail]").forEach(b=>b.onclick=()=>openTradeDetail(b.dataset.tradeDetail));
@@ -1103,7 +1723,18 @@ async function openTradeDetail(tradeId){
 }
 $("tradeViewerClose").onclick=()=>$("tradeViewer").classList.add("hidden");
 $("tradeViewerBackdrop").onclick=()=>$("tradeViewer").classList.add("hidden");
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("tradeViewer").classList.contains("hidden"))$("tradeViewer").classList.add("hidden")});
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape"||$("tradeViewer").classList.contains("hidden"))return;
+  // Trade chart fullscreen (trade-chart.js) also exits on Esc - if that's
+  // currently active, this same keypress must only collapse fullscreen,
+  // not also close the whole modal underneath it (document.fullscreenElement
+  // is still set here regardless of listener order: leaving native
+  // fullscreen is always an async transition, so it hasn't cleared yet at
+  // this point in the same keydown dispatch; the fsCtrl.active check
+  // covers the rare no-Fullscreen-API fallback path the same way).
+  if(document.fullscreenElement||(window.TradeChart&&window.TradeChart.fsCtrl&&window.TradeChart.fsCtrl.active))return;
+  $("tradeViewer").classList.add("hidden");
+});
 
 // ------------------------------------------------------------- ticker tape
 let tickerTapeTimer=null;
@@ -1137,10 +1768,14 @@ async function bootstrap(){
   renderPresets();
   fillStrategies();
   await Promise.all([loadSecurities(),loadPortfolios()]).catch(e=>{setStatus("Ошибка запуска","error");console.error(e)});
-  renderStrategiesContext();
   initTabs();
   setBuildTarget(null);
   resumeBuildJob();
   loadTickerTape();
+  // Deep link from the personal cabinet ("Мои бэктесты" -> "Открыть") -
+  // reuses the existing backtest tab + trade viewer instead of building a
+  // second results view inside /account.
+  const openRun=new URLSearchParams(location.search).get("openRun");
+  if(openRun){activateTab("backtest");openTradeViewer(openRun);}
 }
 bootstrap();

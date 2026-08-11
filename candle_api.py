@@ -17,11 +17,12 @@ module only serves the chart/replay read path.
 
 import calendar
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import market_data_store as store
 import market_data_sync as sync
+import market_ticker
 from timeframes import AGGREGATE_TIMEFRAMES, TIMEFRAME_TO_MOEX_INTERVAL, canonical
 
 # Re-exported for backward compatibility (older tests/callers import these
@@ -117,9 +118,109 @@ def _ensure_coverage(ticker: str, board: str, timeframe: str, from_date: str, ti
 
         fresh_enough = bool(state.get("last_synced_at")) and \
             (time.time() - state["last_synced_at"]) < _FRESHNESS_SECONDS.get(timeframe, 3600)
+        sync_status = state.get("status")
         if till_ts > (cov["latest_ts"] or 0) and not fresh_enough:
-            sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
-                                        mode="continue", till_date=till_date)
+            result = sync.sync_native_timeframe(ticker, board, timeframe, market=market, engine=engine,
+                                                 mode="continue", till_date=till_date)
+            sync_status = result.get("status")
+
+        # Gap-fill only after the real-data sync attempt above (if any) is
+        # accounted for, and only with its actual outcome - a failed sync
+        # must surface as "Ошибка обновления", never be smoothed over by a
+        # fake flat candle (see the module's "критическое уточнение" spec).
+        _fill_synthetic_gaps(ticker, board, timeframe, market, engine, sync_ok=(sync_status != "failed"))
+
+
+# Native intraday timeframes with a fixed bucket width - the ones the
+# "критическое уточнение" spec's gap-fill applies to. 1d/1w/1mo are
+# excluded: a day/week/month with zero trades is just a closed session
+# (already handled by not calling MOEX for dates outside it), not a
+# "формируется свеча" situation inside an otherwise-open session.
+_GAP_FILL_BUCKET_SECONDS = {"1m": 60, "10m": 600, "60m": 3600}
+# Safety valve so one request can't spin filling years of history after a
+# long-dead ticker's cache is touched again - catches up gradually across
+# subsequent requests/polls instead of blocking one for a long loop.
+_GAP_FILL_MAX_BUCKETS = 60
+
+
+def _msk_wall_in_session(dt: datetime) -> bool:
+    """Same weekday/hours rule as market_ticker.is_trading_session, but
+    applied directly to a naive MSK-wall-clock value with no +3h shift -
+    stored candle timestamps already ARE naive MSK wall time treated as UTC
+    (see market_data_sync._rows_from_moex), so re-applying is_trading_session
+    (which expects genuine UTC and adds 3h itself) here would double-shift
+    the bucket into the wrong session window. Doesn't know about exchange
+    holidays for the same honestly-disclosed reason as is_trading_session."""
+    if dt.weekday() >= 5:
+        return False
+    minutes = dt.hour * 60 + dt.minute
+    return 10 * 60 <= minutes <= 23 * 60 + 50
+
+
+def _fill_synthetic_gaps(ticker: str, board: str, timeframe: str, market: str, engine: str, *,
+                          sync_ok: bool) -> None:
+    """Keeps a native intraday timeline advancing on schedule during an
+    active session even when MOEX genuinely has no candle for a completed
+    bucket (an illiquid name with no trades in that interval): inserts a
+    flat, explicitly-marked synthetic candle at the previous close with
+    zero volume, so a 10-minute chart still gets a new bar every 10 minutes
+    of trading time instead of silently stalling at the last real trade -
+    which is what previously made a merely-illiquid ticker's realtime badge
+    climb to a misleading "1.7 hours" instead of showing "нет сделок 1 ч 42
+    мин". A real candle for the same bucket, whenever MOEX does report one,
+    always overwrites the synthetic placeholder (see store.upsert_candles).
+
+    Deliberately never fills:
+    - before the ticker has at least one real stored candle (cold ticker -
+      handled by the early return in _ensure_coverage before this is called);
+    - when the immediately-preceding sync attempt failed (sync_ok=False) -
+      an unknown gap must read as "Ошибка обновления", not silently as "no
+      trades";
+    - buckets whose own wall-clock start falls outside the trading session
+      (weekend/pre-market/after-hours - checked per-bucket, not just "now",
+      so a request made *during* a session never back-fills the overnight
+      gap before it as if it were empty trading time);
+    - while the instrument itself is reported as suspended by the realtime
+      board feed (best-effort - a failed/unknown lookup never blocks a fill
+      it would otherwise be safe to do)."""
+    bucket = _GAP_FILL_BUCKET_SECONDS.get(timeframe)
+    if bucket is None or not sync_ok:
+        return
+    cov = store.coverage(ticker, board, timeframe)
+    if not cov["latest_ts"]:
+        return  # cold ticker - nothing stored to extend forward from
+
+    now_utc = datetime.utcnow()
+    delayed_msk_wall = now_utc + timedelta(hours=3) - timedelta(milliseconds=market_ticker.SOURCE_DELAY_MS)
+    last_closed_bucket = (calendar.timegm(delayed_msk_wall.timetuple()) // bucket) * bucket
+
+    next_ts = cov["latest_ts"] + bucket
+    if next_ts > last_closed_bucket:
+        return  # nothing the source-delay cutoff confirms is closed yet
+
+    try:
+        quote = market_ticker.get_prices([ticker])["prices"].get(ticker)
+        if quote and quote.get("trading_status") not in (None, "T"):
+            return  # instrument temporarily suspended - leave a real gap, don't guess
+    except Exception:
+        pass  # best-effort only - a lookup failure must never block a fill
+
+    latest_rows = store.get_candles(ticker, board, timeframe, ts_from=cov["latest_ts"],
+                                     ts_to=cov["latest_ts"], limit=1)
+    if not latest_rows:
+        return
+    prev_close = latest_rows[0]["close"]
+
+    rows = []
+    ts = next_ts
+    steps = 0
+    while ts <= last_closed_bucket and steps < _GAP_FILL_MAX_BUCKETS:
+        if _msk_wall_in_session(datetime.utcfromtimestamp(ts)):
+            rows.append({"ts": ts, "open": prev_close, "high": prev_close, "low": prev_close, "close": prev_close})
+        ts += bucket
+        steps += 1
+    if rows:
+        store.upsert_synthetic_candles(ticker, board, timeframe, rows, market=market, engine=engine)
 
 
 def _aggregate(candles: list[dict], bucket_seconds: int) -> list[dict]:

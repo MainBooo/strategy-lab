@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from datetime import date,timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -14,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 from flask import Flask,jsonify,render_template,request,send_file,Response
 
+import backtest_candles
 import backtests_db as bdb
 import charts_db as cdb
 import legacy_candle_migration
@@ -30,20 +33,31 @@ from moex_catalog import load_catalog,security_by_ticker
 from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
 from portfolio_store import PortfolioStore
+from rate_limit import BoundedConcurrency,SlidingWindowLimiter,client_ip
+import auth
+import auth_db
+import auth_routes
 from sectors import PRESET_LABELS,SECURITY_PRESETS,is_liquid,sector_for
 from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
 from strategies.head_shoulders import run_head_shoulders
 from strategies.simple_strategies import RUNNERS,STRATEGY_CATALOG
-from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES
+from strategies.param_schema import full_schema,full_presets
+import strategy_presets_db as spdb
+from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES,BACKTEST_TIMEFRAMES,canonical,backtest_timeframe_label
 
 BASE_DIR=Path(__file__).resolve().parent; DATA_DIR=BASE_DIR/"data"; RESULTS_DIR=BASE_DIR/"results"; STORAGE=BASE_DIR/"storage"
 LOGS_DIR=Path(os.environ.get("MOEX_LAB_LOGS_DIR") or BASE_DIR/"logs")
+BACKTEST_CACHE_DIR=DATA_DIR/"backtest_cache"
 DATA_DIR.mkdir(exist_ok=True);RESULTS_DIR.mkdir(exist_ok=True);STORAGE.mkdir(exist_ok=True);LOGS_DIR.mkdir(parents=True,exist_ok=True)
+BACKTEST_CACHE_DIR.mkdir(exist_ok=True)
 CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"portfolios.json")
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
+spdb.init_db(STORAGE/"strategy_presets.db")
+auth_db.init_db(STORAGE/"users.db")
+auth_routes.configure(PORTFOLIOS)
 
 # The candle cache (re-fetchable from MOEX, unlike backtests/charts/replay
 # data above) lives in its own directory, outside both the frontend source
@@ -83,11 +97,15 @@ try:
         logging.getLogger(__name__).info("Imported legacy candle CSVs into market_data.db: %s",_migration_summary)
 except Exception:
     logging.getLogger(__name__).exception("Legacy candle CSV migration failed (non-fatal, chart data will re-download as needed)")
-# No login exists in this app (single operator). Every chart-layout/drawing/
-# request row still carries a user id so real per-user ownership can be
-# switched on later without another migration - see charts_db.py and
-# feature_flags.py docstrings.
-CURRENT_USER_ID="local"
+# Every chart-layout/drawing/request row carries a user id - the "switched
+# on later without another migration" this comment used to promise before
+# accounts existed. A logged-in user now gets their own private namespace;
+# an anonymous visitor still shares the single "local" namespace exactly
+# like every visitor did before accounts existed (see charts_db.py and
+# feature_flags.py docstrings) - not a per-anonymous-visitor namespace,
+# since chart layouts never had a session concept to key one on before.
+def _effective_user_id()->str:
+    return auth.current_user_id() or "local"
 # Real single-ticker backtests on a year of 10m candles take ~5-6s; 60s gives
 # a wide safety margin so this only trips on a genuine hang, not normal load.
 PORTFOLIO_INSTRUMENT_TIMEOUT=60
@@ -100,6 +118,98 @@ _handler=RotatingFileHandler(LOGS_DIR/"app.log",maxBytes=5_000_000,backupCount=3
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 app.logger.addHandler(_handler)
 app.logger.setLevel(logging.INFO)
+
+# Accounts (see auth.py/auth_db.py) need a signed session cookie, which
+# needs a stable SECRET_KEY - without one, every process restart would
+# silently log every visitor out as the key regenerates. Falls back to a
+# random per-process key (sessions just won't survive a restart) instead of
+# refusing to start, since a dev checkout or the test suite has no .env -
+# but it's loud about it so a real deployment notices the missing config
+# instead of quietly losing sessions on every deploy. See .env.example.
+_secret_key=os.environ.get("SECRET_KEY")
+if not _secret_key:
+    _secret_key=secrets.token_hex(32)
+    logging.getLogger(__name__).warning(
+        "SECRET_KEY is not set - using a random per-process key. Every restart will "
+        "log all users out. Set SECRET_KEY in the environment for production (see .env.example)."
+    )
+app.secret_key=_secret_key
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Only demand HTTPS-only cookies when the app itself is told it's
+    # behind a TLS-terminating proxy (see deploy/) - forcing Secure on a
+    # plain-HTTP dev server would silently break every login (the browser
+    # drops a Secure cookie sent over http://).
+    SESSION_COOKIE_SECURE=os.environ.get("FORCE_HTTPS_COOKIES","").strip().lower() in ("1","true","yes"),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
+app.register_blueprint(auth_routes.auth_bp)
+
+@app.context_processor
+def _inject_auth_context():
+    from csrf import ensure_csrf_token
+    return {"csrf_token":ensure_csrf_token(),"current_user":auth.current_user()}
+
+# Free public server, single box, 2 gunicorn workers x 4 threads (see
+# moex-strategy-lab.service) - a handful of concurrent heavy computations
+# (backtest/optimize/portfolio run/market-data sync) is expected, but
+# unbounded concurrent heavy jobs would starve every other request on the
+# box. HEAVY_OPS caps how many run at once; HEAVY_TRIGGER_LIMITER caps how
+# often one IP can even ask to start one, so a user double/triple-clicking
+# (or a script looping) a "Запустить" button can't spin up dozens of jobs
+# before the first ones even finish. Both are in-process, not shared across
+# the 2 workers - see rate_limit.py's module docstring for why that's an
+# accepted, documented tradeoff for this deployment.
+HEAVY_OPS=BoundedConcurrency(int(os.environ.get("MAX_CONCURRENT_HEAVY_JOBS","3")))
+HEAVY_BUSY_MESSAGE="Сервер сейчас занят другими тяжёлыми расчётами. Попробуйте повторить запрос через несколько секунд."
+HEAVY_TRIGGER_LIMITER=SlidingWindowLimiter(max_requests=20,window_seconds=60)
+RATE_LIMIT_MESSAGE="Слишком много запросов. Подождите немного и повторите."
+
+def _heavy_trigger_ok()->bool:
+    return HEAVY_TRIGGER_LIMITER.allow(client_ip(request))
+
+def heavy_sync(view):
+    """For a heavy endpoint that computes synchronously in the request
+    thread (unlike the job-queue endpoints, which acquire/release HEAVY_OPS
+    around their background thread instead - see _run_heavy_job below)."""
+    @wraps(view)
+    def wrapped(*args,**kwargs):
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        if not HEAVY_OPS.try_acquire():return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
+        try:return view(*args,**kwargs)
+        finally:HEAVY_OPS.release()
+    return wrapped
+
+def _start_heavy_job(target,*args,**kwargs)->bool:
+    """Non-blocking HEAVY_OPS acquire + background thread launch for the
+    job-queue endpoints. Returns False (nothing started, slot not held) if
+    the server is already at MAX_CONCURRENT_HEAVY_JOBS - the caller must
+    respond with HEAVY_BUSY_MESSAGE in that case."""
+    if not HEAVY_OPS.try_acquire():return False
+    HEAVY_OPS.run_in_background(target,*args,**kwargs)
+    return True
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected_error(exc):
+    """Last-resort catch for routes without their own try/except (most
+    already return a specific {"error": ...} JSON on failure). Without this,
+    an unhandled exception falls through to Flask's default 500 page, which
+    with debug=False is a bare "Internal Server Error" - not useful to a
+    public-beta user and not distinguishable from any other failure. Real
+    HTTP errors (404 from abort(), etc.) pass through unchanged; only genuine
+    unexpected exceptions get the generic message + full traceback in the
+    server log."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    app.logger.exception("Unhandled error on %s %s", request.method, request.path)
+    message = "Внутренняя ошибка сервера. Мы уже знаем о таких ошибках по логам — попробуйте повторить запрос позже."
+    if request.path.startswith("/api/"):
+        return jsonify({"error": message}), 500
+    return message, 500
 
 
 def catalog(refresh=False): return load_catalog(CATALOG_FILE,"TQBR",refresh)
@@ -150,6 +260,26 @@ def enriched_catalog(refresh=False)->list[dict]:
                      "DATA_UPDATED_AT":local["till"] if local else None})
     return out
 
+def _instrument_file_range(filename:str|None)->tuple[str,str]|None:
+    """(from_date,till_date) actually covered by an instrument's pinned CSV,
+    read straight from the TICKER_Nm_FROM_TILL.csv filename - the ground
+    truth for "is there data for this period", independent of the catalog's
+    DATA_STATUS freshness heuristic (which only tracks how recently the file
+    was refreshed, not what range it covers)."""
+    if not filename:return None
+    m=FILENAME_RE.match(Path(filename).name)
+    if not m:return None
+    return m.group(3),m.group(4)
+
+def _pinned_file_interval(filename:str|None)->int|None:
+    """Interval-minutes baked into an instrument's pinned CSV filename
+    (TICKER_Nm_FROM_TILL.csv) - the native granularity backtest_candles'
+    get_or_build_source() compares the requested backtest timeframe against
+    to decide whether that pinned file can be used as-is."""
+    if not filename:return None
+    m=FILENAME_RE.match(Path(filename).name)
+    return int(m.group(2)) if m else None
+
 def _find_reusable_file(ticker:str,interval:int,till_date:str)->str|None:
     idx=_local_data_index()
     local=idx.get(ticker)
@@ -173,11 +303,15 @@ def _inspect_csv(path:Path)->tuple[int,float|None]:
     return len(df),last_close
 
 
+def _enriched_strategy_catalog()->dict:
+    return {sid:{**meta,"params":full_schema(sid),"presets":full_presets(sid)} for sid,meta in STRATEGY_CATALOG.items()}
+
+
 @app.get("/")
 def index():
     return render_template("index.html",
         defaults={"from_date":(date.today()-timedelta(days=365)).isoformat(),"till_date":date.today().isoformat()},
-        strategies=STRATEGY_CATALOG,security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
+        strategies=_enriched_strategy_catalog(),security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
         realtime_config=realtime_config())
 
 @app.get("/api/securities")
@@ -220,7 +354,7 @@ def security_info(ticker):
     return jsonify(get_instrument_info(ticker.strip().upper(),board))
 
 @app.get("/api/strategies")
-def strategies(): return jsonify(STRATEGY_CATALOG)
+def strategies(): return jsonify(_enriched_strategy_catalog())
 
 @app.get("/api/files")
 def files():
@@ -231,24 +365,39 @@ def files():
     return jsonify(items)
 
 @app.post("/api/download-batch")
+@heavy_sync
 def download_batch():
-    payload=request.get_json(force=True); tickers=[str(x).upper() for x in payload.get("tickers",[]) if str(x).strip()]
+    payload=request.get_json(force=True) or {}
+    tickers=[str(x).upper() for x in payload.get("tickers",[]) if str(x).strip()]
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
+    if not payload.get("from_date") or not payload.get("till_date"):
+        return jsonify({"error":"Не указан диапазон дат"}),400
     rows=[]
     for ticker in tickers:
         filename=f"{ticker}_{int(payload.get('interval',10))}m_{payload['from_date']}_{payload['till_date']}.csv"
+        if not FILENAME_RE.match(filename):
+            # Ticker/date fields feed straight into a filesystem path below;
+            # rejecting anything that doesn't match the plain
+            # TICKER_Nm_YYYY-MM-DD_YYYY-MM-DD.csv shape blocks path
+            # traversal via "../" or separators smuggled through those fields.
+            return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
         info=download_moex_candles(ticker,str(payload.get("board","TQBR")),int(payload.get("interval",10)),str(payload["from_date"]),str(payload["till_date"]),DATA_DIR/filename)
         sec=security_by_ticker(catalog(),ticker);rows.append({"ticker":ticker,"file":filename,"lot_size":int(sec.get("LOTSIZE") or 1),**info})
     return jsonify({"ok":True,"rows":rows})
 
 @app.post("/api/backtest")
+@heavy_sync
 def backtest():
-    p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
+    p=request.get_json(force=True) or {}
+    if not p.get("file"):return jsonify({"error":"Не указан файл с данными"}),400
+    if not p.get("strategy"):return jsonify({"error":"Не указана стратегия"}),400
+    source=DATA_DIR/Path(str(p["file"])).name
     if not source.exists():return jsonify({"error":"Файл не найден"}),404
     try:return jsonify({"ok":True,**run_strategy(str(p["strategy"]),source,p.get("params",{}))})
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.post("/api/batch-backtest")
+@heavy_sync
 def batch_backtest():
     p=request.get_json(force=True); files=[DATA_DIR/Path(x).name for x in p.get("files",[])]
     rows=[]
@@ -259,21 +408,25 @@ def batch_backtest():
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.post("/api/optimize")
+@heavy_sync
 def optimize():
-    p=request.get_json(force=True); source=DATA_DIR/Path(str(p["file"])).name
+    p=request.get_json(force=True) or {}
+    if not p.get("file"):return jsonify({"error":"Не указан файл с данными"}),400
+    source=DATA_DIR/Path(str(p["file"])).name
+    if not source.exists():return jsonify({"error":"Файл не найден"}),404
     try:return jsonify({"ok":True,**run_optimizer(source,p.get("ranges",{}),RESULTS_DIR)})
     except Exception as exc:return jsonify({"error":str(exc)}),400
 
 @app.get("/api/portfolios")
-def portfolios(): return jsonify(PORTFOLIOS.list())
+def portfolios(): return jsonify([p for p in PORTFOLIOS.list() if _portfolio_accessible(p)])
 
 @app.post("/api/portfolios")
-def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True)))
+def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True),user_id=auth.current_user_id()))
 
 @app.get("/api/portfolios/<portfolio_id>")
 def get_portfolio(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
 
 @app.get("/api/portfolios/<portfolio_id>/summary")
@@ -284,7 +437,7 @@ def portfolio_summary(portfolio_id):
     # computed by portfolio_engine.simulate_portfolio during that run).
     # Never fabricated: if no completed run exists yet, say so explicitly.
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed",page=1,page_size=1)
     if not rows:
         rows,_=bdb.list_runs(portfolio_id=portfolio_id,status="completed_with_errors",page=1,page_size=1)
@@ -300,6 +453,69 @@ def portfolio_summary(portfolio_id):
         "trades_count":run.get("trades_count"),
     })
 
+def _portfolio_accessible(portfolio:dict,user_id:str|None="__unset__")->bool:
+    """A portfolio with no owner (created before accounts existed, or by an
+    anonymous visitor) stays visible/editable by anyone - unchanged from
+    this app's original single-operator behavior. One with an owner is only
+    accessible to that same logged-in user; everyone else gets exactly the
+    same "not found" a nonexistent id would produce (see the account-system
+    spec's IDOR requirement - existence is not confirmed either way).
+
+    user_id defaults to the current Flask request's session (only valid
+    called from a route handler, which always has a request context). A
+    background job thread (see _run_heavy) has no request context by the
+    time it runs - its call sites must capture auth.current_user_id() in the
+    route *before* spawning the thread and pass it through explicitly."""
+    if user_id=="__unset__":
+        user_id=auth.current_user_id()
+    owner=portfolio.get("user_id")
+    return owner is None or owner==user_id
+
+def _run_accessible(run:dict,user_id:str|None="__unset__")->bool:
+    if user_id=="__unset__":
+        user_id=auth.current_user_id()
+    owner=run.get("user_id")
+    return owner is None or owner==user_id
+
+def _clean_strategy_parameters(strategy_id:str,raw:dict)->tuple[dict,str|None]:
+    """Coerces a raw parameters dict to the types declared in that strategy's
+    param schema, drops unknown keys, and rejects values that don't fit -
+    so the backtest engine never receives NaN/wrong-typed values a UI form
+    slipped through, regardless of which endpoint the save came through."""
+    schema={f["key"]:f for f in full_schema(strategy_id)}
+    cleaned={}
+    for key,val in (raw or {}).items():
+        field=schema.get(key)
+        if not field:continue
+        t=field["type"]
+        try:
+            if t in ("number","slider"):cleaned[key]=float(val)
+            elif t=="checkbox":cleaned[key]=bool(val)
+            elif t=="select":
+                allowed={o["value"] for o in field.get("options",[])}
+                if val not in allowed:return {},f"Недопустимое значение параметра «{key}»"
+                cleaned[key]=val
+            else:cleaned[key]=val
+        except (TypeError,ValueError):
+            return {},f"Некорректное значение параметра «{key}»"
+    return cleaned,None
+
+def _validate_and_clean_ticker_strategies(ts)->tuple[dict|None,str|None]:
+    """Validates ticker_strategies (see portfolio_store.py schema v3+) and
+    cleans each assignment's `parameters` in place via _clean_strategy_parameters,
+    so saved portfolios never carry garbage the backtest engine would choke on."""
+    if ts is None:return None,None
+    if not isinstance(ts,dict):return None,"Некорректный формат назначения стратегий"
+    for ticker,assignments in ts.items():
+        if not isinstance(assignments,list):return None,f"Стратегии {ticker} должны быть списком"
+        for a in assignments:
+            sid=a.get("strategy_id") if isinstance(a,dict) else None
+            if not sid or sid not in STRATEGY_CATALOG:return None,f"Неизвестная стратегия «{sid}» у {ticker}"
+            cleaned,err=_clean_strategy_parameters(sid,a.get("parameters") or {})
+            if err:return None,f"{err} ({sid} у {ticker})"
+            a["parameters"]=cleaned
+    return ts,None
+
 def _validate_portfolio_payload(payload:dict)->str|None:
     """Returns an error message, or None if the payload is acceptable."""
     instruments=payload.get("instruments")
@@ -309,19 +525,16 @@ def _validate_portfolio_payload(payload:dict)->str|None:
             if not isinstance(inst,dict) or not inst.get("ticker") or not inst.get("file"):
                 return "У каждого инструмента должны быть тикер и файл данных"
             if int(inst.get("lot_count") or 0)<0:return f"Количество лотов {inst['ticker']} не может быть отрицательным"
-    ts=payload.get("ticker_strategies")
-    if ts is not None:
-        if not isinstance(ts,dict):return "Некорректный формат назначения стратегий"
-        for ticker,assignments in ts.items():
-            if not isinstance(assignments,list):return f"Стратегии {ticker} должны быть списком"
-            for a in assignments:
-                sid=a.get("strategy_id") if isinstance(a,dict) else None
-                if sid and sid not in STRATEGY_CATALOG:return f"Неизвестная стратегия «{sid}» у {ticker}"
+    if "ticker_strategies" in payload:
+        cleaned,err=_validate_and_clean_ticker_strategies(payload.get("ticker_strategies"))
+        if err:return err
+        payload["ticker_strategies"]=cleaned
     return None
 
 @app.put("/api/portfolios/<portfolio_id>")
 def put_portfolio(portfolio_id):
-    if not PORTFOLIOS.get(portfolio_id):return jsonify({"error":"Портфель не найден"}),404
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     payload=request.get_json(force=True) or {}
     err=_validate_portfolio_payload(payload)
     if err:return jsonify({"error":err}),400
@@ -329,10 +542,15 @@ def put_portfolio(portfolio_id):
     return jsonify(portfolio)
 
 @app.delete("/api/portfolios/<portfolio_id>")
-def delete_portfolio(portfolio_id): return jsonify({"ok":PORTFOLIOS.delete(portfolio_id)})
+def delete_portfolio(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
+    return jsonify({"ok":PORTFOLIOS.delete(portfolio_id)})
 
 @app.delete("/api/portfolios/<portfolio_id>/instruments")
 def portfolio_remove_instruments(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
     tickers=[str(t).upper() for t in p.get("tickers",[])]
     if not tickers:return jsonify({"error":"Не указаны тикеры"}),400
@@ -340,12 +558,158 @@ def portfolio_remove_instruments(portfolio_id):
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
 
+@app.get("/api/portfolios/<portfolio_id>/data-coverage")
+@heavy_sync
+def portfolio_data_coverage(portfolio_id):
+    """Whether each instrument's pinned data file actually covers the
+    requested backtest period - checked against the real file range, not the
+    catalog freshness label, so this never reports "no data" for a period
+    that is already sitting in the CSV. Used right before a backtest run;
+    portfolio creation/editing no longer surfaces data readiness at all.
+
+    An optional ?timeframe= additionally checks whether that timeframe can
+    honestly be served for each ticker (native data or aggregation from a
+    strictly finer native base - see backtest_candles.py/timeframes.py).
+    Omitted or "10m" (the pinned-file default): zero extra cost, identical
+    to the pre-existing period-only behaviour. Any other value can trigger a
+    real MOEX sync attempt to know for sure - that is the only honest way to
+    ever report a timeframe as unavailable rather than "not yet checked",
+    which is why this route now carries @heavy_sync like the sibling
+    download-data endpoint."""
+    portfolio=PORTFOLIOS.get(portfolio_id)
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
+    date_from=(request.args.get("date_from") or "").strip() or None
+    date_to=(request.args.get("date_to") or "").strip() or None
+    tickers_param=request.args.get("tickers")
+    wanted=({t.strip().upper() for t in tickers_param.split(",") if t.strip()} if tickers_param else None)
+    timeframe=(request.args.get("timeframe") or "").strip() or None
+    check_timeframe=bool(timeframe) and canonical(timeframe)!=canonical("10m")
+    tf_label=backtest_timeframe_label(timeframe) if timeframe else None
+
+    items=[]
+    for inst in portfolio.get("instruments",[]):
+        ticker=str(inst.get("ticker"))
+        if wanted is not None and ticker.upper() not in wanted:continue
+        filename=inst.get("file")
+        exists=bool(filename) and (DATA_DIR/Path(filename).name).exists()
+        file_range=_instrument_file_range(filename) if exists else None
+        missing_from=missing_to=None
+        if not exists:
+            covered=False
+            missing_from,missing_to=date_from,date_to
+        else:
+            ffrom,ftill=file_range
+            lo=date_from or ffrom;hi=date_to or ftill
+            if hi<ffrom or lo>ftill:
+                # requested window doesn't overlap the file at all
+                covered=False
+                missing_from,missing_to=date_from,date_to
+            else:
+                gap_from=date_from if(date_from and date_from<ffrom) else None
+                gap_to=date_to if(date_to and date_to>ftill) else None
+                covered=not(gap_from or gap_to)
+                if not covered:
+                    missing_from=gap_from or None
+                    missing_to=gap_to or None
+                    if gap_from and not gap_to:missing_to=ffrom
+                    if gap_to and not gap_from:missing_from=ftill
+        item={"ticker":ticker,"covered":covered,
+              "file_from":file_range[0] if file_range else None,
+              "file_till":file_range[1] if file_range else None,
+              "missing_from":missing_from,"missing_to":missing_to}
+        if check_timeframe:
+            result=backtest_candles.fetch_full_range(
+                ticker=ticker,board="TQBR",timeframe=canonical(timeframe),
+                date_from=date_from or (file_range[0] if file_range else None) or "",
+                date_till=date_to or (file_range[1] if file_range else None) or "",
+            )
+            available=bool(result["candles"])
+            item["timeframe_available"]=available
+            item["timeframe_reason"]=None if available else f"Для {ticker} отсутствуют данные, необходимые для тестирования на {tf_label}."
+        items.append(item)
+    return jsonify({"items":items})
+
+@app.post("/api/portfolios/<portfolio_id>/instruments/<ticker>/download-data")
+@heavy_sync
+def portfolio_instrument_download_data(portfolio_id,ticker):
+    """Fetch just the missing history for one instrument already in a saved
+    portfolio, triggered from the backtest tab's data-gap prompt. Merges with
+    whatever range is already covered so the new file supersedes the old one
+    without losing history, then repoints the instrument at it - lot_count,
+    lot_size and everything else about the instrument stays untouched."""
+    portfolio=PORTFOLIOS.get(portfolio_id)
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
+    ticker=str(ticker).upper()
+    instrument=next((i for i in portfolio.get("instruments",[]) if str(i.get("ticker")).upper()==ticker),None)
+    if not instrument:return jsonify({"error":f"{ticker} отсутствует в портфеле"}),404
+
+    p=request.get_json(force=True) or {}
+    date_from=str(p.get("date_from") or "").strip()
+    date_to=str(p.get("date_to") or "").strip()
+    if not date_from or not date_to:return jsonify({"error":"Не указан период для загрузки"}),400
+    try:
+        date.fromisoformat(date_from);date.fromisoformat(date_to)
+    except ValueError:return jsonify({"error":"Некорректный формат даты"}),400
+    if date_from>date_to:return jsonify({"error":"Начало периода позже его окончания"}),400
+
+    existing_range=_instrument_file_range(instrument.get("file"))
+    existing_exists=bool(instrument.get("file")) and (DATA_DIR/Path(instrument["file"]).name).exists()
+    if existing_range and existing_exists:
+        from_date=min(date_from,existing_range[0]);till_date=max(date_to,existing_range[1])
+    else:
+        from_date,till_date=date_from,date_to
+
+    interval=10;board="TQBR"
+    filename=f"{ticker}_{interval}m_{from_date}_{till_date}.csv"
+    if not FILENAME_RE.match(filename):
+        # Same path-traversal guard as /api/download-batch - ticker/dates feed
+        # straight into a filesystem path below.
+        return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
+
+    try:
+        info=download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
+    except Exception as exc:
+        app.logger.exception("Instrument data download failed for %s in portfolio %s",ticker,portfolio_id)
+        return jsonify({"error":f"Не удалось загрузить {ticker}: {exc}"}),502
+
+    if info.get("rows",0)<MIN_CANDLES:
+        return jsonify({"error":f"Недостаточно данных по {ticker}: {info.get('rows',0)} свечей (нужно от {MIN_CANDLES})"}),502
+
+    updated=PORTFOLIOS.update_instrument_file(portfolio_id,ticker,filename)
+    if not updated:return jsonify({"error":"Портфель не найден"}),404
+    return jsonify({"ok":True,"ticker":ticker,"file":filename,"from":from_date,"till":till_date,"rows":info.get("rows")})
+
 @app.patch("/api/portfolios/<portfolio_id>/strategies")
 def portfolio_set_strategies(portfolio_id):
+    existing=PORTFOLIOS.get(portfolio_id)
+    if not existing or not _portfolio_accessible(existing):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
-    portfolio=PORTFOLIOS.set_ticker_strategies(portfolio_id,p.get("default_strategy_id"),p.get("ticker_strategies"))
+    cleaned,err=_validate_and_clean_ticker_strategies(p.get("ticker_strategies"))
+    if err:return jsonify({"error":err}),400
+    portfolio=PORTFOLIOS.set_ticker_strategies(portfolio_id,p.get("default_strategy_id"),cleaned)
     if not portfolio:return jsonify({"error":"Портфель не найден"}),404
     return jsonify(portfolio)
+
+@app.get("/api/strategy-presets/<strategy_id>")
+def get_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    preset=spdb.get_preset(_effective_user_id(),strategy_id)
+    return jsonify(preset or {"strategy_id":strategy_id,"parameters":None,"updated_at":None})
+
+@app.put("/api/strategy-presets/<strategy_id>")
+def put_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    p=request.get_json(force=True) or {}
+    if not isinstance(p.get("parameters"),dict):return jsonify({"error":"parameters должен быть объектом"}),400
+    cleaned,err=_clean_strategy_parameters(strategy_id,p["parameters"])
+    if err:return jsonify({"error":err}),400
+    return jsonify(spdb.save_preset(_effective_user_id(),strategy_id,cleaned))
+
+@app.delete("/api/strategy-presets/<strategy_id>")
+def delete_strategy_preset(strategy_id):
+    if strategy_id not in STRATEGY_CATALOG:return jsonify({"error":"Неизвестная стратегия"}),404
+    spdb.delete_preset(_effective_user_id(),strategy_id)
+    return jsonify({"ok":True})
 
 
 # ------------------------------------------------------- portfolio build --
@@ -378,6 +742,10 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                 JOBS.update(job_id,stage=f"Загружаем котировки: {ticker}")
                 try:
                     filename=f"{ticker}_{interval}m_{from_date}_{till_date}.csv"
+                    if not FILENAME_RE.match(filename):
+                        # Same guard as /api/download-batch - filename feeds
+                        # straight into a filesystem path below.
+                        raise ValueError(f"Некорректный тикер или диапазон дат для {ticker}")
                     download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
                     app.logger.info("Build job %s: downloaded %s (%s)",job_id,ticker,filename)
                 except Exception as exc:
@@ -421,7 +789,13 @@ def _execute_build_job(job_id:str,payload:dict)->None:
 
         JOBS.update(job_id,stage="Формируем портфель")
         portfolio_id=payload.get("portfolio_id")
-        if portfolio_id and PORTFOLIOS.get(portfolio_id):
+        existing_portfolio=PORTFOLIOS.get(portfolio_id) if portfolio_id else None
+        if existing_portfolio and not _portfolio_accessible(existing_portfolio,payload.get("user_id")):
+            JOBS.update(job_id,status="failed",stage="Портфель не найден",
+                         error={"message":"Портфель не найден.","ticker":None,"stage":"validate","code":"not_found"},
+                         errors=errors)
+            return
+        if existing_portfolio:
             portfolio=PORTFOLIOS.add_instruments(portfolio_id,prepared)
         else:
             portfolio=PORTFOLIOS.create({
@@ -429,7 +803,7 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                 "starting_capital":starting_capital,
                 "default_strategy_id":payload.get("default_strategy_id") or "false_breakout",
                 "instruments":prepared,
-            })
+            },user_id=payload.get("user_id"))
 
         JOBS.update(job_id,status="completed",stage="Готово",percent=100,completed=total,
                      portfolio_id=portfolio["id"],
@@ -451,15 +825,21 @@ def portfolio_build():
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
     portfolio_id=p.get("portfolio_id")
     portfolio_name=p.get("name") or ""
+    user_id=auth.current_user_id()
     if portfolio_id:
         existing_portfolio=PORTFOLIOS.get(portfolio_id)
-        if not existing_portfolio:return jsonify({"error":"Портфель не найден"}),404
+        if not existing_portfolio or not _portfolio_accessible(existing_portfolio,user_id):
+            return jsonify({"error":"Портфель не найден"}),404
         portfolio_name=existing_portfolio["name"]
         active=JOBS.find_active_for_portfolio(portfolio_id,kind="build")
         if active:return jsonify({"job_id":active["job_id"],"status":active["status"]}),202
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio_name,len(tickers),kind="build")
-    threading.Thread(target=_execute_build_job,args=(job["job_id"],{**p,"tickers":tickers}),daemon=True).start()
+    if not _start_heavy_job(_execute_build_job,job["job_id"],{**p,"tickers":tickers,"user_id":user_id}):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
@@ -549,15 +929,19 @@ def _execute_portfolio_job(job_id:str,portfolio:dict)->None:
 @app.post("/api/portfolios/<portfolio_id>/run")
 def run_portfolio(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     instruments=portfolio.get("instruments",[])
     if not instruments:return jsonify({"error":"В портфеле нет инструментов"}),400
 
     existing=JOBS.find_active_for_portfolio(portfolio_id,kind="portfolio_run")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(instruments),kind="portfolio_run")
-    threading.Thread(target=_execute_portfolio_job,args=(job["job_id"],portfolio),daemon=True).start()
+    if not _start_heavy_job(_execute_portfolio_job,job["job_id"],portfolio):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
@@ -613,8 +997,10 @@ def _trade_excursions(candles:pd.DataFrame,entry_time,exit_time,entry_price:floa
         return None,None
 
 
-def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date_from:str|None,date_till:str|None,run_id:str)->None:
+def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date_from:str|None,date_till:str|None,run_id:str,timeframe:str|None=None)->None:
     from strategies.common import COMMISSION_SIDE
+    tf=timeframe or "10m"
+    tf_label=backtest_timeframe_label(tf)
     total=len(combos)
     instruments_by_ticker={str(i["ticker"]):i for i in portfolio.get("instruments",[])}
     JOBS.update(job_id,status="running",stage="Запуск бэктеста",total=total)
@@ -660,9 +1046,15 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
             instrument=instruments_by_ticker.get(ticker)
             if not instrument:
                 _record_failure(idx,ticker,strategy_id,strategy_name,combo,"validate","not_in_portfolio",f"{ticker} отсутствует в портфеле."); continue
-            source=DATA_DIR/Path(instrument["file"]).name
-            if not source.exists():
-                _record_failure(idx,ticker,strategy_id,strategy_name,combo,"load_data","missing_file",f"Файл с котировками {ticker} не найден. Скачайте данные заново."); continue
+            native_file=DATA_DIR/Path(instrument["file"]).name if instrument.get("file") else None
+            source=backtest_candles.get_or_build_source(
+                ticker=ticker,board="TQBR",timeframe=tf,date_from=date_from,date_till=date_till,
+                cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
+                native_file_interval=_pinned_file_interval(instrument.get("file")),
+            )
+            if source is None:
+                _record_failure(idx,ticker,strategy_id,strategy_name,combo,"load_data","timeframe_unavailable",
+                                 f"Для {ticker} отсутствуют данные, необходимые для тестирования на {tf_label}."); continue
 
             lots=int(combo.get("lots") if combo.get("lots") is not None else instrument.get("lot_count",1))
             lot_size=int(instrument.get("lot_size") or lot_size_for(ticker))
@@ -767,7 +1159,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
 @app.post("/api/portfolios/<portfolio_id>/backtest")
 def portfolio_backtest(portfolio_id):
     portfolio=PORTFOLIOS.get(portfolio_id)
-    if not portfolio:return jsonify({"error":"Портфель не найден"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):return jsonify({"error":"Портфель не найден"}),404
     p=request.get_json(force=True) or {}
     all_tickers=[str(i["ticker"]) for i in portfolio.get("instruments",[])]
 
@@ -785,6 +1177,10 @@ def portfolio_backtest(portfolio_id):
         if combo["ticker"] not in all_tickers:
             return jsonify({"error":f"{combo['ticker']} отсутствует в портфеле"}),400
 
+    timeframe=str(p.get("timeframe") or "10m")
+    if canonical(timeframe) not in {canonical(t) for t in BACKTEST_TIMEFRAMES}:
+        return jsonify({"error":f"Неизвестный таймфрейм: {timeframe}"}),400
+
     existing=JOBS.find_active_for_portfolio(portfolio_id,kind="backtest")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
@@ -792,10 +1188,16 @@ def portfolio_backtest(portfolio_id):
     run_id=bdb.new_run_id()
     bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
                     float(portfolio.get("starting_capital") or 1_000_000),len(combos),
-                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to})
+                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to,"timeframe":timeframe},
+                    user_id=auth.current_user_id(),timeframe=timeframe)
 
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
-    threading.Thread(target=_execute_combo_backtest_job,args=(job["job_id"],portfolio,combos,date_from,date_to,run_id),daemon=True).start()
+    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,combos,date_from,date_to,run_id,timeframe):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        bdb.finish_run(run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"],"run_id":run_id,"combinations":len(combos)}),202
 
 
@@ -831,36 +1233,44 @@ def list_backtests():
     rows,total=bdb.list_runs(portfolio_id=args.get("portfolio_id") or None,ticker=args.get("ticker") or None,
                                strategy_id=args.get("strategy_id") or None,status=args.get("status") or None,
                                date_from=args.get("date_from") or None,date_to=args.get("date_to") or None,
-                               page=page,page_size=page_size)
+                               page=page,page_size=page_size,user_id=auth.current_user_id(),owner_scope="mixed")
     return jsonify({"items":[_run_summary_dict(r) for r in rows],"total":total,"page":page,"page_size":page_size})
 
 @app.get("/api/backtests/<run_id>")
 def get_backtest(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     return jsonify({**_run_summary_dict(run),"results":bdb.get_results(run_id)})
 
 @app.get("/api/backtests/<run_id>/results")
 def get_backtest_results(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     return jsonify(bdb.get_results(run_id))
 
 @app.get("/api/backtests/<run_id>/candles")
 def get_backtest_candles(run_id):
-    """Candles for the trade chart: the same local file+range the backtest
-    engine actually read for this ticker, not a fresh MOEX fetch - so the
-    chart can never show a different history than what produced the trades."""
+    """Candles for the trade chart: the exact source the backtest engine
+    actually read for this ticker - the pinned native file when the run was
+    10m (byte-identical to the pre-existing behaviour), or the same honest
+    aggregate/native-fetch backtest_candles.py built for a non-10m run -
+    never a fresh ad-hoc fetch at a different granularity, so the chart can
+    never disagree with the trades drawn on top of it."""
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     ticker=(request.args.get("ticker") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
     portfolio=PORTFOLIOS.get(run["portfolio_id"])
     instrument_file=next((i["file"] for i in (portfolio or {}).get("instruments",[]) if i["ticker"]==ticker),None)
-    if not instrument_file:
-        return jsonify({"error":f"Файл котировок {ticker} для этого портфеля не найден"}),404
-    source=DATA_DIR/Path(instrument_file).name
-    if not source.exists():
-        return jsonify({"error":f"Файл котировок {ticker} отсутствует на диске"}),404
+    native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
+    tf=canonical(str(run.get("timeframe") or "10m"))
+    source=backtest_candles.get_or_build_source(
+        ticker=ticker,board="TQBR",timeframe=tf,date_from=run.get("date_from"),date_till=run.get("date_to"),
+        cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
+        native_file_interval=_pinned_file_interval(instrument_file),
+    )
+    if source is None:
+        return jsonify({"error":f"Котировки {ticker} на таймфрейме {backtest_timeframe_label(tf)} недоступны"}),404
     try:
         candles=load_candles(source,run.get("date_from"),run.get("date_to"))
     except Exception as exc:
@@ -873,7 +1283,8 @@ def get_backtest_candles(run_id):
 
 @app.get("/api/backtests/<run_id>/trades")
 def get_backtest_trades(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     args=request.args
     try:page=int(args.get("page",1)); page_size=int(args.get("page_size",50))
     except ValueError:return jsonify({"error":"Некорректные параметры пагинации"}),400
@@ -887,6 +1298,8 @@ def get_backtest_trades(run_id):
 
 @app.get("/api/backtests/<run_id>/trades/<int:trade_id>")
 def get_backtest_trade(run_id,trade_id):
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Сделка не найдена"}),404
     trade=bdb.get_trade(trade_id)
     if not trade or trade["backtest_run_id"]!=run_id:return jsonify({"error":"Сделка не найдена"}),404
     trade=dict(trade); trade["signal_metadata"]=json.loads(trade.get("signal_metadata_json") or "{}")
@@ -897,30 +1310,37 @@ def get_backtest_trade(run_id,trade_id):
     candles_window=[]
     if result and result.get("strategy_run_id"):
         instrument_file=next((i["file"] for p in PORTFOLIOS.list() for i in p.get("instruments",[]) if i["ticker"]==trade["ticker"]),None)
-        if instrument_file:
-            source=DATA_DIR/Path(instrument_file).name
-            if source.exists():
-                try:
-                    candles=load_candles(source)
-                    entry_ts=pd.to_datetime(trade["entry_datetime"]); exit_ts=pd.to_datetime(trade["exit_datetime"])
-                    window=candles[(candles["begin"]>=entry_ts-pd.Timedelta(hours=6))&(candles["begin"]<=exit_ts+pd.Timedelta(hours=6))]
-                    candles_window=[{"time":str(r["begin"]),"open":r["open"],"high":r["high"],"low":r["low"],"close":r["close"]} for _,r in window.iterrows()]
-                except Exception:
-                    app.logger.exception("Could not build candle window for trade %s",trade_id)
+        native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
+        source=backtest_candles.get_or_build_source(
+            ticker=trade["ticker"],board="TQBR",timeframe=canonical(str(run.get("timeframe") or "10m")),
+            date_from=run.get("date_from"),date_till=run.get("date_to"),cache_dir=BACKTEST_CACHE_DIR,
+            native_file=native_file,native_file_interval=_pinned_file_interval(instrument_file),
+        )
+        if source is not None:
+            try:
+                candles=load_candles(source)
+                entry_ts=pd.to_datetime(trade["entry_datetime"]); exit_ts=pd.to_datetime(trade["exit_datetime"])
+                window=candles[(candles["begin"]>=entry_ts-pd.Timedelta(hours=6))&(candles["begin"]<=exit_ts+pd.Timedelta(hours=6))]
+                candles_window=[{"time":str(r["begin"]),"open":r["open"],"high":r["high"],"low":r["low"],"close":r["close"]} for _,r in window.iterrows()]
+            except Exception:
+                app.logger.exception("Could not build candle window for trade %s",trade_id)
     trade["candles"]=candles_window[:200]
     return jsonify(trade)
 
 @app.delete("/api/backtests/<run_id>")
 def delete_backtest(run_id):
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     if not bdb.delete_run(run_id):return jsonify({"error":"Запуск не найден"}),404
     return jsonify({"ok":True})
 
 @app.post("/api/backtests/<run_id>/repeat")
 def repeat_backtest(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     portfolio=PORTFOLIOS.get(run["portfolio_id"])
-    if not portfolio:return jsonify({"error":"Портфель, к которому относится этот запуск, больше не существует"}),404
+    if not portfolio or not _portfolio_accessible(portfolio):
+        return jsonify({"error":"Портфель, к которому относится этот запуск, больше не существует"}),404
     config=json.loads(run["configuration_json"]) if run.get("configuration_json") else {}
     assignments=config.get("assignments") or []
     if not assignments:return jsonify({"error":"Не удалось восстановить конфигурацию запуска"}),400
@@ -928,19 +1348,25 @@ def repeat_backtest(run_id):
     existing=JOBS.find_active_for_portfolio(portfolio["id"],kind="backtest")
     if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
+    timeframe=config.get("timeframe") or "10m"
     new_run_id=bdb.new_run_id()
     bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
-                    float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config)
+                    float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config,
+                    user_id=auth.current_user_id(),timeframe=timeframe)
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
-    threading.Thread(target=_execute_combo_backtest_job,
-                      args=(job["job_id"],portfolio,assignments,config.get("date_from"),config.get("date_to"),new_run_id),
-                      daemon=True).start()
+    if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,assignments,
+                             config.get("date_from"),config.get("date_to"),new_run_id,timeframe):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        bdb.finish_run(new_run_id,status="failed",error_message=HEAVY_BUSY_MESSAGE)
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"],"run_id":new_run_id,"combinations":len(assignments)}),202
 
 @app.get("/api/backtests/<run_id>/export.json")
 def export_backtest_json(run_id):
     run=bdb.get_run(run_id)
-    if not run:return jsonify({"error":"Запуск не найден"}),404
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     results=bdb.get_results(run_id)
     trades,_=bdb.list_trades(run_id,page=1,page_size=100000)
     payload=json.dumps({"run":_run_summary_dict(run),"results":results,"trades":trades},ensure_ascii=False,indent=2,default=str)
@@ -949,7 +1375,8 @@ def export_backtest_json(run_id):
 
 @app.get("/api/backtests/<run_id>/export.csv")
 def export_backtest_csv(run_id):
-    if not bdb.get_run(run_id):return jsonify({"error":"Запуск не найден"}),404
+    run=bdb.get_run(run_id)
+    if not run or not _run_accessible(run):return jsonify({"error":"Запуск не найден"}),404
     trades,_=bdb.list_trades(run_id,page=1,page_size=100000)
     if not trades:
         return Response("no trades\n",mimetype="text/csv")
@@ -967,7 +1394,7 @@ def _forbidden_feature(feature:str):
 
 @app.get("/api/candles")
 def api_candles():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     args=request.args
     ticker=(args.get("symbol") or args.get("ticker") or "").strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
@@ -1023,7 +1450,7 @@ def market_data_tick_coverage():
 
 @app.get("/api/market-data/instruments")
 def market_data_instruments():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     q=(request.args.get("q") or "").strip().upper()
     items_map:dict[str,dict]={}
     for it in catalog():
@@ -1075,7 +1502,7 @@ def _execute_market_data_sync_job(job_id:str,tickers:list[str],timeframes:list[s
 
 @app.post("/api/market-data/sync")
 def market_data_sync_start():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     p=request.get_json(force=True) or {}
     tickers=[str(t).strip().upper() for t in p.get("tickers",[]) if str(t).strip()]
     if not tickers:return jsonify({"error":"Не выбраны инструменты"}),400
@@ -1086,9 +1513,13 @@ def market_data_sync_start():
     board=str(p.get("board","TQBR"))
     total=len(tickers)*len(timeframes)
     label=f"Загрузка данных: {', '.join(tickers[:3])}{'…' if len(tickers)>3 else ''}"
+    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(None,label,total,kind="market_data_sync",
                      extra={"tickers":tickers,"timeframes":timeframes,"mode":mode,"board":board})
-    threading.Thread(target=_execute_market_data_sync_job,args=(job["job_id"],tickers,timeframes,mode,board),daemon=True).start()
+    if not _start_heavy_job(_execute_market_data_sync_job,job["job_id"],tickers,timeframes,mode,board):
+        JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
+                     error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
+        return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
     return jsonify({"job_id":job["job_id"],"status":job["status"]}),202
 
 
@@ -1099,7 +1530,7 @@ def _replay_error(exc:replay_engine.ReplayError,code:int=400):
 
 @app.post("/api/replay/sessions")
 def replay_create():
-    if not has_feature(CURRENT_USER_ID,"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
+    if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     p=request.get_json(force=True) or {}
     ticker=str(p.get("ticker","")).strip().upper()
     if not ticker:return jsonify({"error":"Не указан тикер"}),400
@@ -1174,15 +1605,15 @@ def replay_trades(session_id):
 
 @app.get("/api/chart-layouts")
 def list_chart_layouts():
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    return jsonify(cdb.list_layouts(CURRENT_USER_ID,context=request.args.get("context"),symbol=request.args.get("symbol")))
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    return jsonify(cdb.list_layouts(_effective_user_id(),context=request.args.get("context"),symbol=request.args.get("symbol")))
 
 @app.post("/api/chart-layouts")
 def create_chart_layout():
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
     p=request.get_json(force=True) or {}
     if not p.get("name"):return jsonify({"error":"Укажите название шаблона"}),400
-    layout=cdb.create_layout(CURRENT_USER_ID,context=p.get("context","analysis"),name=p["name"],symbol=p.get("symbol"),
+    layout=cdb.create_layout(_effective_user_id(),context=p.get("context","analysis"),name=p["name"],symbol=p.get("symbol"),
                                board=p.get("board"),timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),
                                visible_to=p.get("visibleTo"),chart_type=p.get("chartType","candles"),
                                settings=p.get("settings"),indicators=p.get("indicators"),is_default=bool(p.get("isDefault")))
@@ -1190,16 +1621,16 @@ def create_chart_layout():
 
 @app.get("/api/chart-layouts/<layout_id>")
 def get_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    layout=cdb.get_layout(layout_id,CURRENT_USER_ID)
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    layout=cdb.get_layout(layout_id,_effective_user_id())
     if not layout:return jsonify({"error":"Шаблон не найден"}),404
-    return jsonify({**layout,"drawings":cdb.list_drawings(layout_id,CURRENT_USER_ID)})
+    return jsonify({**layout,"drawings":cdb.list_drawings(layout_id,_effective_user_id())})
 
 @app.put("/api/chart-layouts/<layout_id>")
 def update_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
     p=request.get_json(force=True) or {}
-    layout=cdb.update_layout(layout_id,CURRENT_USER_ID,name=p.get("name"),symbol=p.get("symbol"),board=p.get("board"),
+    layout=cdb.update_layout(layout_id,_effective_user_id(),name=p.get("name"),symbol=p.get("symbol"),board=p.get("board"),
                                timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
                                chart_type=p.get("chartType"),settings=p.get("settings"),indicators=p.get("indicators"),
                                is_default=p.get("isDefault"))
@@ -1208,23 +1639,23 @@ def update_chart_layout(layout_id):
 
 @app.delete("/api/chart-layouts/<layout_id>")
 def delete_chart_layout(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
-    if not cdb.delete_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
+    if not has_feature(_effective_user_id(),"CHART_LAYOUTS"):return _forbidden_feature("CHART_LAYOUTS")
+    if not cdb.delete_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
     return jsonify({"ok":True})
 
 
 @app.get("/api/chart-layouts/<layout_id>/drawings")
 def list_chart_drawings(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
-    if not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
-    return jsonify(cdb.list_drawings(layout_id,CURRENT_USER_ID))
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.get_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
+    return jsonify(cdb.list_drawings(layout_id,_effective_user_id()))
 
 @app.post("/api/chart-layouts/<layout_id>/drawings")
 def create_chart_drawing(layout_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
     p=request.get_json(force=True) or {}
     if not p.get("type") or not p.get("points"):return jsonify({"error":"Не указан тип или точки объекта"}),400
-    drawing=cdb.create_drawing(layout_id,CURRENT_USER_ID,type=p["type"],symbol=p.get("symbol"),timeframe=p.get("timeframe"),
+    drawing=cdb.create_drawing(layout_id,_effective_user_id(),type=p["type"],symbol=p.get("symbol"),timeframe=p.get("timeframe"),
                                  points=p["points"],properties=p.get("properties"),locked=bool(p.get("locked")),
                                  hidden=bool(p.get("hidden")),z_index=int(p.get("zIndex",0)))
     if not drawing:return jsonify({"error":"Шаблон не найден"}),404
@@ -1232,7 +1663,7 @@ def create_chart_drawing(layout_id):
 
 @app.put("/api/chart-drawings/<drawing_id>")
 def update_chart_drawing(drawing_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
     p=request.get_json(force=True) or {}
     fields={}
     if "points" in p:fields["points"]=p["points"]
@@ -1240,14 +1671,14 @@ def update_chart_drawing(drawing_id):
     if "locked" in p:fields["locked"]=p["locked"]
     if "hidden" in p:fields["hidden"]=p["hidden"]
     if "zIndex" in p:fields["z_index"]=p["zIndex"]
-    drawing=cdb.update_drawing(drawing_id,CURRENT_USER_ID,**fields)
+    drawing=cdb.update_drawing(drawing_id,_effective_user_id(),**fields)
     if not drawing:return jsonify({"error":"Объект не найден"}),404
     return jsonify(drawing)
 
 @app.delete("/api/chart-drawings/<drawing_id>")
 def delete_chart_drawing(drawing_id):
-    if not has_feature(CURRENT_USER_ID,"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
-    if not cdb.delete_drawing(drawing_id,CURRENT_USER_ID):return jsonify({"error":"Объект не найден"}),404
+    if not has_feature(_effective_user_id(),"CHART_DRAWINGS_BASIC"):return _forbidden_feature("CHART_DRAWINGS_BASIC")
+    if not cdb.delete_drawing(drawing_id,_effective_user_id()):return jsonify({"error":"Объект не найден"}),404
     return jsonify({"ok":True})
 
 
@@ -1256,7 +1687,7 @@ def upload_chart_screenshot():
     """Stores a data: URL PNG exported by chart.takeScreenshot() so a strategy
     request can reference it as a file path instead of inlining megabytes of
     base64 into the request row."""
-    if not has_feature(CURRENT_USER_ID,"CHART_EXPORT"):return _forbidden_feature("CHART_EXPORT")
+    if not has_feature(_effective_user_id(),"CHART_EXPORT"):return _forbidden_feature("CHART_EXPORT")
     p=request.get_json(force=True) or {}
     data_url=p.get("dataUrl","")
     if not data_url.startswith("data:image/png;base64,"):return jsonify({"error":"Ожидается PNG data URL"}),400
@@ -1276,12 +1707,12 @@ def get_chart_screenshot(name):
 
 @app.post("/api/chart-strategy-requests")
 def create_chart_strategy_request():
-    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    if not has_feature(_effective_user_id(),"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
     p=request.get_json(force=True) or {}
     if not (p.get("ideaDescription") or "").strip():return jsonify({"error":"Опишите торговую идею"}),400
     layout_id=p.get("layoutId")
-    if layout_id and not cdb.get_layout(layout_id,CURRENT_USER_ID):return jsonify({"error":"Шаблон не найден"}),404
-    req=cdb.create_strategy_request(CURRENT_USER_ID,layout_id=layout_id,symbol=p.get("symbol"),board=p.get("board"),
+    if layout_id and not cdb.get_layout(layout_id,_effective_user_id()):return jsonify({"error":"Шаблон не найден"}),404
+    req=cdb.create_strategy_request(_effective_user_id(),layout_id=layout_id,symbol=p.get("symbol"),board=p.get("board"),
                                       timeframe=p.get("timeframe"),visible_from=p.get("visibleFrom"),visible_to=p.get("visibleTo"),
                                       drawings_snapshot=p.get("drawingsSnapshot"),indicators=p.get("indicators"),
                                       idea_description=p.get("ideaDescription"),entry_conditions=p.get("entryConditions"),
@@ -1293,8 +1724,8 @@ def create_chart_strategy_request():
 
 @app.get("/api/chart-strategy-requests")
 def list_chart_strategy_requests():
-    if not has_feature(CURRENT_USER_ID,"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
-    return jsonify(cdb.list_strategy_requests(CURRENT_USER_ID))
+    if not has_feature(_effective_user_id(),"CHART_STRATEGY_ORDER"):return _forbidden_feature("CHART_STRATEGY_ORDER")
+    return jsonify(cdb.list_strategy_requests(_effective_user_id()))
 
 
 if __name__=="__main__":app.run(host="127.0.0.1",port=5050,debug=False)

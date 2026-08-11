@@ -1,0 +1,101 @@
+/* Auth/account UI - reuses styles.css tokens (--accent, --line, --muted,
+   .card/.form-grid/.primary/.secondary/.message/.hint) so these pages read
+   as part of the same app, not a bolted-on design. */
+
+.brand-link { color: inherit; text-decoration: none; }
+
+.beta-badge {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--success); border: 1px solid rgba(77,212,172,.35);
+  background: rgba(77,212,172,.08); padding: 5px 10px; border-radius: 999px;
+}
+
+.account-menu { position: relative; }
+
+.account-trigger {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); background: var(--surface-raised);
+  color: var(--text); border-radius: 999px; padding: 5px 14px 5px 5px;
+  font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+  transition: border-color .15s ease;
+}
+.account-trigger:hover { border-color: rgba(255,255,255,.22); }
+
+.account-avatar {
+  width: 24px; height: 24px; border-radius: 50%; flex: none;
+  background: linear-gradient(180deg, var(--accent), #5b68e6);
+  color: #0b0e18; font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+.account-dropdown {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
+  min-width: 200px; background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 6px; box-shadow: 0 15px 45px rgba(0,0,0,.5);
+  display: flex; flex-direction: column;
+}
+.account-dropdown.hidden { display: none; }
+.account-dropdown a, .account-dropdown button {
+  display: block; width: 100%; text-align: left; padding: 9px 12px;
+  border-radius: var(--radius-sm); color: var(--text); text-decoration: none;
+  background: transparent; border: none; font: inherit; cursor: pointer;
+}
+.account-dropdown a:hover, .account-dropdown button:hover { background: rgba(124,140,255,.12); }
+
+.app-nav { margin-top: 10px; }
+
+.auth-page { max-width: 520px; margin: 0 auto; }
+.auth-card .lead { margin-bottom: 18px; }
+.auth-switch { text-align: center; margin-top: 14px; }
+.auth-switch a { color: var(--accent-2); }
+
+.account-tabs { margin-bottom: 20px; }
+.account-subpage.hidden { display: none; }
+.account-subpage .card { margin-bottom: 18px; }
+
+.danger-card { border-color: rgba(255,120,120,.35); }
+.danger-btn { border-color: rgba(255,120,120,.5); color: #ff9a9a; }
+.danger-btn:hover { background: rgba(255,120,120,.12); }
+
+.legal-card ul { padding-left: 20px; line-height: 1.6; }
+.legal-card li { margin-bottom: 8px; }
+
+.site-footer { margin-top: 40px; padding: 20px 0 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.site-footer a { color: var(--accent-2); }
+
+.favorite-row, .account-table-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); border-radius: var(--radius-sm); transition: background .15s ease; }
+.favorite-row:last-child, .account-table-row:last-child { border-bottom: none; }
+.favorite-row:hover, .account-table-row:hover { background: rgba(255,255,255,.025); }
+
+/* .message defaults to muted text (styles.css) - error/success are set via
+   JS (el.className = "message error"/"success" in auth.js/account.js) but
+   had no color rule at all until now, so failed logins etc. rendered in the
+   same quiet grey as everything else. */
+.message.success { color: var(--success); }
+.message.error { color: var(--danger); }
+
+/* Loading state for form submit buttons - JS toggles this class alongside
+   the existing disabled attribute (see auth.js/account.js wireForm) so a
+   slow request shows a spinner instead of just a dimmed, inert button. */
+.primary.is-loading, .secondary.is-loading {
+  color: transparent;
+  pointer-events: none;
+  position: relative;
+}
+.primary.is-loading::after, .secondary.is-loading::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 15px; height: 15px; margin: -8px 0 0 -8px;
+  border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  animation: btn-spin .7s linear infinite;
+}
+.secondary.is-loading::after { border-color: rgba(244,247,251,.25); border-top-color: var(--text); }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+.shake { animation: shake-x .4s var(--ease-in-out); }
+@keyframes shake-x {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+@media (prefers-reduced-motion: reduce) { .shake { animation: none; } }

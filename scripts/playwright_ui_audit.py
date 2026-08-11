@@ -10,8 +10,9 @@ favicon 404), and HTTP 5xx responses.
 Usage: .venv/bin/python scripts/playwright_ui_audit.py
 Requires the app already running (systemctl status moex-strategy-lab) and
 reachable at BASE_URL - port 5060 directly is blocked by Chromium as an
-"unsafe port", so this goes through the nginx proxy on 8061 like the rest
-of this project's Playwright work has.
+"unsafe port", so this goes through the nginx proxy on the public
+server_name instead. Requires "127.0.0.1 moex.generationweb.ru" in
+/etc/hosts (DNS for the domain isn't provisioned yet).
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE_URL = "http://127.0.0.1:8061"
+BASE_URL = "http://moex.generationweb.ru"
 OUT_DIR = Path(__file__).resolve().parent.parent / "test-results" / "ui-audit"
 
 VIEWPORTS = [
@@ -99,7 +100,15 @@ def run_scenario(page, viewport_dir: Path, name: str, viewport_width: int, actio
 
 
 def click_tab(page, tab):
-    sel = f'.tab[data-tab="{tab}"]'
+    # Since the mobile bottom nav was added, .tab[data-tab=...] matches two
+    # elements (desktop top bar + phone bottom bar) at every viewport - only
+    # one is ever display:visible at a time via CSS. Playwright's plain
+    # page.click()/wait_for_selector() (not the strict locator API) always
+    # resolve to the first DOM match regardless of visibility, so on phone
+    # widths - where the top bar is the hidden one - they'd wait forever on
+    # an element that by design never becomes visible. `:visible` filters to
+    # whichever of the two is actually on screen at the current viewport.
+    sel = f'.tab[data-tab="{tab}"]:visible'
     page.wait_for_selector(sel, state="visible", timeout=10000)
     page.click(sel, timeout=10000)
     page.wait_for_timeout(400)
@@ -110,23 +119,12 @@ def scenario_home(page):
     click_tab(page, "portfolio")
 
 
-def scenario_data_management(page):
-    page.wait_for_selector("#openMarketDataManager", state="visible", timeout=10000)
-    # Playwright's page.click() re-verifies the target is still "stable"
-    # (unobstructed) right after clicking, to confirm the click landed. This
-    # button opens a fixed-position modal that immediately covers it, which
-    # Playwright's actionability engine misreads as "click didn't take,
-    # retry" - it then retries for the full 30s default timeout even though
-    # the modal is already open and functioning correctly. A raw DOM click
-    # via evaluate() sidesteps that post-click stability check entirely.
-    page.evaluate("() => document.getElementById('openMarketDataManager').click()")
-    page.wait_for_selector("#marketDataManagerRoot.mdm-open", timeout=5000)
-    page.wait_for_timeout(500)
-
-
-def scenario_close_data_management(page):
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(200)
+# The "Хранилище данных" button + its scenario pair below were removed from
+# scripts/playwright_ui_audit.py because the feature itself was deliberately
+# unlinked from the UI (see docs/UI_CLEANUP.md, 2026-08-05) - the backend
+# routes and static/market-data-manager.js still exist for admin/maintenance
+# use, just with no user-facing entry point, so #openMarketDataManager no
+# longer exists in templates/index.html and this scenario would always fail.
 
 
 def scenario_backtest_auto(page):
@@ -189,9 +187,17 @@ def scenario_exit_fullscreen(page):
     # a real OS window manager backing it, so relying on native Escape
     # handling alone is flaky in this environment; click-to-toggle is what
     # a real user does most of the time anyway.
-    btn = page.query_selector("#caFullscreenBtn.icon-btn.active") or page.query_selector("#caFullscreenBtn")
-    if btn:
-        btn.click()
+    # The same fake-fullscreen quirk also breaks a plain .click(): the
+    # viewport itself never actually resizes, so the button's on-screen
+    # position (computed for a true fullscreen layout) ends up past what
+    # Playwright still thinks are the viewport bounds, and its actionability
+    # check waits forever for "element is outside of the viewport" to
+    # resolve. A raw DOM click via evaluate() sidesteps that check, same as
+    # the data-management modal case above.
+    page.evaluate(
+        "() => (document.querySelector('#caFullscreenBtn.icon-btn.active') "
+        "|| document.querySelector('#caFullscreenBtn'))?.click()"
+    )
     page.wait_for_timeout(300)
 
 
@@ -234,8 +240,6 @@ def scenario_modals_forms(page):
 
 SCENARIOS = [
     ("01-home", scenario_home),
-    ("02-data-management", scenario_data_management),
-    ("02b-data-management-closed", scenario_close_data_management),
     ("03-backtest-auto", scenario_backtest_auto),
     ("04-backtest-history", scenario_backtest_history),
     ("05-result-card", scenario_result_card),
