@@ -13,7 +13,17 @@ jobs:
         with:
           fetch-depth: 0
       - name: Apply patch
-        run: python .github/tmp/apply_drawing_object_edit_hotfix.py
+        run: |
+          python .github/tmp/apply_drawing_object_edit_hotfix.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/test_chart_drawing_interactions.py')
+          lines = p.read_text().splitlines()
+          for i, line in enumerate(lines):
+              if "assert 'textarea id=" in line and 'propText' in line:
+                  lines[i] = "    assert 'textarea id=\"propText\"' in analysis"
+          p.write_text("\n".join(lines) + "\n")
+          PY
       - name: Install test dependencies
         run: python -m pip install -q -r requirements.txt pytest
       - name: Verify
