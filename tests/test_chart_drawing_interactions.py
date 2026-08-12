@@ -215,3 +215,23 @@ def test_mobile_escape_claims_event_before_delegating_to_engine():
     start = js.index(marker)
     body = js[start: js.index("refreshTradingViewRail(page)", start)]
     assert body.index("event.preventDefault()") < body.index("event.stopPropagation()") < body.index("dm.handleEscape()")
+
+
+
+def test_touch_object_editing_and_textual_editor_contracts():
+    drawings = Path("static/chart-engine/drawings.js").read_text()
+    analysis = Path("static/chart-analysis.js").read_text()
+    mobile = Path("static/chart-mobile-interactions.js").read_text()
+
+    assert "TOUCH_HIT_TOLERANCE_PX = 18" in drawings
+    assert 'pointerType: e.pointerType || "mouse"' in drawings
+    assert "allowHandles: false" in drawings
+    assert "this._emit({ preview: true })" in drawings
+    assert "detail.preview || detail.hover" in analysis
+
+    assert 'const isTextual = d.type === "text" || d.type === "note"' in analysis
+    assert 'textarea id="propText"' in analysis
+    assert "textInput.onchange" in analysis
+    assert "textInput.oninput" not in analysis
+    assert "data-tv-obj-edit-text" in mobile
+    assert 'const isTextual = drawing.type === "text" || drawing.type === "note"' in mobile

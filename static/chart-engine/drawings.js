@@ -14,6 +14,10 @@
   const theme = global.ChartEngine.theme;
   const HIT_TOLERANCE_PX = 6;
   const HANDLE_RADIUS_PX = 5;
+  // A finger is not a mouse cursor. Keep precise desktop hit-testing, but
+  // give touch a TradingView-like forgiving corridor around thin drawings.
+  const TOUCH_HIT_TOLERANCE_PX = 18;
+  const TOUCH_HANDLE_HIT_RADIUS_PX = 14;
 
   const INTERACTION_STATES = Object.freeze({
     NAVIGATE: "NAVIGATE",
@@ -308,27 +312,34 @@
     }
 
     // ---- hit testing ----
-    hitTest(px, py) {
+    hitTest(px, py, { pointerType = "mouse" } = {}) {
       const sorted = this.drawings.filter((d) => !d.hidden).sort((a, b) => b.zIndex - a.zIndex);
-      // selected drawing gets priority so its own handles are grabbable even under overlaps
+      const touch = pointerType === "touch";
+      const hitOptions = {
+        tol: touch ? TOUCH_HIT_TOLERANCE_PX : HIT_TOLERANCE_PX,
+        handleRadius: touch ? TOUCH_HANDLE_HIT_RADIUS_PX : HANDLE_RADIUS_PX + 3,
+      };
+      // TradingView semantics: resize/edit handles belong only to the selected
+      // object. An unselected object is first grabbed as a whole, even if the
+      // initial finger-down happens exactly over one of its hidden anchors.
       if (this.selectedId) {
         const sel = sorted.find((d) => d.id === this.selectedId);
         if (sel) {
-          const hit = this._hitDrawing(sel, px, py);
+          const hit = this._hitDrawing(sel, px, py, Object.assign({ allowHandles: true }, hitOptions));
           if (hit) return hit;
         }
       }
       for (const d of sorted) {
-        const hit = this._hitDrawing(d, px, py);
+        if (d.id === this.selectedId) continue;
+        const hit = this._hitDrawing(d, px, py, Object.assign({ allowHandles: false }, hitOptions));
         if (hit) return hit;
       }
       return null;
     }
 
-    _hitDrawing(d, px, py) {
+    _hitDrawing(d, px, py, { tol = HIT_TOLERANCE_PX, handleRadius = HANDLE_RADIUS_PX + 3, allowHandles = true } = {}) {
       const pix = toPixels(this.core, d.points);
-      const tol = HIT_TOLERANCE_PX;
-      const handleAt = (i) => (pix[i] && pix[i].x != null && Math.hypot(px - pix[i].x, py - pix[i].y) <= HANDLE_RADIUS_PX + 3);
+      const handleAt = (i) => allowHandles && pix[i] && pix[i].x != null && Math.hypot(px - pix[i].x, py - pix[i].y) <= handleRadius;
 
       switch (d.type) {
         case "horizontal_line": {
@@ -405,7 +416,7 @@
         case "note": {
           if (pix[0] == null || pix[0].x == null) return null;
           const box = d._lastBox;
-          if (box && px >= box.x1 && px <= box.x2 && py >= box.y1 && py <= box.y2) return { id: d.id, handle: null };
+          if (box && px >= box.x1 - tol && px <= box.x2 + tol && py >= box.y1 - tol && py <= box.y2 + tol) return { id: d.id, handle: null };
           return handleAt(0) ? { id: d.id, handle: 0 } : null;
         }
         case "fib_retracement": {
@@ -443,10 +454,10 @@
           const entryY = pix[0].y;
           const stopY = this.series.priceToCoordinate(positionStopPrice(d));
           const takeY = this.series.priceToCoordinate(positionTakePrice(d));
-          if (Math.hypot(px - x1, py - entryY) <= HANDLE_RADIUS_PX + 3) return { id: d.id, handle: "start" };
-          if (Math.hypot(px - x2, py - entryY) <= HANDLE_RADIUS_PX + 3) return { id: d.id, handle: "end" };
-          if (stopY != null && Math.hypot(px - (x1 + x2) / 2, py - stopY) <= HANDLE_RADIUS_PX + 3) return { id: d.id, handle: "stop" };
-          if (takeY != null && Math.hypot(px - (x1 + x2) / 2, py - takeY) <= HANDLE_RADIUS_PX + 3) return { id: d.id, handle: "take" };
+          if (allowHandles && Math.hypot(px - x1, py - entryY) <= handleRadius) return { id: d.id, handle: "start" };
+          if (allowHandles && Math.hypot(px - x2, py - entryY) <= handleRadius) return { id: d.id, handle: "end" };
+          if (allowHandles && stopY != null && Math.hypot(px - (x1 + x2) / 2, py - stopY) <= handleRadius) return { id: d.id, handle: "stop" };
+          if (allowHandles && takeY != null && Math.hypot(px - (x1 + x2) / 2, py - takeY) <= handleRadius) return { id: d.id, handle: "take" };
           const yTop = Math.min(entryY, stopY ?? entryY, takeY ?? entryY);
           const yBottom = Math.max(entryY, stopY ?? entryY, takeY ?? entryY);
           return px >= x1 - tol && px <= x2 + tol && py >= yTop - tol && py <= yBottom + tol ? { id: d.id, handle: null } : null;
@@ -682,7 +693,7 @@
         return;
       }
 
-      const hit = this.hitTest(pos.x, pos.y);
+      const hit = this.hitTest(pos.x, pos.y, { pointerType: e.pointerType || "mouse" });
       if (hit) {
         const d = this.drawings.find((item) => item.id === hit.id);
         this.select(hit.id);
@@ -779,7 +790,7 @@
         const nextHover = hit ? hit.id : null;
         if (nextHover !== this.hoverId) {
           this.hoverId = nextHover;
-          this._emit();
+          this._emit({ hover: true });
         }
       }
     }
@@ -940,8 +951,10 @@
         }));
       }
       // Preview-only notification. Persistence receives one {updated:id} on
-      // pointerup, never one network save trigger per pointermove.
-      this._emit();
+      // pointerup, never one network save trigger per pointermove. UI panels
+      // also ignore this marker so a finger drag cannot rebuild the DOM on
+      // every frame.
+      this._emit({ preview: true });
     }
 
     handleEscape() {
