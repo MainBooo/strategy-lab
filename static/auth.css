@@ -99,3 +99,8 @@
   40%, 60% { transform: translateX(4px); }
 }
 @media (prefers-reduced-motion: reduce) { .shake { animation: none; } }
+
+/* Backtest strategy validation is styled later than the global .hidden
+   utility in styles.css. Keep the hidden state authoritative so an empty
+   validation box never leaves a red outline or vertical gap. */
+.assignment-validation.hidden { display: none; }
