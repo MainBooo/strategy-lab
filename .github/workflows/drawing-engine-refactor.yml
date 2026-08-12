@@ -30,107 +30,8 @@ jobs:
       - name: Apply drawing engine architecture refactor
         run: python .github/tmp/refactor_drawing_engine.py
 
-      - name: Polish state-machine integration and regression contracts
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          engine_path = Path("static/chart-engine/drawings.js")
-          engine = engine_path.read_text(encoding="utf-8")
-
-          def once(old, new, label):
-              global engine
-              if old not in engine:
-                  raise RuntimeError(f"{label}: source fragment not found")
-              engine = engine.replace(old, new, 1)
-
-          once(
-              '''      this.selectedId = d.id;\n      this._emit({ created: d.id });''',
-              '''      this.selectedId = d.id;\n      this._syncInteractionMode();\n      this._emit({ created: d.id });''',
-              "addDrawing state sync",
-          )
-          once(
-              '''      if (this.selectedId === id) this.selectedId = null;\n      this._pushHistory(before);''',
-              '''      if (this.selectedId === id) this.selectedId = null;\n      this._syncInteractionMode();\n      this._pushHistory(before);''',
-              "removeDrawing state sync",
-          )
-          once(
-              '''      this._redoStack.push(this._snapshot());\n      this.drawings = JSON.parse(before);\n      this._emit({ history: true });''',
-              '''      this._redoStack.push(this._snapshot());\n      this.drawings = JSON.parse(before);\n      this.selectedId = null;\n      this._syncInteractionMode();\n      this._emit({ history: true });''',
-              "undo state sync",
-          )
-          once(
-              '''      this._undoStack.push(this._snapshot());\n      this.drawings = JSON.parse(next);\n      this._emit({ history: true });''',
-              '''      this._undoStack.push(this._snapshot());\n      this.drawings = JSON.parse(next);\n      this.selectedId = null;\n      this._syncInteractionMode();\n      this._emit({ history: true });''',
-              "redo state sync",
-          )
-          once(
-              '''      this._undoStack = []; this._redoStack = [];\n      this._emit({ loaded: true });''',
-              '''      this._undoStack = []; this._redoStack = [];\n      this.selectedId = null;\n      this._syncInteractionMode();\n      this._emit({ loaded: true });''',
-              "load state sync",
-          )
-          engine_path.write_text(engine, encoding="utf-8")
-
-          mobile_path = Path("static/chart-mobile-interactions.js")
-          mobile = mobile_path.read_text(encoding="utf-8")
-          old = '''      if (dm && (dm.draft || dm.activeTool)) {\n        event.preventDefault();\n        dm.handleEscape();'''
-          new = '''      if (dm && (dm.draft || dm.activeTool)) {\n        event.preventDefault();\n        event.stopPropagation();\n        dm.handleEscape();'''
-          if old not in mobile:
-              raise RuntimeError("mobile Escape ownership fragment not found")
-          mobile_path.write_text(mobile.replace(old, new, 1), encoding="utf-8")
-
-          tests_path = Path("tests/test_chart_drawing_interactions.py")
-          tests = tests_path.read_text(encoding="utf-8")
-          tests = tests.replace(
-              '    finish = engine[engine.index("_finishDraft()"): engine.index("_applyDrag", engine.index("_finishDraft()"))]',
-              '    start = engine.index("    _finishDraft() {")\n    finish = engine[start: engine.index("    _applyDrag", start)]',
-          )
-          tests = tests.replace(
-              r'assert re.search(r"\.tv-flyout-item\s*\{{[^}}]*min-height:44px", js, re.S)',
-              r'assert re.search(r"\.tv-flyout-item\s*\{[^}]*min-height:44px", js, re.S)',
-          )
-          tests = tests.replace(
-              'container.addEventListener("pointerdown", this._activatePointerHandler)',
-              'container.addEventListener("pointerdown", this._activatePointerHandler, true)',
-          )
-          tests = tests.replace(
-              'container.removeEventListener("pointerdown", this._activatePointerHandler)',
-              'this.el.removeEventListener("pointerdown", this._activatePointerHandler, true)',
-          )
-          tests += '''\n\ndef test_crud_and_history_keep_explicit_interaction_state_in_sync():\n    js = source(ENGINE)\n    assert js.count("this._syncInteractionMode();") >= 10\n    assert re.search(r"addDrawing\\(type, points, properties\\).*?this\\.selectedId = d\\.id;\\s*this\\._syncInteractionMode\\(\\);", js, re.S)\n    assert re.search(r"removeDrawing\\(id\\).*?this\\._syncInteractionMode\\(\\);", js, re.S)\n    assert re.search(r"undo\\(\\).*?this\\.selectedId = null;\\s*this\\._syncInteractionMode\\(\\);", js, re.S)\n    assert re.search(r"redo\\(\\).*?this\\.selectedId = null;\\s*this\\._syncInteractionMode\\(\\);", js, re.S)\n    assert re.search(r"loadDrawings\\(rows\\).*?this\\.selectedId = null;\\s*this\\._syncInteractionMode\\(\\);", js, re.S)\n\n\ndef test_mobile_escape_claims_event_before_delegating_to_engine():\n    js = source(INTERACTIONS)\n    marker = "if (dm && (dm.draft || dm.activeTool))"\n    start = js.index(marker)\n    body = js[start: js.index("refreshTradingViewRail(page)", start)]\n    assert body.index("event.preventDefault()") < body.index("event.stopPropagation()") < body.index("dm.handleEscape()")\n'''
-          tests_path.write_text(tests, encoding="utf-8")
-
-          runtime_path = Path("tests/chart_drawing_runtime.test.js")
-          runtime = runtime_path.read_text(encoding="utf-8")
-          marker = 'console.log("chart drawing runtime tests: PASS");'
-          extra = r'''
-// CRUD/history transitions keep explicit interaction state authoritative.
-{
-  const env = makeManager();
-  const d = env.manager.addDrawing("rectangle", [{ time: 20, price: 20 }, { time: 80, price: 80 }]);
-  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
-  env.manager.removeDrawing(d.id);
-  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.NAVIGATE);
-
-  const d2 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
-  assert.strictEqual(env.manager.selectedId, d2.id);
-  env.manager.undo();
-  assert.strictEqual(env.manager.selectedId, null);
-  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.NAVIGATE);
-  env.manager.redo();
-  assert.strictEqual(env.manager.selectedId, null);
-  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.NAVIGATE);
-
-  env.manager.loadDrawings([{ id: "loaded", type: "horizontal_line", points: [{ time: 30, price: 30 }], properties: {}, locked: false, hidden: false, z_index: 0 }]);
-  assert.strictEqual(env.manager.selectedId, null);
-  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.NAVIGATE);
-}
-
-'''
-          if marker not in runtime:
-              raise RuntimeError("runtime PASS marker not found")
-          runtime_path.write_text(runtime.replace(marker, extra + marker, 1), encoding="utf-8")
-          PY
+      - name: Apply state-machine integration polish
+        run: python .github/tmp/polish_drawing_engine.py
 
       - name: JavaScript syntax checks
         run: |
@@ -163,7 +64,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/drawing-engine-refactor.yml .github/tmp/refactor_drawing_engine.py
+          git rm .github/workflows/drawing-engine-refactor.yml \
+                 .github/tmp/refactor_drawing_engine.py \
+                 .github/tmp/polish_drawing_engine.py
           git add static/chart-engine/drawings.js \
                   static/chart-mobile-interactions.js \
                   static/chart-editor-polish.js \
