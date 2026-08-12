@@ -1,16 +1,7 @@
-/* Unified pointer interactions + TradingView-style drawing UI for the
- * free-form chart workspace. This module intentionally owns the drawing
- * interaction layer (mouse/pen/touch), while the chart engine remains the
- * source of geometry, persistence, candles and indicators.
- *
- * Key invariants:
- * - DrawingManager.activeTool is the only active drawing-tool state.
- * - At most one tile may have an active drawing tool or unfinished draft.
- * - Tool-menu interaction uses Pointer Events; a menu item is selected before
- *   the chooser is closed, and outside pointerdown never fires for menu rows.
- * - Empty-chart touch gestures remain available to Lightweight Charts for
- *   pan/pinch; a short stationary tap only clears drawing selection.
- */
+/* TradingView-style drawing editor chrome for the free-form chart workspace.
+ * Pointer ownership, creation/edit state transitions, drafts, gesture
+ * thresholds and capture live in chart-engine/drawings.js. This module owns
+ * only the rail/flyouts/tool selection UI, mobile layout and editor chrome. */
 (function (global) {
   "use strict";
 
@@ -40,7 +31,7 @@
     {
       id: "shapes", label: "Геометрические фигуры", icon: "▭", tools: [
         { id: "rectangle", label: "Прямоугольник", icon: "▭" },
-        { id: "circle", label: "Окружность / эллипс", icon: "○" },
+        { id: "circle", label: "Эллипс", icon: "○" },
         { id: "polyline", label: "Полилиния", icon: "⌁" },
       ],
     },
@@ -118,217 +109,6 @@
     if (current && !seen.has(current)) out.push(current);
     return out;
   }
-
-  // ------------------------------------------------------ pointer engine --
-  // This module used to layer touchstart/touchmove/touchend on top of a mouse
-  // implementation. One Pointer Events stream now owns mouse, pen and touch.
-  const dmProto = Drawings.DrawingManager.prototype;
-
-  const originalSetTool = dmProto.setTool;
-  dmProto.setTool = function (type) {
-    const previousPointer = this._drawingPointerId;
-    if (previousPointer != null && this.core && this.core.container && this.core.container.releasePointerCapture) {
-      try { this.core.container.releasePointerCapture(previousPointer); } catch (e) { /* capture may already be gone */ }
-    }
-    this._drawingPointerId = null;
-    this._emptyPointerTap = null;
-    this._draftPreviewPoint = null;
-    this._dragState = null;
-    return originalSetTool.call(this, type || null);
-  };
-
-  const originalCancelDraft = dmProto.cancelDraft;
-  dmProto.cancelDraft = function () {
-    this._draftPreviewPoint = null;
-    return originalCancelDraft.call(this);
-  };
-
-  dmProto._bindDom = function () {
-    const el = this.core.container;
-    el.style.position = el.style.position || "relative";
-    el.tabIndex = el.tabIndex >= 0 ? el.tabIndex : 0;
-
-    const TAP_MOVE_PX = 11;
-    const TAP_MAX_MS = 500;
-    const DOUBLE_TAP_MS = 360;
-    const DOUBLE_TAP_PX = 28;
-
-    const rel = (e) => this._relXY(e);
-    const isPrimary = (e) => e.isPrimary !== false;
-    const ownsPointer = (e) => this._drawingPointerId === e.pointerId;
-
-    const onPointerEnter = () => { this._pointerInside = true; };
-    const onPointerLeave = () => { if (this._drawingPointerId == null) this._pointerInside = false; };
-
-    const onPointerDown = (e) => {
-      if (!isPrimary(e)) return;
-      const pos = rel(e);
-      const hit = this.activeTool ? null : this.hitTest(pos.x, pos.y);
-      const drawingOwnsGesture = !!this.activeTool || !!hit;
-
-      if (!drawingOwnsGesture) {
-        if (e.pointerType === "touch" || e.pointerType === "pen") {
-          this._emptyPointerTap = {
-            pointerId: e.pointerId,
-            x: pos.x,
-            y: pos.y,
-            startedAt: Date.now(),
-          };
-        } else {
-          this.select(null);
-        }
-        // Do not prevent/stop: Lightweight Charts needs this pointer stream
-        // for normal drag/scroll/pinch navigation in Cursor mode.
-        return;
-      }
-
-      this._emptyPointerTap = null;
-      this._pointerInside = true;
-      this._drawingPointerId = e.pointerId;
-      if (el.setPointerCapture) {
-        try { el.setPointerCapture(e.pointerId); } catch (err) { /* unsupported capture state */ }
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      this._onMouseDown(e);
-    };
-
-    const onPointerMove = (e) => {
-      if (ownsPointer(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        this._onMouseMove(e);
-        return;
-      }
-
-      const candidate = this._emptyPointerTap;
-      if (candidate && candidate.pointerId === e.pointerId) {
-        const pos = rel(e);
-        if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) > TAP_MOVE_PX) this._emptyPointerTap = null;
-        return;
-      }
-
-      if (e.pointerType === "mouse" && this._pointerInside) this._onMouseMove(e);
-    };
-
-    const finishOwnedPointer = (e, canceled) => {
-      if (!ownsPointer(e)) return false;
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (!canceled) {
-        this._onMouseUp();
-        if ((e.pointerType === "touch" || e.pointerType === "pen") && this.draft) {
-          const def = Drawings.TOOL_DEFS[this.draft.type];
-          if (def && def.pointsNeeded < 0) {
-            const pos = rel(e);
-            const previous = this._lastDrawingTap;
-            const now = Date.now();
-            const doubleTap = previous
-              && now - previous.time <= DOUBLE_TAP_MS
-              && Math.hypot(pos.x - previous.x, pos.y - previous.y) <= DOUBLE_TAP_PX;
-            this._lastDrawingTap = { time: now, x: pos.x, y: pos.y };
-            if (doubleTap) {
-              this._finishDraft();
-              this._emit({ pointerDoubleTap: true });
-              this._lastDrawingTap = null;
-            }
-          }
-        }
-      }
-
-      if (el.releasePointerCapture) {
-        try { el.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
-      }
-      this._drawingPointerId = null;
-      this._pointerInside = false;
-      return true;
-    };
-
-    const onPointerUp = (e) => {
-      if (finishOwnedPointer(e, false)) return;
-      const candidate = this._emptyPointerTap;
-      if (!candidate || candidate.pointerId !== e.pointerId) return;
-      const pos = rel(e);
-      if (Date.now() - candidate.startedAt <= TAP_MAX_MS
-        && Math.hypot(pos.x - candidate.x, pos.y - candidate.y) <= TAP_MOVE_PX) {
-        this.select(null);
-      }
-      this._emptyPointerTap = null;
-    };
-
-    const onPointerCancel = (e) => {
-      if (finishOwnedPointer(e, true)) return;
-      if (this._emptyPointerTap && this._emptyPointerTap.pointerId === e.pointerId) this._emptyPointerTap = null;
-    };
-
-    const onDblClick = (e) => this._onDblClick(e);
-    const onKeyDown = (e) => this._onKeyDown(e);
-
-    el.addEventListener("pointerenter", onPointerEnter);
-    el.addEventListener("pointerleave", onPointerLeave);
-    el.addEventListener("pointerdown", onPointerDown, { capture: true });
-    global.addEventListener("pointermove", onPointerMove, { capture: true });
-    global.addEventListener("pointerup", onPointerUp, { capture: true });
-    global.addEventListener("pointercancel", onPointerCancel, { capture: true });
-    el.addEventListener("dblclick", onDblClick);
-    el.addEventListener("keydown", onKeyDown);
-
-    this._pointerDomCleanup = () => {
-      el.removeEventListener("pointerenter", onPointerEnter);
-      el.removeEventListener("pointerleave", onPointerLeave);
-      el.removeEventListener("pointerdown", onPointerDown, true);
-      global.removeEventListener("pointermove", onPointerMove, true);
-      global.removeEventListener("pointerup", onPointerUp, true);
-      global.removeEventListener("pointercancel", onPointerCancel, true);
-      el.removeEventListener("dblclick", onDblClick);
-      el.removeEventListener("keydown", onKeyDown);
-      this._pointerDomCleanup = null;
-    };
-  };
-
-  const originalDestroy = dmProto.destroy;
-  dmProto.destroy = function () {
-    if (this._pointerDomCleanup) this._pointerDomCleanup();
-    return originalDestroy.call(this);
-  };
-
-  // Preserve the existing one-shot UX. "Keep drawing" is the only supported
-  // way to re-arm a completed tool, matching the control already exposed in
-  // the left rail.
-  if (!dmProto._tvKeepDrawingIntegrated) {
-    const finishDraftBeforeKeep = dmProto._finishDraft;
-    dmProto._finishDraft = function () {
-      const tool = this.draft && this.draft.type;
-      finishDraftBeforeKeep.call(this);
-      if (this.keepDrawing && tool) {
-        this.activeTool = tool;
-        this._emit({ toolKept: true });
-      }
-    };
-    dmProto._tvKeepDrawingIntegrated = true;
-  }
-
-  // -------------------------------------------------------- handle policy --
-  // The primitive renderer lives inside drawings.js and is intentionally not
-  // exported. Patch each live view once: anchor handles belong to the selected
-  // object (or current draft), never every drawing on the screen.
-  function patchHandles(manager) {
-    const view = manager && manager.primitive && manager.primitive._view;
-    if (!view || view._selectedHandlesOnly || typeof view._drawOp !== "function") return;
-    const drawOp = view._drawOp;
-    view._drawOp = function (ctx, op, r, rv, w, h) {
-      const handle = this._handle;
-      const isDraft = !!(op && op.d && op.d.id === "__draft__");
-      if (!op || (!op.selected && !isDraft)) this._handle = function () {};
-      try { return drawOp.call(this, ctx, op, r, rv, w, h); }
-      finally { this._handle = handle; }
-    };
-    view._selectedHandlesOnly = true;
-    if (manager.primitive && manager.primitive.requestUpdate) manager.primitive.requestUpdate();
-  }
-
-  function patchAllManagers(page) { allManagers(page).forEach(patchHandles); }
 
   // ---------------------------------------------------------- editor state --
   function deactivateEveryTool(page, { deselectActive = true } = {}) {
@@ -540,7 +320,8 @@
       const dm = activeManager(page);
       if (dm && (dm.draft || dm.activeTool)) {
         event.preventDefault();
-        dm.setTool(null);
+        event.stopPropagation();
+        dm.handleEscape();
         refreshTradingViewRail(page);
       }
     };
