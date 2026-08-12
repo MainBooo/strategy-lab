@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}MOEX Strategy Lab{% endblock %}</title>
+  <title>{% block title %}Strategy Lab{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='auth.css') }}">
   <meta name="csrf-token" content="{{ csrf_token }}">
@@ -10,7 +10,7 @@
 <body>
 <main class="shell">
 <header class="hero">
-  <div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1><a href="/" class="brand-link">MOEX Strategy Lab V3</a></h1></div>
+  <div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1><a href="/" class="brand-link">Strategy Lab</a></h1></div>
   <div class="hero-meta">
     <span class="beta-badge">Public Beta · бесплатно</span>
     {% if current_user %}
@@ -40,7 +40,7 @@
 </nav>
 {% block content %}{% endblock %}
 <footer class="site-footer">
-  <p>MOEX Strategy Lab предназначен для исследования и тестирования торговых стратегий на исторических данных. Результаты моделирования не гарантируют доходность в будущем и не являются индивидуальной инвестиционной рекомендацией.</p>
+  <p>Strategy Lab предназначен для исследования и тестирования торговых стратегий на исторических данных. Результаты моделирования не гарантируют доходность в будущем и не являются индивидуальной инвестиционной рекомендацией.</p>
   <p><a href="/terms">Условия использования</a> · <a href="/privacy">Конфиденциальность</a> · <a href="https://github.com/MainBooo/strategy-lab/issues" target="_blank" rel="noopener">Сообщить об ошибке</a></p>
 </footer>
 </main>

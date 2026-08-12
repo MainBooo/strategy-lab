@@ -1,4 +1,4 @@
-"""UI audit driver for MOEX Strategy Lab V3 (Этап 6 of the chart/replay spec).
+"""UI audit driver for Strategy Lab (Этап 6 of the chart/replay spec).
 
 Drives a real Chromium browser (Playwright) across the required desktop/
 tablet/mobile viewports and the 12 required pages/scenarios, saving one
