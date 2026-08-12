@@ -253,3 +253,140 @@ def test_touch_object_editing_and_textual_editor_contracts():
     assert "textInput.oninput" not in analysis
     assert "data-tv-obj-edit-text" in mobile
     assert 'const isTextual = drawing.type === "text" || drawing.type === "note"' in mobile
+
+
+def test_boundary_drag_uses_one_continuous_coordinate_pipeline_for_every_tool():
+    js = source(ENGINE)
+    for helper in (
+        "timeToLogical", "logicalToTime", "coordinateToLogicalSafe",
+        "logicalToCoordinateSafe", "coordinateToPriceSafe", "priceToCoordinateSafe",
+        "pointerToDrawingCoordinate", "timeToCoordinateSafe",
+    ):
+        assert f"function {helper}" in js
+    assert "_pointerToDrawingCoordinate(px, py)" in js
+    assert "startCoordinate: this._pointerToDrawingCoordinate" in js
+    assert "deltaLogical = current.logical - start.logical" in js
+    assert "deltaPrice = current.price - start.price" in js
+    assert "_translatePoints(origPoints, deltaLogical, deltaPrice, editAxis)" in js
+    assert "getVisibleLogicalRange" in js
+    assert "coordinateToLogical" in js
+
+    start = js.index("    _applyDrag(x, y) {")
+    apply_drag = js[start:js.index("    handleEscape()", start)]
+    # General boundary handling must not grow into Rectangle/Fib/etc. hacks.
+    for tool in (
+        "rectangle", "trend_line", "ray", "extended_line", "parallel_channel",
+        "fib_retracement", "fib_extension", "circle", "polyline", "text", "note",
+        "price_range", "time_range", "horizontal_line", "vertical_line",
+    ):
+        assert f'd.type === "{tool}"' not in apply_drag
+    # Long/Short already have semantic stop/take handles; their special branch
+    # is permitted, but boundary conversion remains shared before that branch.
+    assert 'd.type === "long_position" || d.type === "short_position"' in apply_drag
+
+
+def test_boundary_drag_never_writes_invalid_geometry_or_deletes_on_transient_conversion_failure():
+    js = source(ENGINE)
+    start = js.index("    _applyDrag(x, y) {")
+    apply_drag = js[start:js.index("    handleEscape()", start)]
+    translate_start = js.index("    _translatePoints(")
+    translate = js[translate_start:start]
+
+    assert "if (!current || !start) return;" in apply_drag
+    assert "finite(deltaLogical)" in apply_drag
+    assert "finite(deltaPrice)" in apply_drag
+    assert "pts.every(finitePoint)" in apply_drag
+    assert "finitePoint(next)" in translate
+    for forbidden in ("removeDrawing(", "hidden = true", "hidden=true", "splice(", "drawings = []"):
+        assert forbidden not in apply_drag
+    # No blanket viewport clamp in model mutation. pointToSegmentDist may clamp
+    # its local projection parameter, so scope this contract to drag code only.
+    assert "Math.max(0, Math.min" not in apply_drag
+    assert "clientWidth" not in apply_drag
+    assert "clientHeight" not in apply_drag
+
+
+def test_pointer_capture_survives_pointerleave_and_only_real_cancel_rolls_back():
+    js = source(ENGINE)
+    assert "el.setPointerCapture(e.pointerId)" in js
+    assert 'global.addEventListener("pointermove", onPointerMove, { capture: true })' in js
+    assert 'global.addEventListener("pointerup", onPointerUp, { capture: true })' in js
+    assert 'global.addEventListener("pointercancel", onPointerCancel, { capture: true })' in js
+    leave = re.search(r"const onPointerLeave = \(\) => \{([^}]+)\};", js)
+    assert leave
+    assert "_endPointerSession" not in leave.group(1)
+    assert "_pointerSession" in leave.group(1)
+    cancel_start = js.index("    _onPointerCancel(e) {")
+    cancel = js[cancel_start:js.index("    _onLostPointerCapture", cancel_start)]
+    assert '_endPointerSession({ rollback: true, emit: true })' in cancel
+
+
+def test_renderer_extrapolates_model_coordinates_then_clips_paint_to_tile_viewport():
+    js = source(ENGINE)
+    assert "function toPixels(core, points)" in js
+    assert "timeToCoordinateSafe(core, p.time)" in js
+    assert "priceToCoordinateSafe(core, p.price)" in js
+    assert "Returns null if off-screen" not in js
+    assert "clipParametricLineToRect" in js
+    assert 'd.type === "ray" ? "ray" : "line"' in js
+    assert "const scale = 4000" not in js
+    assert "ctx.rect(0, 0, w, h);" in js
+    assert "ctx.clip();" in js
+    # Clipping belongs to paint, not to persisted drawing geometry.
+    drag_start = js.index("    _applyDrag(x, y) {")
+    drag = js[drag_start:js.index("    handleEscape()", drag_start)]
+    assert "ctx.clip" not in drag
+
+
+def test_safari_touch_guard_stays_geometry_free_after_boundary_fix():
+    js = source(ENGINE)
+    start = js[js.index("    _onTouchStartGuard(e) {"):js.index("    _onTouchMoveGuard(e) {")]
+    move = js[js.index("    _onTouchMoveGuard(e) {"):js.index("    _onTouchEndGuard(e) {")]
+    assert "_touchHitOwnsGesture" in start
+    assert "_touchHitOwnsGesture" not in move
+    assert "hitTest" not in move
+    for body in (start, move):
+        for geometry_call in (
+            "_pointerToDrawingCoordinate", "pixelToPoint", "_applyDrag", "_translatePoints",
+            "snapPoint", "updateDrawing", "_pushHistory", "this.select",
+        ):
+            assert geometry_call not in body
+
+
+def test_drag_preview_has_no_per_move_persistence_or_history_work():
+    js = source(ENGINE)
+    start = js.index("    _applyDrag(x, y) {")
+    apply_drag = js[start:js.index("    handleEscape()", start)]
+    assert "this._emit({ preview: true })" in apply_drag
+    for forbidden in ("_pushHistory", "updateDrawing", "localStorage", "fetch(", "XMLHttpRequest"):
+        assert forbidden not in apply_drag
+    finish_start = js.index("    _finishEditPointer(session) {")
+    finish = js[finish_start:js.index("    _onPointerUp(e)", finish_start)]
+    assert "this._pushHistory(before)" in finish
+    assert 'this._emit({ updated: id, pointerDrag: true })' in finish
+
+
+def test_runtime_suite_covers_boundary_matrix_and_multi_tile_isolation():
+    js = source(RUNTIME)
+    for scenario in (
+        "Rectangle right edge + pointer outside canvas",
+        "Rectangle left/top/bottom boundaries",
+        "Handle drag can cross an edge",
+        "all 17 tools use the same boundary-safe body translation",
+        "Trend Line anchors may both be outside",
+        "Extended Line is clipped mathematically",
+        "axis-specific infinite lines",
+        "named complex-tool regressions",
+        "empty-chart pointer that leaves the pane",
+        "pointercancel outside is a real cancel",
+        "Invalid transient coordinates skip only that preview frame",
+        "multi-tile isolation",
+    ):
+        assert scenario in js
+    for edge in ('"right"', '"left"', '"top"', '"bottom"'):
+        assert edge in js
+    for pointer_type in ('"touch"', '"mouse"', '"pen"'):
+        assert pointer_type in js
+    assert "assertFiniteDrawing" in js
+    assert "makeBoundaryManager" in js
+    assert "getVisibleLogicalRange" in js
