@@ -77,7 +77,11 @@ tests = tests.replace(
     'container.removeEventListener("pointerdown", this._activatePointerHandler)',
     'this.el.removeEventListener("pointerdown", this._activatePointerHandler, true)',
 )
-tests += '''
+tests = tests.replace(
+    r'destroy = re.search(r"\n    destroy\(\) \{{(.*?)\n    \}}", js, re.S)',
+    r'destroy = re.search(r"\n    destroy\(\) \{(.*?)\n    \}", js, re.S)',
+)
+tests += r'''
 
 
 def test_crud_and_history_keep_explicit_interaction_state_in_sync():
