@@ -119,13 +119,19 @@
   }
 
   function classifyError(status) {
-    if (!status) return "network_error";
+    if (!status) return "unknown_error";
     if (status === 401 || status === 403) return "auth_error";
     if (status === 404) return "not_found";
     if (status === 408 || status === 504) return "timeout";
     if (status === 429) return "rate_limited";
     if (status >= 500) return "server_error";
     return "request_error";
+  }
+
+  function safeErrorType(job) {
+    const code = job && job.error && job.error.code;
+    if (typeof code === "string" && /^[a-z0-9_-]{1,60}$/i.test(code)) return code;
+    return classifyError(job && job.http_status);
   }
 
   function strategyName(strategyId) {
@@ -229,6 +235,12 @@
     else portfolioCache.set(String(portfolioId), { strategies: next, instruments: new Set() });
   }
 
+  function metric(result, key) {
+    if (result && result[key] != null) return result[key];
+    if (result && result.summary && result.summary[key] != null) return result.summary[key];
+    return undefined;
+  }
+
   function handleJob(jobId, job) {
     if (!job || !job.status || sentTerminalJobs.has(jobId)) return;
     const ctx = jobContext.get(jobId);
@@ -267,25 +279,27 @@
       date_range: body.date_from || body.date_to ? [body.date_from || null, body.date_to || null] : undefined,
       strategies_count: ctx.strategyCount,
       strategy: ctx.strategyIds && ctx.strategyIds.length === 1 ? ctx.strategyIds[0] : undefined,
+      repeat: !!body.repeat,
       status: job.status
     };
     const result = job.result || {};
     if (job.status === "completed" || job.status === "completed_with_errors") {
-      params.trades_count = result.trades_count || (result.summary && result.summary.trades_count);
-      params.total_return = result.total_return || (result.summary && result.summary.total_return);
-      params.win_rate = result.win_rate || (result.summary && result.summary.win_rate);
-      params.max_drawdown = result.max_drawdown || (result.summary && result.summary.max_drawdown);
+      params.trades_count = metric(result, "trades_count");
+      params.total_return = metric(result, "total_return");
+      params.win_rate = metric(result, "win_rate");
+      params.max_drawdown = metric(result, "max_drawdown");
       params.duration_ms = Date.now() - ctx.startedAt;
       trackGoal("backtest_completed", params);
     } else if (job.status === "failed") {
       trackGoal("backtest_failed", {
         stage: job.stage,
-        error_type: classifyError(job.http_status),
+        error_type: safeErrorType(job),
         http_status: job.http_status,
         ticker: params.ticker,
         strategy: params.strategy,
         instruments_count: params.instruments_count,
-        timeframe: params.timeframe
+        timeframe: params.timeframe,
+        repeat: params.repeat
       });
     }
   }
@@ -296,7 +310,7 @@
       ticker: pathTicker || (body && body.ticker) || url.searchParams.get("ticker") || url.searchParams.get("symbol") || undefined,
       timeframe: (body && body.timeframe) || url.searchParams.get("timeframe") || url.searchParams.get("interval") || undefined,
       source: "moex",
-      error_type: classifyError(status),
+      error_type: status ? classifyError(status) : "network_error",
       http_status: status || undefined
     };
   }
@@ -318,8 +332,8 @@
         if (url && /\/api\/(?:candles|market-data|securities|portfolios\/[^/]+\/instruments\/[^/]+\/download-data)/.test(url.pathname)) {
           trackGoal("market_data_load_failed", marketDataParams(url, body, 0));
         }
-        if (url && method === "POST" && /^\/api\/portfolios\/[^/]+\/backtest$/.test(url.pathname)) {
-          trackGoal("backtest_failed", { stage: "start", error_type: "network_error" });
+        if (url && method === "POST" && (/^\/api\/portfolios\/[^/]+\/backtest$/.test(url.pathname) || /^\/api\/backtests\/[^/]+\/repeat$/.test(url.pathname))) {
+          trackGoal("backtest_failed", { stage: "start", error_type: "network_error", repeat: /\/repeat$/.test(url.pathname) });
         }
         throw e;
       }
@@ -363,7 +377,8 @@
                 timeframe: body && body.timeframe,
                 date_range: body && (body.date_from || body.date_to) ? [body.date_from || null, body.date_to || null] : undefined,
                 strategy: strategies.ids.length === 1 ? strategies.ids[0] : undefined,
-                strategies_count: strategies.count
+                strategies_count: strategies.count,
+                repeat: false
               });
               if (strategies.count > 1) {
                 trackGoal("multi_strategy_test_started", {
@@ -372,6 +387,30 @@
                   strategy_ids: strategies.ids
                 });
               }
+            }
+          }
+
+          const repeatStart = path.match(/^\/api\/backtests\/([^/]+)\/repeat$/);
+          if (method === "POST" && repeatStart) {
+            if (!response.ok) {
+              trackGoal("backtest_failed", {
+                stage: "start",
+                error_type: classifyError(response.status),
+                http_status: response.status,
+                repeat: true
+              });
+            } else if (data && data.job_id) {
+              jobContext.set(String(data.job_id), {
+                kind: "backtest",
+                body: { repeat: true },
+                startedAt: Date.now(),
+                strategyIds: [],
+                strategyCount: undefined
+              });
+              trackGoal("backtest_started", {
+                repeat: true,
+                combinations: data.combinations
+              });
             }
           }
 
@@ -548,8 +587,10 @@
       const configure = target.closest && target.closest("[data-assign-configure]");
       if (configure) {
         const key = configure.dataset.assignConfigure + "::" + configure.dataset.strategyId;
-        const openPanel = document.querySelector('[data-assign-param-grid="' + CSS.escape(key) + '"]');
-        if (!openPanel) {
+        const alreadyOpen = Array.prototype.some.call(document.querySelectorAll("[data-assign-param-grid]"), function (panel) {
+          return panel.dataset.assignParamGrid === key;
+        });
+        if (!alreadyOpen) {
           trackGoal("strategy_settings_opened", {
             ticker: configure.dataset.assignConfigure,
             strategy_id: configure.dataset.strategyId,
@@ -607,8 +648,14 @@
   global.addEventListener("pagehide", function () { clearInterval(hookTimer); }, { once: true });
 
   const savedTab = safeCall(() => localStorage.getItem("moexlab_active_tab"));
-  if (global.location.pathname === "/") trackVirtualPage(savedTab || "portfolio");
-  else trackPageView(global.location.href);
+  if (global.location.pathname === "/") {
+    const initialTab = savedTab || "portfolio";
+    trackVirtualPage(initialTab);
+    if (initialTab === "charts") trackGoal("chart_analysis_opened", {});
+    if (initialTab === "replay") trackGoal("market_replay_opened", {});
+  } else {
+    trackPageView(global.location.href);
+  }
 
   queued.forEach((entry) => {
     if (!Array.isArray(entry) || !entry.length) return;
