@@ -75,9 +75,7 @@
   /** Linear interpolation of a trend line's price at an arbitrary time -
    * used by the parallel-channel tool to compute the offset line without
    * needing a third stored point pair. Callers already guard against a
-   * zero-width line (p0.time === p1.time) being drawn in the first place
-   * (a degenerate click), so this never divides by zero in practice; if it
-   * did, the NaN is caught by the pix[i]?.x != null guards at render time. */
+   * zero-width line (p0.time === p1.time) being drawn in the first place. */
   function lerpPriceAtTime(p0, p1, time) {
     const span = p1.time - p0.time;
     if (!span) return p0.price;
@@ -121,13 +119,253 @@
     return Math.hypot(px - cx, py - cy);
   }
 
-  /** Converts a drawing's {time,price} points to pixel space for the current viewport. Returns null if off-screen. */
-  function toPixels(core, points) {
+  function finite(value) {
+    return Number.isFinite(value);
+  }
+
+  function finitePoint(point) {
+    return !!point
+      && (point.time == null || finite(point.time))
+      && (point.price == null || finite(point.price));
+  }
+
+  /**
+   * Drawings use continuous logical coordinates while a pointer is moving.
+   * Lightweight Charts' public time conversion may return null outside the
+   * plotted range (and timeToCoordinate may return null for a timestamp that
+   * is between real bars), so time<->logical interpolation is owned here.
+   * The stored model stays {time, price}; logical values are transient only.
+   */
+  function timeToLogical(core, time) {
+    if (!finite(time)) return null;
+    const candles = (core && core.candles) || [];
+    if (!candles.length) return time;
+    if (candles.length === 1) return time === candles[0].time ? 0 : (time - candles[0].time);
+
+    let lo = 0, hi = candles.length - 1;
+    if (time <= candles[0].time) {
+      const span = candles[1].time - candles[0].time;
+      return span ? (time - candles[0].time) / span : 0;
+    }
+    if (time >= candles[hi].time) {
+      const span = candles[hi].time - candles[hi - 1].time;
+      return span ? hi + (time - candles[hi].time) / span : hi;
+    }
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (candles[mid].time <= time) lo = mid; else hi = mid;
+    }
+    const span = candles[hi].time - candles[lo].time;
+    return span ? lo + (time - candles[lo].time) / span : lo;
+  }
+
+  function logicalToTime(core, logical) {
+    if (!finite(logical)) return null;
+    const candles = (core && core.candles) || [];
+    if (!candles.length) return logical;
+    if (candles.length === 1) return candles[0].time + logical;
+    const last = candles.length - 1;
+    if (logical <= 0) {
+      const span = candles[1].time - candles[0].time;
+      return candles[0].time + logical * (span || 1);
+    }
+    if (logical >= last) {
+      const span = candles[last].time - candles[last - 1].time;
+      return candles[last].time + (logical - last) * (span || 1);
+    }
+    const left = Math.floor(logical);
+    const right = Math.min(last, left + 1);
+    const frac = logical - left;
+    return candles[left].time + (candles[right].time - candles[left].time) * frac;
+  }
+
+  function logicalCoordinatePair(core) {
+    const ts = core && core.chart && core.chart.timeScale && core.chart.timeScale();
+    if (!ts) return null;
+    let range = null;
+    if (typeof ts.getVisibleLogicalRange === "function") {
+      try { range = ts.getVisibleLogicalRange(); } catch (err) { range = null; }
+    }
+    if (range && finite(range.from) && finite(range.to) && range.to !== range.from
+      && typeof ts.logicalToCoordinate === "function") {
+      const l1 = range.from + (range.to - range.from) * 0.25;
+      const l2 = range.from + (range.to - range.from) * 0.75;
+      let x1 = null, x2 = null;
+      try { x1 = ts.logicalToCoordinate(l1); x2 = ts.logicalToCoordinate(l2); } catch (err) { /* fallback below */ }
+      if (finite(x1) && finite(x2) && x2 !== x1) return { l1, l2, x1, x2, range };
+    }
+    return range && finite(range.from) && finite(range.to) && range.to !== range.from
+      ? { range }
+      : null;
+  }
+
+  function coordinateToLogicalSafe(core, x) {
+    if (!finite(x)) return null;
     const ts = core.chart.timeScale();
+    if (typeof ts.coordinateToLogical === "function") {
+      try {
+        const direct = ts.coordinateToLogical(x);
+        if (finite(direct)) return direct;
+      } catch (err) { /* use the boundary-safe fallbacks */ }
+    }
+    if (typeof ts.coordinateToTime === "function") {
+      try {
+        const time = ts.coordinateToTime(x);
+        if (finite(time)) {
+          const logical = timeToLogical(core, time);
+          if (finite(logical)) return logical;
+        }
+      } catch (err) { /* use the boundary-safe fallbacks */ }
+    }
+    const pair = logicalCoordinatePair(core);
+    if (pair && finite(pair.x1) && finite(pair.x2)) {
+      return pair.l1 + (x - pair.x1) * (pair.l2 - pair.l1) / (pair.x2 - pair.x1);
+    }
+    if (pair && pair.range) {
+      const width = core.container && core.container.clientWidth;
+      if (finite(width) && width > 0) {
+        return pair.range.from + (x / width) * (pair.range.to - pair.range.from);
+      }
+    }
+    // Runtime tests and data-less charts use identity conversions. This is a
+    // safe last resort only when there is no candle domain to interpolate.
+    return ((core.candles || []).length === 0) ? x : null;
+  }
+
+  function logicalToCoordinateSafe(core, logical) {
+    if (!finite(logical)) return null;
+    const ts = core.chart.timeScale();
+    if (typeof ts.logicalToCoordinate === "function") {
+      try {
+        const direct = ts.logicalToCoordinate(logical);
+        if (finite(direct)) return direct;
+      } catch (err) { /* use the boundary-safe fallbacks */ }
+    }
+    const pair = logicalCoordinatePair(core);
+    if (pair && finite(pair.x1) && finite(pair.x2)) {
+      return pair.x1 + (logical - pair.l1) * (pair.x2 - pair.x1) / (pair.l2 - pair.l1);
+    }
+    if (pair && pair.range) {
+      const width = core.container && core.container.clientWidth;
+      if (finite(width) && width > 0) {
+        return (logical - pair.range.from) / (pair.range.to - pair.range.from) * width;
+      }
+    }
+    return ((core.candles || []).length === 0) ? logical : null;
+  }
+
+  function coordinateToPriceSafe(core, y) {
+    if (!finite(y)) return null;
+    const series = core.candleSeries;
+    try {
+      const direct = series.coordinateToPrice(y);
+      if (finite(direct)) return direct;
+    } catch (err) { /* extrapolate from valid pane samples */ }
+
+    const height = core.container && core.container.clientHeight;
+    if (!finite(height) || height <= 0) return null;
+    const sample = (yy) => {
+      try {
+        const price = series.coordinateToPrice(yy);
+        return finite(price) ? price : null;
+      } catch (err) { return null; }
+    };
+    const pad = Math.max(1, Math.min(24, height / 4));
+    let y1, y2;
+    if (y < 0) { y1 = 0; y2 = pad; }
+    else if (y > height) { y1 = height - pad; y2 = height; }
+    else { y1 = height * 0.25; y2 = height * 0.75; }
+    const p1 = sample(y1), p2 = sample(y2);
+    if (!finite(p1) || !finite(p2) || y2 === y1) return null;
+    return p1 + (y - y1) * (p2 - p1) / (y2 - y1);
+  }
+
+  function priceToCoordinateSafe(core, price) {
+    if (!finite(price)) return null;
+    const series = core.candleSeries;
+    try {
+      const direct = series.priceToCoordinate(price);
+      if (finite(direct)) return direct;
+    } catch (err) { /* invert valid pane samples */ }
+
+    const height = core.container && core.container.clientHeight;
+    if (!finite(height) || height <= 0) return null;
+    const sample = (yy) => {
+      try {
+        const p = series.coordinateToPrice(yy);
+        return finite(p) ? p : null;
+      } catch (err) { return null; }
+    };
+    const candidates = [[0, Math.min(height, 24)], [height * 0.25, height * 0.75], [Math.max(0, height - 24), height]];
+    for (const [y1, y2] of candidates) {
+      const p1 = sample(y1), p2 = sample(y2);
+      if (!finite(p1) || !finite(p2) || p2 === p1) continue;
+      return y1 + (price - p1) * (y2 - y1) / (p2 - p1);
+    }
+    return null;
+  }
+
+  function pointerToDrawingCoordinate(core, x, y) {
+    if (!finite(x) || !finite(y)) return null;
+    const logical = coordinateToLogicalSafe(core, x);
+    const price = coordinateToPriceSafe(core, y);
+    if (!finite(logical) || !finite(price)) return null;
+    const time = logicalToTime(core, logical);
+    return finite(time) ? { logical, time, price } : null;
+  }
+
+  function timeToCoordinateSafe(core, time) {
+    if (!finite(time)) return null;
+    const ts = core.chart.timeScale();
+    if (typeof ts.timeToCoordinate === "function") {
+      try {
+        const direct = ts.timeToCoordinate(time);
+        if (finite(direct)) return direct;
+      } catch (err) { /* map through logical space */ }
+    }
+    const logical = timeToLogical(core, time);
+    return finite(logical) ? logicalToCoordinateSafe(core, logical) : null;
+  }
+
+  /** Converts model points to continuous pixel coordinates, including points outside the viewport. */
+  function toPixels(core, points) {
     return points.map((p) => ({
-      x: p.time != null ? ts.timeToCoordinate(p.time) : null,
-      y: p.price != null ? core.candleSeries.priceToCoordinate(p.price) : null,
+      x: p && p.time != null ? timeToCoordinateSafe(core, p.time) : null,
+      y: p && p.price != null ? priceToCoordinateSafe(core, p.price) : null,
     }));
+  }
+
+  /** Liang-Barsky clipping for a segment, ray or infinite line. Model geometry is never clamped. */
+  function clipParametricLineToRect(p0, p1, width, height, mode) {
+    if (!p0 || !p1 || !finite(p0.x) || !finite(p0.y) || !finite(p1.x) || !finite(p1.y)
+      || !finite(width) || !finite(height) || width < 0 || height < 0) return null;
+    const dx = p1.x - p0.x, dy = p1.y - p0.y;
+    if (dx === 0 && dy === 0) {
+      return p0.x >= 0 && p0.x <= width && p0.y >= 0 && p0.y <= height
+        ? { x1: p0.x, y1: p0.y, x2: p0.x, y2: p0.y }
+        : null;
+    }
+    let tMin = mode === "line" ? -Infinity : 0;
+    let tMax = mode === "segment" ? 1 : Infinity;
+    const p = [-dx, dx, -dy, dy];
+    const q = [p0.x, width - p0.x, p0.y, height - p0.y];
+    for (let i = 0; i < 4; i++) {
+      if (p[i] === 0) {
+        if (q[i] < 0) return null;
+        continue;
+      }
+      const t = q[i] / p[i];
+      if (p[i] < 0) tMin = Math.max(tMin, t);
+      else tMax = Math.min(tMax, t);
+      if (tMin > tMax) return null;
+    }
+    if (!finite(tMin) || !finite(tMax)) return null;
+    return {
+      x1: p0.x + tMin * dx,
+      y1: p0.y + tMin * dy,
+      x2: p0.x + tMax * dx,
+      y2: p0.y + tMax * dy,
+    };
   }
 
   // --------------------------------------------------------------- drawing --
@@ -364,14 +602,15 @@
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
-          let x1 = pix[0].x, y1 = pix[0].y, x2 = pix[1].x, y2 = pix[1].y;
+          let segment = { x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y };
           if (d.type === "ray" || d.type === "extended_line") {
-            const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
-            const scale = dx !== 0 ? (this.core.container.clientWidth * 2) / Math.max(1, Math.abs(dx)) : 1;
-            x2 = pix[0].x + dx * scale; y2 = pix[0].y + dy * scale;
-            if (d.type === "extended_line") { x1 = pix[0].x - dx * scale; y1 = pix[0].y - dy * scale; }
+            segment = clipParametricLineToRect(
+              pix[0], pix[1], this.core.container.clientWidth, this.core.container.clientHeight,
+              d.type === "ray" ? "ray" : "line",
+            );
+            if (!segment) return null;
           }
-          return pointToSegmentDist(px, py, x1, y1, x2, y2) <= tol ? { id: d.id, handle: null } : null;
+          return pointToSegmentDist(px, py, segment.x1, segment.y1, segment.x2, segment.y2) <= tol ? { id: d.id, handle: null } : null;
         }
         case "parallel_channel": {
           if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
@@ -433,7 +672,7 @@
           const x2 = this.core.container.clientWidth;
           for (const level of FIB_RETRACEMENT_LEVELS) {
             const price = d.points[0].price + (d.points[1].price - d.points[0].price) * level;
-            const y = this.series.priceToCoordinate(price);
+            const y = priceToCoordinateSafe(this.core, price);
             if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
           }
           return null;
@@ -448,7 +687,7 @@
           const base = d.points[1].price - d.points[0].price;
           for (const level of FIB_EXTENSION_LEVELS) {
             const price = d.points[2].price + base * level;
-            const y = this.series.priceToCoordinate(price);
+            const y = priceToCoordinateSafe(this.core, price);
             if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
           }
           return null;
@@ -458,8 +697,8 @@
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           const x1 = Math.min(pix[0].x, pix[1].x), x2 = Math.max(pix[0].x, pix[1].x);
           const entryY = pix[0].y;
-          const stopY = this.series.priceToCoordinate(positionStopPrice(d));
-          const takeY = this.series.priceToCoordinate(positionTakePrice(d));
+          const stopY = priceToCoordinateSafe(this.core, positionStopPrice(d));
+          const takeY = priceToCoordinateSafe(this.core, positionTakePrice(d));
           if (allowHandles && Math.hypot(px - x1, py - entryY) <= handleRadius) return { id: d.id, handle: "start" };
           if (allowHandles && Math.hypot(px - x2, py - entryY) <= handleRadius) return { id: d.id, handle: "end" };
           if (allowHandles && stopY != null && Math.hypot(px - (x1 + x2) / 2, py - stopY) <= handleRadius) return { id: d.id, handle: "stop" };
@@ -500,10 +739,13 @@
     }
 
     // ---- pixel <-> time/price helpers for callers (toolbar, properties panel) ----
+    _pointerToDrawingCoordinate(px, py) {
+      return pointerToDrawingCoordinate(this.core, px, py);
+    }
+
     pixelToPoint(px, py) {
-      const time = this.chart.timeScale().coordinateToTime(px);
-      const price = this.series.coordinateToPrice(py);
-      return { time, price };
+      const point = this._pointerToDrawingCoordinate(px, py);
+      return point ? { time: point.time, price: point.price } : { time: null, price: null };
     }
 
     // ---- Pointer Events interaction state machine ----
@@ -799,9 +1041,11 @@
 
     _updateDraftPointAt(index, x, y) {
       if (!this.draft || index == null || !this.draft.points[index]) return;
-      let { time, price } = this.pixelToPoint(x, y);
-      if (time == null || price == null) return;
+      const coordinate = this._pointerToDrawingCoordinate(x, y);
+      if (!coordinate) return;
+      let { time, price } = coordinate;
       ({ time, price } = this.snapPoint(time, price));
+      if (!finite(time) || !finite(price)) return;
       this.draft.points[index] = { time, price };
       this._emit();
     }
@@ -833,6 +1077,7 @@
               handle: session.hit.handle,
               startX: session.startX,
               startY: session.startY,
+              startCoordinate: this._pointerToDrawingCoordinate(session.startX, session.startY),
               origPoints: JSON.parse(JSON.stringify(session.drawingBefore.points)),
               origProps: JSON.parse(JSON.stringify(session.drawingBefore.properties)),
               beforeSnapshot: session.historyBefore,
@@ -937,9 +1182,11 @@
       const type = this.draft ? this.draft.type : this.activeTool;
       const def = TOOL_DEFS[type];
       if (!def) return null;
-      let { time, price } = this.pixelToPoint(x, y);
-      if (time == null || price == null) return null;
+      const coordinate = this._pointerToDrawingCoordinate(x, y);
+      if (!coordinate) return null;
+      let { time, price } = coordinate;
       ({ time, price } = this.snapPoint(time, price));
+      if (!finite(time) || !finite(price)) return null;
       this.draft = this.draft || { type, points: [] };
       this.draft.points.push({ time, price });
       this._draftPreviewPoint = null;
@@ -980,46 +1227,67 @@
       return drawing;
     }
 
+    _translatePoints(origPoints, deltaLogical, deltaPrice, editAxis) {
+      const translated = [];
+      for (const point of origPoints) {
+        let time = point.time, price = point.price;
+        if (editAxis !== "price" && time != null) {
+          const logical = timeToLogical(this.core, time);
+          if (!finite(logical)) return null;
+          time = logicalToTime(this.core, logical + deltaLogical);
+        }
+        if (editAxis !== "time" && price != null) price += deltaPrice;
+        const next = { time, price };
+        if (!finitePoint(next)) return null;
+        translated.push(next);
+      }
+      return translated;
+    }
+
     _applyDrag(x, y) {
-      const { id, handle, startX, startY, origPoints, origProps } = this._dragState || {};
+      const { id, handle, origPoints, origProps, startCoordinate } = this._dragState || {};
       if (!id) return;
       const d = this.drawings.find((dd) => dd.id === id);
       if (!d) return;
-      const { time, price } = this.pixelToPoint(x, y);
-      if (time == null || price == null) return;
+      const current = this._pointerToDrawingCoordinate(x, y);
+      const start = startCoordinate || (this._dragState && this._pointerToDrawingCoordinate(this._dragState.startX, this._dragState.startY));
+      // A transient conversion failure is a skipped preview frame, never a
+      // geometry reset. The pointer session/state remains owned until up/cancel.
+      if (!current || !start) return;
+
+      const deltaLogical = current.logical - start.logical;
+      const deltaPrice = current.price - start.price;
+      if (!finite(deltaLogical) || !finite(deltaPrice)) return;
 
       if (d.type === "long_position" || d.type === "short_position") {
-        if (handle === "start") d.points = [{ time, price: origPoints[0].price }, origPoints[1]];
-        else if (handle === "end") d.points = [origPoints[0], { time, price: origPoints[1].price }];
-        else if (handle === "stop" || handle === "take") {
+        if (handle === "start" || handle === "end") {
+          const idx = handle === "start" ? 0 : 1;
+          const pts = origPoints.map((p) => ({ time: p.time, price: p.price }));
+          pts[idx] = { time: current.time, price: origPoints[idx].price };
+          if (pts.every(finitePoint)) d.points = pts;
+        } else if (handle === "stop" || handle === "take") {
           const entry = origPoints[0].price;
-          const pct = Math.abs(price - entry) / entry * 100;
+          if (!finite(entry) || entry === 0) return;
+          const pct = Math.abs(current.price - entry) / Math.abs(entry) * 100;
+          if (!finite(pct)) return;
           d.properties = Object.assign({}, origProps, handle === "stop" ? { stopOffsetPct: pct } : { takeOffsetPct: pct });
         } else {
-          const start = this.pixelToPoint(startX, startY);
-          const dt = time - start.time;
-          const dp = price - start.price;
-          d.points = origPoints.map((p) => ({
-            time: p.time != null ? p.time + dt : null,
-            price: p.price != null ? p.price + dp : null,
-          }));
+          const pts = this._translatePoints(origPoints, deltaLogical, deltaPrice, null);
+          if (pts) d.points = pts;
         }
       } else if (handle != null) {
-        const snapped = this.snapPoint(time, price);
-        const pts = origPoints.slice();
+        let snapped = this.snapPoint(current.time, current.price);
+        if (!snapped || !finite(snapped.time) || !finite(snapped.price)) return;
+        const pts = origPoints.map((p) => ({ time: p.time, price: p.price }));
         const editAxis = TOOL_DEFS[d.type] && TOOL_DEFS[d.type].editAxis;
         pts[handle] = editAxis === "price" ? { time: pts[handle].time, price: snapped.price }
           : editAxis === "time" ? { time: snapped.time, price: pts[handle].price }
-          : snapped;
-        d.points = pts;
+          : { time: snapped.time, price: snapped.price };
+        if (pts.every(finitePoint)) d.points = pts;
       } else {
-        const start = this.pixelToPoint(startX, startY);
-        const dt = time - start.time, dp = price - start.price;
         const editAxis = TOOL_DEFS[d.type] && TOOL_DEFS[d.type].editAxis;
-        d.points = origPoints.map((p) => ({
-          time: p.time == null ? null : (editAxis === "price" ? p.time : p.time + dt),
-          price: p.price == null ? null : (editAxis === "time" ? p.price : p.price + dp),
-        }));
+        const pts = this._translatePoints(origPoints, deltaLogical, deltaPrice, editAxis);
+        if (pts) d.points = pts;
       }
       // Preview-only notification. Persistence receives one {updated:id} on
       // pointerup, never one network save trigger per pointermove. UI panels
@@ -1143,7 +1411,7 @@
       }
       if (m.draft && m.draft.points.length) {
         const preview = m._draftPreviewPoint ? m.pixelToPoint(m._draftPreviewPoint.x, m._draftPreviewPoint.y) : null;
-        const points = preview ? m.draft.points.concat([preview]) : m.draft.points;
+        const points = preview && finite(preview.time) && finite(preview.price) ? m.draft.points.concat([preview]) : m.draft.points;
         this._buildOp({ id: "__draft__", type: m.draft.type, points, properties: defaultProperties(m.draft.type) }, ops, false, false, true);
       }
       this._ops = ops;
@@ -1176,12 +1444,11 @@
         case "ray":
         case "extended_line":
           if (pix[0]?.x != null && pix[1]?.x != null) {
-            const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
-            const scale = 4000 / Math.max(1, Math.hypot(dx, dy));
-            const x2 = pix[0].x + dx * scale, y2 = pix[0].y + dy * scale;
-            const x1 = d.type === "extended_line" ? pix[0].x - dx * scale : pix[0].x;
-            const y1 = d.type === "extended_line" ? pix[0].y - dy * scale : pix[0].y;
-            ops.push({ kind: "segment", x1, y1, x2, y2, color, width, alpha, handles: [pix[0], pix[1]] });
+            const clipped = clipParametricLineToRect(
+              pix[0], pix[1], this.manager.core.container.clientWidth, this.manager.core.container.clientHeight,
+              d.type === "ray" ? "ray" : "line",
+            );
+            if (clipped) ops.push({ kind: "segment", ...clipped, color, width, alpha, handles: [pix[0], pix[1]] });
           }
           break;
         case "parallel_channel":
@@ -1204,7 +1471,7 @@
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "ellipse", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
           break;
         case "polyline":
-          if (pix.length >= 2 && pix.every((p) => p.x != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
+          if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
           break;
         case "price_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
@@ -1218,10 +1485,10 @@
           }
           break;
         case "text":
-          if (pix[0]?.x != null) ops.push({ kind: "text", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "text", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
           break;
         case "note":
-          if (pix[0]?.x != null) ops.push({ kind: "note", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "note", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
           break;
         case "fib_retracement":
           if (pix[0]?.x != null && pix[1]?.x != null) {
@@ -1246,7 +1513,7 @@
           break;
         case "long_position":
         case "short_position":
-          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "position", d, x1: Math.min(pix[0].x, pix[1].x), x2: Math.max(pix[0].x, pix[1].x), entryY: pix[0].y, alpha, long: d.type === "long_position" });
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[0]?.y != null) ops.push({ kind: "position", d, x1: Math.min(pix[0].x, pix[1].x), x2: Math.max(pix[0].x, pix[1].x), entryY: pix[0].y, alpha, long: d.type === "long_position" });
           break;
       }
       // Applies to every op this call just pushed (almost always exactly
@@ -1264,7 +1531,6 @@
 
     renderer() {
       const ops = this._ops;
-      const core = this.manager.core;
       return {
         draw: (target) => {
           target.useBitmapCoordinateSpace((scope) => {
@@ -1272,6 +1538,11 @@
             const r = scope.horizontalPixelRatio, rv = scope.verticalPixelRatio;
             const w = scope.bitmapSize.width, h = scope.bitmapSize.height;
             ctx.save();
+            // Geometry stays in its real off-viewport coordinates; only paint
+            // is clipped to this tile's pane. Never expand the overlay/page.
+            ctx.beginPath();
+            ctx.rect(0, 0, w, h);
+            ctx.clip();
             for (const op of ops) this._drawOp(ctx, op, r, rv, w, h);
             ctx.restore();
           });
@@ -1370,7 +1641,7 @@
           const x2 = op.w * r;
           op.levels.forEach((level) => {
             const price = op.priceAt(level);
-            const y = this.manager.core.candleSeries.priceToCoordinate(price);
+            const y = priceToCoordinateSafe(this.manager.core, price);
             if (y == null) return;
             ctx.beginPath(); ctx.moveTo(op.x1 * r, y * rv); ctx.lineTo(x2, y * rv); ctx.stroke();
             this._text(ctx, `${(level * 100).toFixed(1)}% · ${price.toFixed(2)}`, op.x1 * r + 4 * r, y * rv - 4 * rv, op.color);
@@ -1413,7 +1684,7 @@
       if (op.d && op.d.properties.showPrice && ["hline", "segment", "rect", "channel", "ellipse"].includes(op.kind)) {
         const pts = op.d.points;
         const lastPt = pts[pts.length - 1];
-        const y = lastPt && lastPt.price != null ? this.manager.core.candleSeries.priceToCoordinate(lastPt.price) : null;
+        const y = lastPt && lastPt.price != null ? priceToCoordinateSafe(this.manager.core, lastPt.price) : null;
         if (y != null) {
           const label = lastPt.price.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           this._text(ctx, label, w - 62 * r, y * rv - 6 * rv, op.color);
@@ -1450,8 +1721,8 @@
       const take = positionTakePrice(d);
       const core = this.manager.core;
       const yEntry = op.entryY;
-      const yStop = core.candleSeries.priceToCoordinate(stop);
-      const yTake = core.candleSeries.priceToCoordinate(take);
+      const yStop = priceToCoordinateSafe(core, stop);
+      const yTake = priceToCoordinateSafe(core, take);
       if (yStop == null || yTake == null) return;
       const x1 = op.x1 * r, x2 = op.x2 * r;
 

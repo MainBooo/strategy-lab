@@ -99,6 +99,63 @@ function makeManager() {
   return { manager, container, chart, navigationOptions };
 }
 
+// This fake deliberately reproduces the Lightweight Charts boundary failure
+// mode: direct conversions return null outside the pane, and timeToCoordinate
+// also refuses timestamps that are not exact candle times. The Drawing Engine
+// must bridge those gaps through continuous logical/price coordinates.
+function makeBoundaryManager() {
+  const container = new FakeTarget();
+  const navigationOptions = [];
+  const candles = Array.from({ length: 10 }, (_, i) => ({
+    time: 1000 + i * 60,
+    open: 190 + i, high: 210 + i, low: 170 + i, close: 200 + i,
+  }));
+  const candleTimes = new Set(candles.map((c) => c.time));
+  const visible = { from: 2, to: 6 };
+  const toLogical = (time) => (time - 1000) / 60;
+  const toTime = (logical) => 1000 + logical * 60;
+  const toX = (logical) => (logical - visible.from) / (visible.to - visible.from) * container.clientWidth;
+  const timeScale = {
+    getVisibleLogicalRange: () => ({ ...visible }),
+    coordinateToLogical(x) {
+      if (x < 0 || x > container.clientWidth) return null;
+      return visible.from + (x / container.clientWidth) * (visible.to - visible.from);
+    },
+    logicalToCoordinate(logical) {
+      const x = toX(logical);
+      return x < 0 || x > container.clientWidth ? null : x;
+    },
+    coordinateToTime(x) {
+      if (x < 0 || x > container.clientWidth) return null;
+      return toTime(visible.from + (x / container.clientWidth) * (visible.to - visible.from));
+    },
+    timeToCoordinate(time) {
+      if (!candleTimes.has(time)) return null;
+      const x = toX(toLogical(time));
+      return x < 0 || x > container.clientWidth ? null : x;
+    },
+  };
+  const chart = {
+    timeScale: () => timeScale,
+    applyOptions: (opts) => navigationOptions.push(JSON.parse(JSON.stringify(opts))),
+  };
+  const series = {
+    attachPrimitive(primitive) { primitive.attached({ requestUpdate() {} }); },
+    detachPrimitive() {},
+    coordinateToPrice(y) {
+      if (y < 0 || y > container.clientHeight) return null;
+      return 300 - y / 2;
+    },
+    priceToCoordinate(price) {
+      const y = (300 - price) * 2;
+      return y < 0 || y > container.clientHeight ? null : y;
+    },
+  };
+  const core = { container, chart, candleSeries: series, candles };
+  const manager = new DrawingManager(core);
+  return { manager, container, chart, navigationOptions, candles, visible };
+}
+
 function send(target, type, x, y, time, pointerType = "touch", pointerId = 1) {
   return target.dispatch(type, { clientX: x, clientY: y, timeStamp: time, pointerType, pointerId });
 }
@@ -132,18 +189,43 @@ function pointsFor(tool) {
   return [{ time: 40, price: 100 }, { time: 160, price: 180 }];
 }
 
-function findBodyPoint(env, drawing) {
+function boundaryPointsFor(tool) {
+  const n = TOOL_DEFS[tool].anchorCount;
+  if (n === 1) return [{ time: 1180, price: 200 }];
+  if (n === 3) return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }, { time: 1300, price: 160 }];
+  if (n < 0) return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }, { time: 1300, price: 170 }];
+  return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }];
+}
+
+function assertFiniteDrawing(drawing, label = drawing.type) {
+  assert.ok(drawing, `${label}: drawing missing`);
+  for (const [index, point] of drawing.points.entries()) {
+    assert.ok(Number.isFinite(point.time), `${label}: point ${index} time invalid: ${point.time}`);
+    assert.ok(Number.isFinite(point.price), `${label}: point ${index} price invalid: ${point.price}`);
+  }
+}
+
+function renderOps(env) {
+  env.manager.primitive._view.update();
+  return env.manager.primitive._view._ops;
+}
+
+function findBodyPoint(env, drawing, pointerType = "touch") {
   if (drawing.type === "text" || drawing.type === "note") {
+    const point = env.manager.pixelToPoint(200, 200);
+    drawing._lastBox = { x1: 190, y1: 180, x2: 270, y2: 220 };
+    if (point.time === drawing.points[0].time && point.price === drawing.points[0].price) return { x: 230, y: 200 };
+    // Normal identity-runtime fixtures keep their historical text box.
     drawing._lastBox = { x1: 55, y1: 80, x2: 150, y2: 120 };
     return { x: 100, y: 100 };
   }
-  for (let y = 20; y <= 360; y += 5) {
-    for (let x = 20; x <= 760; x += 5) {
-      const hit = env.manager.hitTest(x, y, { pointerType: "touch" });
+  for (let y = 10; y <= 390; y += 5) {
+    for (let x = 10; x <= 790; x += 5) {
+      const hit = env.manager.hitTest(x, y, { pointerType });
       if (hit && hit.id === drawing.id && hit.handle == null) return { x, y };
     }
   }
-  throw new Error(`${drawing.type}: no body hit point found`);
+  throw new Error(`${drawing.type}: no body hit point found for ${pointerType}`);
 }
 
 function touchDragDrawing(env, drawing, start, dx = 30, dy = 25, touchId = 41, pointerId = 1) {
@@ -601,6 +683,250 @@ for (const tool of allTools) {
   env.manager.loadDrawings([{ id: "loaded", type: "horizontal_line", points: [{ time: 30, price: 30 }], properties: {}, locked: false, hidden: false, z_index: 0 }]);
   assert.strictEqual(env.manager.selectedId, null);
   assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.NAVIGATE);
+}
+
+// -------------------------------------------------------------------------
+// Boundary drag regressions. These are intentionally generic: every tool
+// passes through the same safe coordinate/translation pipeline.
+
+// TEST 1/2 — Rectangle right edge + pointer outside canvas. The pointer is
+// captured, state stays DRAG_OBJECT, geometry remains finite and the visible
+// slice still produces a render op even though one anchor is outside.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const start = findBodyPoint(env, d, "touch");
+  const before = JSON.stringify(d.points);
+  send(env.container, "pointerdown", start.x, start.y, 5000, "touch", 501);
+  const partialX = start.x + 500;
+  send(windowTarget, "pointermove", partialX, start.y + 10, 5080, "touch", 501);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  assert.ok(env.container.captured.has(501), "Rectangle: pointer capture lost at chart edge");
+  assert.strictEqual(env.manager.selectedId, d.id);
+  assert.strictEqual(env.manager.drawings.includes(d), true);
+  assert.strictEqual(d.hidden, false);
+  assert.notStrictEqual(JSON.stringify(d.points), before);
+  assertFiniteDrawing(d, "Rectangle right edge");
+  const rectOp = renderOps(env).find((op) => op.kind === "rect" && op.d.id === d.id);
+  assert.ok(rectOp, "Rectangle: partially visible geometry disappeared");
+  assert.ok(Math.min(rectOp.x1, rectOp.x2) < env.container.clientWidth);
+  assert.ok(Math.max(rectOp.x1, rectOp.x2) > env.container.clientWidth);
+
+  // Pointer capture must keep the same drag alive even after the pointer
+  // itself goes 150 px beyond the canvas. The whole shape may now be
+  // offscreen; that is valid model state, not deletion/invalid geometry.
+  send(windowTarget, "pointermove", env.container.clientWidth + 150, start.y + 10, 5100, "touch", 501);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  assert.ok(env.container.captured.has(501), "Rectangle: pointer capture lost outside canvas");
+  assert.strictEqual(env.manager.drawings.includes(d), true);
+  assert.strictEqual(env.manager.selectedId, d.id);
+  assertFiniteDrawing(d, "Rectangle pointer outside canvas");
+  send(windowTarget, "pointerup", env.container.clientWidth + 150, start.y + 10, 5120, "touch", 501);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
+  assert.strictEqual(env.container.captured.has(501), false);
+}
+
+// TEST 3 — Rectangle left/top/bottom boundaries keep the drag session alive.
+for (const edge of ["left", "top", "bottom"]) {
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const start = findBodyPoint(env, d, "touch");
+  const target = edge === "left" ? { x: -50, y: start.y + 20 }
+    : edge === "top" ? { x: start.x + 20, y: -20 }
+      : { x: start.x + 20, y: 420 };
+  send(env.container, "pointerdown", start.x, start.y, 5200, "touch", 510 + ["left", "top", "bottom"].indexOf(edge));
+  send(windowTarget, "pointermove", target.x, target.y, 5280, "touch", 510 + ["left", "top", "bottom"].indexOf(edge));
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT, `Rectangle ${edge}: state reset`);
+  assertFiniteDrawing(d, `Rectangle ${edge}`);
+  assert.strictEqual(env.manager.selectedId, d.id);
+  send(windowTarget, "pointerup", target.x, target.y, 5320, "touch", 510 + ["left", "top", "bottom"].indexOf(edge));
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
+}
+
+// TEST 4 — Handle drag can cross an edge without invalidating the opposite anchor.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const untouched = JSON.parse(JSON.stringify(d.points[1]));
+  send(env.container, "pointerdown", 200, 240, 5400, "touch", 520);
+  send(windowTarget, "pointermove", -50, 220, 5480, "touch", 520);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_HANDLE);
+  assertFiniteDrawing(d, "Rectangle handle outside");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(d.points[1])), untouched);
+  assert.ok(renderOps(env).some((op) => op.kind === "rect"), "Rectangle handle: visible part disappeared");
+  send(windowTarget, "pointerup", -50, 220, 5520, "touch", 520);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
+}
+
+function runBoundaryBodyCase(tool, edge, pointerType, serial) {
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing(tool, boundaryPointsFor(tool));
+  const start = findBodyPoint(env, d, pointerType);
+  const before = JSON.stringify(d.points);
+  const target = edge === "right" ? { x: 850, y: start.y + 30 }
+    : edge === "left" ? { x: -50, y: start.y + 30 }
+      : edge === "top" ? { x: start.x + 30, y: -20 }
+        : { x: start.x + 30, y: 420 };
+  const pointerId = 600 + serial;
+  send(env.container, "pointerdown", start.x, start.y, 6000 + serial * 10, pointerType, pointerId);
+  send(windowTarget, "pointermove", target.x, target.y, 6080 + serial * 10, pointerType, pointerId);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT, `${tool}/${edge}/${pointerType}: drag state lost`);
+  assert.strictEqual(env.manager.selectedId, d.id, `${tool}/${edge}/${pointerType}: selection lost`);
+  assert.strictEqual(env.manager.drawings.includes(d), true, `${tool}/${edge}/${pointerType}: drawing removed`);
+  assert.strictEqual(d.hidden, false, `${tool}/${edge}/${pointerType}: drawing hidden`);
+  assert.ok(env.container.captured.has(pointerId), `${tool}/${edge}/${pointerType}: pointer capture lost`);
+  assertFiniteDrawing(d, `${tool}/${edge}/${pointerType}`);
+  assert.notStrictEqual(JSON.stringify(d.points), before, `${tool}/${edge}/${pointerType}: geometry did not move`);
+  send(windowTarget, "pointerup", target.x, target.y, 6120 + serial * 10, pointerType, pointerId);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED, `${tool}/${edge}/${pointerType}: did not finish SELECTED`);
+}
+
+// TEST 5 — all 17 tools use the same boundary-safe body translation. Every
+// edge is covered on touch; right-edge ownership is also verified for mouse
+// and stylus/pen so there is no platform-specific geometry path.
+{
+  let serial = 0;
+  for (const tool of allTools) {
+    for (const edge of ["right", "left", "top", "bottom"]) runBoundaryBodyCase(tool, edge, "touch", serial++);
+    for (const pointerType of ["mouse", "pen"]) runBoundaryBodyCase(tool, "right", pointerType, serial++);
+  }
+}
+
+// TEST 6 — Trend Line anchors may both be outside while the segment crosses the viewport.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("trend_line", [
+    { time: 1060, price: 180 }, // x=-200
+    { time: 1420, price: 220 }, // x=1000
+  ]);
+  const op = renderOps(env).find((item) => item.kind === "segment" && item.d.id === d.id);
+  assert.ok(op, "Trend Line crossing viewport was dropped because anchors are outside");
+  assertFiniteDrawing(d, "Trend Line outside anchors");
+}
+
+// TEST 7 — Extended Line is clipped mathematically, not by anchor visibility
+// or a fixed arbitrary extension length. Both anchors are left of the pane.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("extended_line", [
+    { time: 1000, price: 220 },
+    { time: 1060, price: 210 },
+  ]);
+  const op = renderOps(env).find((item) => item.kind === "segment" && item.d.id === d.id);
+  assert.ok(op, "Extended Line with offscreen anchors did not intersect-render");
+  for (const value of [op.x1, op.y1, op.x2, op.y2]) assert.ok(Number.isFinite(value));
+  assert.ok(op.x1 >= 0 && op.x1 <= env.container.clientWidth);
+  assert.ok(op.x2 >= 0 && op.x2 <= env.container.clientWidth);
+  assert.ok(op.y1 >= 0 && op.y1 <= env.container.clientHeight);
+  assert.ok(op.y2 >= 0 && op.y2 <= env.container.clientHeight);
+}
+
+// Ray uses the same viewport intersection helper.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("ray", [
+    { time: 1000, price: 220 },
+    { time: 1060, price: 210 },
+  ]);
+  assert.ok(renderOps(env).some((item) => item.kind === "segment" && item.d.id === d.id));
+}
+
+// TEST 8/9 — axis-specific infinite lines preserve their semantic axis at boundaries.
+for (const tool of ["horizontal_line", "vertical_line"]) {
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing(tool, boundaryPointsFor(tool));
+  const before = JSON.parse(JSON.stringify(d.points[0]));
+  const start = findBodyPoint(env, d, "touch");
+  const target = tool === "horizontal_line" ? { x: 850, y: start.y - 40 } : { x: -50, y: start.y + 40 };
+  send(env.container, "pointerdown", start.x, start.y, 9000, "touch", 900);
+  send(windowTarget, "pointermove", target.x, target.y, 9080, "touch", 900);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  assertFiniteDrawing(d, `${tool} boundary`);
+  if (tool === "horizontal_line") assert.strictEqual(d.points[0].time, before.time);
+  else assert.strictEqual(d.points[0].price, before.price);
+  send(windowTarget, "pointerup", target.x, target.y, 9120, "touch", 900);
+}
+
+// TEST 10/11/12/13 — named complex-tool regressions beyond the all-tools matrix.
+for (const tool of ["polyline", "fib_retracement", "fib_extension", "text", "note", "long_position", "short_position", "circle"]) {
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing(tool, boundaryPointsFor(tool));
+  const start = findBodyPoint(env, d, "touch");
+  send(env.container, "pointerdown", start.x, start.y, 9200, "touch", 920 + allTools.indexOf(tool));
+  send(windowTarget, "pointermove", 850, start.y + 25, 9280, "touch", 920 + allTools.indexOf(tool));
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT, `${tool}: named boundary regression`);
+  assertFiniteDrawing(d, `${tool}: named boundary regression`);
+  send(windowTarget, "pointerup", 850, start.y + 25, 9320, "touch", 920 + allTools.indexOf(tool));
+}
+
+// TEST 14 — an empty-chart pointer that leaves the pane is never claimed by DrawingManager.
+{
+  const env = makeBoundaryManager();
+  const down = send(env.container, "pointerdown", 700, 350, 9400, "touch", 940);
+  const move = send(windowTarget, "pointermove", 850, 430, 9480, "touch", 940);
+  const up = send(windowTarget, "pointerup", 850, 430, 9520, "touch", 940);
+  assert.strictEqual(down.defaultPrevented, false);
+  assert.strictEqual(move.defaultPrevented, false);
+  assert.strictEqual(up.defaultPrevented, false);
+  assert.strictEqual(env.manager._pointerSession, null);
+  assert.strictEqual(env.container.captured.size, 0);
+}
+
+// TEST 15 — pointercancel outside is a real cancel and rolls back; pointerleave alone is not.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const before = JSON.stringify(d.points);
+  const start = findBodyPoint(env, d, "touch");
+  send(env.container, "pointerdown", start.x, start.y, 9600, "touch", 960);
+  send(windowTarget, "pointermove", 780, start.y + 20, 9680, "touch", 960);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  env.container.dispatch("pointerleave", { pointerId: 960, pointerType: "touch" });
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT, "pointerleave canceled drag");
+  assert.ok(env.container.captured.has(960));
+  send(windowTarget, "pointermove", 850, start.y + 20, 9700, "touch", 960);
+  assertFiniteDrawing(d, "pointerleave continuation");
+  send(windowTarget, "pointercancel", 850, start.y + 20, 9720, "touch", 960);
+  assert.strictEqual(JSON.stringify(d.points), before);
+  assert.strictEqual(env.container.captured.size, 0);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
+}
+
+// Invalid transient coordinates skip only that preview frame; they never write
+// NaN/null/undefined into model geometry or terminate an existing drag.
+{
+  const env = makeBoundaryManager();
+  const d = env.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const start = findBodyPoint(env, d, "touch");
+  send(env.container, "pointerdown", start.x, start.y, 9800, "touch", 980);
+  send(windowTarget, "pointermove", 760, start.y + 20, 9880, "touch", 980);
+  const lastValid = JSON.stringify(d.points);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  send(windowTarget, "pointermove", NaN, NaN, 9900, "touch", 980);
+  assert.strictEqual(JSON.stringify(d.points), lastValid);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  assertFiniteDrawing(d, "invalid transient frame");
+  send(windowTarget, "pointerup", 760, start.y + 20, 9920, "touch", 980);
+}
+
+// TEST 16 — multi-tile isolation: A can own an outside boundary drag while B
+// remains navigation-capable and completely unchanged.
+{
+  const a = makeBoundaryManager();
+  const b = makeBoundaryManager();
+  const ad = a.manager.addDrawing("rectangle", boundaryPointsFor("rectangle"));
+  const bd = b.manager.addDrawing("trend_line", boundaryPointsFor("trend_line"));
+  b.manager.select(null);
+  const bBefore = JSON.stringify(bd.points);
+  const start = findBodyPoint(a, ad, "touch");
+  send(a.container, "pointerdown", start.x, start.y, 10000, "touch", 1000);
+  send(windowTarget, "pointermove", 850, start.y + 20, 10080, "touch", 1000);
+  assert.strictEqual(a.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  assert.strictEqual(b.manager._pointerSession, null);
+  assert.strictEqual(JSON.stringify(bd.points), bBefore);
+  assert.strictEqual(b.manager._ownedTouchIds.size, 0);
+  send(windowTarget, "pointerup", 850, start.y + 20, 10120, "touch", 1000);
+  assert.strictEqual(a.manager.interactionState, INTERACTION_STATES.SELECTED);
 }
 
 console.log("chart drawing runtime tests: PASS");
