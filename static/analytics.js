@@ -7,7 +7,11 @@
   const previous = global.StrategyLabAnalytics;
   const queued = previous && Array.isArray(previous.q) ? previous.q.slice() : [];
   const sentTerminalJobs = new Set();
+  const replayFinishedSessions = new Set();
   const jobContext = new Map();
+  const portfolioStrategyCache = new Map();
+  const drawingManagersObserved = new WeakSet();
+  const wrappedObjects = new WeakSet();
   const pauseDedup = new Map();
   let currentVirtualPage = null;
 
@@ -118,6 +122,74 @@
     return "request_error";
   }
 
+  function normalizeAssignments(raw) {
+    const out = new Map();
+    if (!raw || typeof raw !== "object") return out;
+    Object.keys(raw).forEach((ticker) => {
+      const rows = Array.isArray(raw[ticker]) ? raw[ticker] : [];
+      rows.forEach((row) => {
+        if (!row || row.enabled === false || !row.strategy_id) return;
+        const key = ticker + "::" + row.strategy_id;
+        out.set(key, {
+          ticker: ticker,
+          strategy_id: row.strategy_id,
+          parameters: row.parameters || {}
+        });
+      });
+    });
+    return out;
+  }
+
+  function rememberPortfolio(portfolio) {
+    if (!portfolio || !portfolio.id) return;
+    portfolioStrategyCache.set(String(portfolio.id), normalizeAssignments(portfolio.ticker_strategies));
+  }
+
+  function strategyContext(portfolioId, tickers) {
+    const assignments = portfolioStrategyCache.get(String(portfolioId)) || new Map();
+    const allowed = new Set(Array.isArray(tickers) ? tickers : []);
+    const rows = [];
+    assignments.forEach((row) => {
+      if (!allowed.size || allowed.has(row.ticker)) rows.push(row);
+    });
+    const ids = Array.from(new Set(rows.map((r) => r.strategy_id))).slice(0, 12);
+    return { rows: rows, ids: ids, count: ids.length };
+  }
+
+  function handlePortfolioStrategySave(portfolioId, body) {
+    const next = normalizeAssignments(body && body.ticker_strategies);
+    const prev = portfolioStrategyCache.get(String(portfolioId)) || new Map();
+    let added = 0;
+    next.forEach((row, key) => {
+      const old = prev.get(key);
+      if (!old) {
+        added += 1;
+        trackGoal("strategy_selected", {
+          strategy_id: row.strategy_id,
+          ticker: row.ticker,
+          module: "portfolio_strategies"
+        });
+        trackGoal("portfolio_strategy_assigned", {
+          ticker: row.ticker,
+          strategy: row.strategy_id,
+          strategies_count: next.size
+        });
+        return;
+      }
+      if (JSON.stringify(old.parameters || {}) !== JSON.stringify(row.parameters || {})) {
+        trackGoal("strategy_settings_changed", {
+          strategy_id: row.strategy_id,
+          ticker: row.ticker,
+          module: "portfolio_strategies"
+        });
+      }
+    });
+    portfolioStrategyCache.set(String(portfolioId), next);
+    if (!added && next.size !== prev.size) {
+      trackGoal("portfolio_updated", { update_type: "strategy_assignments" });
+    }
+  }
+
   function handleJob(jobId, job) {
     if (!job || !job.status || sentTerminalJobs.has(jobId)) return;
     const ctx = jobContext.get(jobId);
@@ -127,24 +199,37 @@
 
     if (ctx.kind === "portfolio_build") {
       if (job.status === "completed") {
-        const count = Array.isArray(ctx.body && ctx.body.tickers) ? ctx.body.tickers.length : undefined;
-        trackGoal(ctx.body && ctx.body.portfolio_id ? "portfolio_updated" : "portfolio_created", {
-          instruments_count: count,
-          selected_tickers_count: count,
-          creation_type: ctx.body && ctx.body.portfolio_id ? "add_instruments" : "new"
-        });
+        const tickers = Array.isArray(ctx.body && ctx.body.tickers) ? ctx.body.tickers : [];
+        if (ctx.body && ctx.body.portfolio_id) {
+          tickers.slice(0, 12).forEach((ticker) => trackGoal("portfolio_instrument_added", {
+            ticker: ticker,
+            board: "TQBR",
+            source: "portfolio_build"
+          }));
+          trackGoal("portfolio_updated", {
+            instruments_count: tickers.length,
+            update_type: "instruments_added"
+          });
+        } else {
+          trackGoal("portfolio_created", {
+            instruments_count: tickers.length,
+            selected_tickers_count: tickers.length,
+            creation_type: "new"
+          });
+        }
       }
       return;
     }
 
     if (ctx.kind === "backtest") {
       const body = ctx.body || {};
-      const strategies = body.strategy_ids || body.strategies;
       const params = {
+        ticker: Array.isArray(body.tickers) && body.tickers.length === 1 ? body.tickers[0] : undefined,
         instruments_count: Array.isArray(body.tickers) ? body.tickers.length : undefined,
         timeframe: body.timeframe,
         date_range: body.date_from || body.date_to ? [body.date_from || null, body.date_to || null] : undefined,
-        strategies_count: Array.isArray(strategies) ? strategies.length : undefined,
+        strategies_count: ctx.strategyCount,
+        strategy: ctx.strategyIds && ctx.strategyIds.length === 1 ? ctx.strategyIds[0] : undefined,
         status: job.status
       };
       const result = job.result || {};
@@ -160,6 +245,8 @@
           stage: job.stage,
           error_type: classifyError(job.http_status),
           http_status: job.http_status,
+          ticker: params.ticker,
+          strategy: params.strategy,
           instruments_count: params.instruments_count,
           timeframe: params.timeframe
         });
@@ -182,6 +269,9 @@
         if (url && /\/api\/(?:candles|market-data|securities|portfolios\/[^/]+\/instruments\/[^/]+\/download-data)/.test(url.pathname)) {
           trackGoal("market_data_load_failed", { ticker: body && body.ticker, timeframe: body && body.timeframe, source: "moex", error_type: "network_error" });
         }
+        if (url && method === "POST" && /^\/api\/portfolios\/[^/]+\/backtest$/.test(url.pathname)) {
+          trackGoal("backtest_failed", { stage: "start", error_type: "network_error" });
+        }
         throw e;
       }
 
@@ -190,40 +280,96 @@
         const path = url.pathname;
         const clone = response.clone();
         clone.json().then((data) => {
+          if (method === "GET" && path === "/api/portfolios" && response.ok && Array.isArray(data)) {
+            data.forEach(rememberPortfolio);
+          }
+          const portfolioGet = path.match(/^\/api\/portfolios\/([^/]+)$/);
+          if (method === "GET" && portfolioGet && response.ok) rememberPortfolio(data);
+
           if (method === "POST" && path === "/api/portfolio/build" && response.ok && data && data.job_id) {
             jobContext.set(String(data.job_id), { kind: "portfolio_build", body: body || {}, startedAt: Date.now() });
           }
-          if (method === "POST" && /^\/api\/portfolios\/[^/]+\/backtest$/.test(path) && response.ok && data && data.job_id) {
-            const ctx = { kind: "backtest", body: body || {}, startedAt: Date.now() };
-            jobContext.set(String(data.job_id), ctx);
-            const strategyIds = body && (body.strategy_ids || body.strategies);
-            trackGoal("backtest_started", {
-              instruments_count: Array.isArray(body && body.tickers) ? body.tickers.length : undefined,
-              timeframe: body && body.timeframe,
-              date_range: body && (body.date_from || body.date_to) ? [body.date_from || null, body.date_to || null] : undefined,
-              strategies_count: Array.isArray(strategyIds) ? strategyIds.length : undefined
-            });
-            if (Array.isArray(strategyIds) && strategyIds.length > 1) {
-              trackGoal("multi_strategy_test_started", { strategies_count: strategyIds.length, strategy_ids: strategyIds.slice(0, 12) });
+
+          const backtestStart = path.match(/^\/api\/portfolios\/([^/]+)\/backtest$/);
+          if (method === "POST" && backtestStart) {
+            if (!response.ok) {
+              trackGoal("backtest_failed", {
+                stage: "start",
+                error_type: classifyError(response.status),
+                http_status: response.status,
+                ticker: Array.isArray(body && body.tickers) && body.tickers.length === 1 ? body.tickers[0] : undefined,
+                timeframe: body && body.timeframe
+              });
+            } else if (data && data.job_id) {
+              const strategies = strategyContext(backtestStart[1], body && body.tickers);
+              const ctx = {
+                kind: "backtest",
+                body: body || {},
+                startedAt: Date.now(),
+                strategyIds: strategies.ids,
+                strategyCount: strategies.count
+              };
+              jobContext.set(String(data.job_id), ctx);
+              trackGoal("backtest_started", {
+                ticker: Array.isArray(body && body.tickers) && body.tickers.length === 1 ? body.tickers[0] : undefined,
+                instruments_count: Array.isArray(body && body.tickers) ? body.tickers.length : undefined,
+                timeframe: body && body.timeframe,
+                date_range: body && (body.date_from || body.date_to) ? [body.date_from || null, body.date_to || null] : undefined,
+                strategy: strategies.ids.length === 1 ? strategies.ids[0] : undefined,
+                strategies_count: strategies.count
+              });
+              if (strategies.count > 1) {
+                trackGoal("multi_strategy_test_started", {
+                  ticker: Array.isArray(body && body.tickers) && body.tickers.length === 1 ? body.tickers[0] : undefined,
+                  strategies_count: strategies.count,
+                  strategy_ids: strategies.ids
+                });
+              }
             }
           }
+
           const jobMatch = path.match(/^\/api\/jobs\/([^/]+)$/);
           if (method === "GET" && jobMatch && response.ok) handleJob(jobMatch[1], data);
 
-          if (method === "PUT" && /^\/api\/portfolios\/[^/]+$/.test(path) && response.ok) trackGoal("portfolio_updated", {});
-          if (method === "PATCH" && /^\/api\/portfolios\/[^/]+\/strategies$/.test(path) && response.ok) {
-            const assignments = body && body.ticker_strategies;
-            trackGoal("portfolio_strategy_assigned", { strategies_count: assignments && typeof assignments === "object" ? Object.keys(assignments).length : undefined });
-          }
+          if (method === "PUT" && /^\/api\/portfolios\/[^/]+$/.test(path) && response.ok) trackGoal("portfolio_updated", { update_type: "saved_edit" });
+          const strategyPatch = path.match(/^\/api\/portfolios\/([^/]+)\/strategies$/);
+          if (method === "PATCH" && strategyPatch && response.ok) handlePortfolioStrategySave(strategyPatch[1], body || {});
+
           if (method === "DELETE") {
             const m = path.match(/^\/api\/portfolios\/[^/]+\/instruments\/([^/]+)$/);
             if (m && response.ok) trackGoal("portfolio_instrument_removed", { ticker: decodeURIComponent(m[1]) });
           }
+
           if (method === "POST" && path === "/api/replay/sessions" && response.ok) {
-            trackGoal("market_replay_started", { ticker: body && body.ticker, timeframe: body && body.timeframe, selected_start_date: body && body.start_date });
+            trackGoal("market_replay_started", {
+              ticker: body && body.ticker,
+              timeframe: body && body.timeframe,
+              selected_start_date: body && body.start_date
+            });
           }
+          const replayStep = path.match(/^\/api\/replay\/sessions\/([^/]+)\/step$/);
+          if (method === "POST" && replayStep && response.ok && data && data.finished && !replayFinishedSessions.has(replayStep[1])) {
+            replayFinishedSessions.add(replayStep[1]);
+            trackGoal("market_replay_finished", {
+              ticker: data.session && data.session.ticker,
+              timeframe: data.session && data.session.timeframe
+            });
+          }
+
+          const backtestBase = path.match(/^\/api\/backtests\/([^/]+)$/);
+          if (method === "GET" && backtestBase && response.ok) trackGoal("backtest_result_opened", {});
+          if (method === "GET" && /^\/api\/backtests\/[^/]+\/candles$/.test(path) && response.ok) trackGoal("backtest_trades_chart_opened", {});
+          if (method === "GET" && /^\/api\/backtests\/[^/]+\/trades\/\d+$/.test(path) && response.ok) trackGoal("backtest_trade_opened", {});
+
           if (!response.ok && /\/api\/(?:candles|market-data|securities|portfolios\/[^/]+\/instruments\/[^/]+\/download-data)/.test(path)) {
-            trackGoal("market_data_load_failed", { ticker: body && body.ticker, timeframe: body && body.timeframe, source: "moex", error_type: classifyError(response.status), http_status: response.status });
+            const tickerFromPath = safeCall(() => decodeURIComponent((path.match(/\/instruments\/([^/]+)\//) || [])[1] || "")) || undefined;
+            trackGoal("market_data_load_failed", {
+              ticker: tickerFromPath || (body && body.ticker),
+              timeframe: body && body.timeframe,
+              source: "moex",
+              error_type: classifyError(response.status),
+              http_status: response.status
+            });
           }
         }).catch(function () { /* non-JSON response */ });
       });
@@ -231,6 +377,95 @@
     };
     wrapped.__strategyLabAnalyticsWrapped = true;
     global.fetch = wrapped;
+  }
+
+  function semanticDrawingType(type) {
+    return type === "circle" ? "ellipse" : type;
+  }
+
+  function observeDrawingManager(tile) {
+    const mgr = tile && tile.drawingMgr;
+    if (!mgr || drawingManagersObserved.has(mgr) || typeof mgr.onChange !== "function") return;
+    drawingManagersObserved.add(mgr);
+    mgr.onChange(function (manager, detail) {
+      if (!detail || !detail.created) return;
+      const drawing = Array.isArray(manager.drawings) ? manager.drawings.find((d) => d.id === detail.created) : null;
+      if (!drawing || !drawing.type) return;
+      trackGoal("chart_drawing_created", {
+        ticker: tile.symbol,
+        drawing_type: semanticDrawingType(drawing.type)
+      });
+    });
+  }
+
+  function wrapMethod(obj, method, after) {
+    if (!obj || typeof obj[method] !== "function") return;
+    const original = obj[method];
+    if (original.__strategyLabAnalyticsWrapped) return;
+    const wrapped = function () {
+      const args = Array.prototype.slice.call(arguments);
+      const before = safeCall(() => ({
+        symbol: this.activeTile && this.activeTile.symbol,
+        timeframe: this.activeTile && this.activeTile.timeframe,
+        layoutMode: this.layoutMode
+      })) || {};
+      const result = original.apply(this, args);
+      safeCall(() => after.call(this, args, before, result));
+      return result;
+    };
+    wrapped.__strategyLabAnalyticsWrapped = true;
+    obj[method] = wrapped;
+  }
+
+  function installChartHooks() {
+    const page = global.ChartAnalysisPage;
+    if (!page) return;
+    (page.tiles || []).forEach(observeDrawingManager);
+    if (wrappedObjects.has(page)) return;
+    wrappedObjects.add(page);
+
+    wrapMethod(page, "_commandSelectTicker", function (args, before) {
+      const ticker = args[0];
+      if (ticker && ticker !== before.symbol) trackGoal("chart_ticker_changed", { ticker: ticker });
+      setTimeout(() => (this.tiles || []).forEach(observeDrawingManager), 0);
+    });
+    wrapMethod(page, "_commandSetTimeframe", function (args, before) {
+      const timeframe = args[0];
+      if (timeframe && timeframe !== before.timeframe) {
+        trackGoal("chart_timeframe_changed", { ticker: before.symbol, timeframe: timeframe });
+      }
+    });
+    wrapMethod(page, "_setLayout", function (args, before) {
+      const layout = args[0];
+      if (layout && layout !== before.layoutMode) {
+        trackGoal("chart_layout_changed", {
+          charts_count: Array.isArray(this.tiles) ? this.tiles.length : undefined,
+          layout: layout
+        });
+      }
+      setTimeout(() => (this.tiles || []).forEach(observeDrawingManager), 0);
+    });
+    wrapMethod(page, "_onFullscreenChange", function (args) {
+      if (args[0] === true) trackGoal("chart_fullscreen_opened", {});
+    });
+  }
+
+  function installReplayHooks() {
+    const page = global.MarketReplayPage;
+    if (!page || wrappedObjects.has(page)) return;
+    wrappedObjects.add(page);
+    wrapMethod(page, "_togglePlay", function (args, before) {
+      if (this.playing) return;
+      const now = Date.now();
+      const prev = pauseDedup.get("replay_pause") || 0;
+      if (now - prev > 1200 && this.state && !this.state.finished) {
+        pauseDedup.set("replay_pause", now);
+        trackGoal("market_replay_paused", {
+          ticker: this.state.session && this.state.session.ticker,
+          timeframe: this.state.session && this.state.session.timeframe
+        });
+      }
+    });
   }
 
   function installUiObserver() {
@@ -242,25 +477,33 @@
         if (tab.dataset.tab === "replay") trackGoal("market_replay_opened", {});
       }
       if (event.target.closest && event.target.closest("#openAssignModalBtn")) trackGoal("portfolio_strategies_opened", {});
-      if (event.target.closest && event.target.closest("[data-hist-open], [data-open-backtest], .open-backtest-result")) trackGoal("backtest_result_opened", {});
-      if (event.target.closest && event.target.closest("[data-show-trades], [data-trade-chart], #openTradesChart")) trackGoal("backtest_trades_chart_opened", {});
-      if (event.target.closest && event.target.closest("#mrPlayPause")) {
-        const now = Date.now();
-        const prev = pauseDedup.get("replay_toggle") || 0;
-        if (now - prev > 1200) {
-          pauseDedup.set("replay_toggle", now);
-          const btn = event.target.closest("#mrPlayPause");
-          if (btn && /pause|пауза/i.test(btn.textContent || "")) trackGoal("market_replay_paused", {});
-        }
+      if (event.target.closest && event.target.closest("[data-assign-configure]")) {
+        const btn = event.target.closest("[data-assign-configure]");
+        trackGoal("strategy_settings_opened", {
+          ticker: btn.dataset.assignConfigure,
+          strategy_id: btn.dataset.strategyId,
+          module: "portfolio_strategies"
+        });
       }
-    }, true);
+      const libraryHeader = event.target.closest && event.target.closest("[data-toggle-strategy]");
+      if (libraryHeader && libraryHeader.dataset.toggleStrategy) {
+        trackGoal("strategy_settings_opened", {
+          strategy_id: libraryHeader.dataset.toggleStrategy,
+          module: "strategy_library"
+        });
+      }
+    }, false);
 
     document.addEventListener("change", function (event) {
       const el = event.target;
-      if (!el || !el.id) return;
-      if (el.id === "backtestTimeframe") trackGoal("chart_timeframe_changed", { module: "backtest", timeframe: el.value });
-      if (el.id === "mrTimeframe") trackGoal("chart_timeframe_changed", { module: "market_replay", timeframe: el.value });
-    }, true);
+      if (!el) return;
+      if (el.matches && el.matches("#gtIndicatorsPop input[data-ind]") && el.checked) {
+        const page = global.ChartAnalysisPage;
+        const tile = page && page.activeTile;
+        const exists = tile && tile.indicatorMgr && tile.indicatorMgr.list().some((item) => item.type === el.dataset.ind);
+        if (exists) trackGoal("chart_indicator_added", { ticker: tile.symbol, indicator: el.dataset.ind });
+      }
+    }, false);
   }
 
   const api = {
@@ -278,6 +521,14 @@
   loadMetrika();
   installFetchObserver();
   installUiObserver();
+
+  const hookTimer = setInterval(function () {
+    installChartHooks();
+    installReplayHooks();
+    const page = global.ChartAnalysisPage;
+    if (page && Array.isArray(page.tiles)) page.tiles.forEach(observeDrawingManager);
+  }, 750);
+  global.addEventListener("pagehide", function () { clearInterval(hookTimer); }, { once: true });
 
   const savedTab = safeCall(() => localStorage.getItem("moexlab_active_tab"));
   if (global.location.pathname === "/") trackVirtualPage(savedTab || "portfolio");
