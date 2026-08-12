@@ -553,7 +553,6 @@
     const originalTileMount = CE.ChartTile.prototype.mount;
     CE.ChartTile.prototype.mount = function (container) {
       const result = originalTileMount.apply(this, arguments);
-      patchHandles(this.drawingMgr);
       const button = container && container.querySelector('[data-role="fs"]');
       if (button && !button.dataset.editorFullscreenWired) {
         const tileFullscreen = button.onclick;
@@ -580,7 +579,6 @@
     const result = originalBuild.apply(this, arguments);
     buildTradingViewRail(this);
     renderObjectToolbar(this);
-    patchAllManagers(this);
     return result;
   };
 
@@ -588,8 +586,7 @@
     const originalRenderProps = Page._renderProps;
     Page._renderProps = function () {
       const result = originalRenderProps.apply(this, arguments);
-      patchAllManagers(this);
-      refreshTradingViewRail(this);
+        refreshTradingViewRail(this);
       renderObjectToolbar(this);
       return result;
     };
@@ -602,8 +599,7 @@
       deactivateEveryTool(this, { deselectActive: false });
       closeToolFlyout(this);
       const result = originalSetActiveTile.apply(this, arguments);
-      patchAllManagers(this);
-      refreshTradingViewRail(this);
+        refreshTradingViewRail(this);
       renderObjectToolbar(this);
       return result;
     };
