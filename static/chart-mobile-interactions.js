@@ -39,7 +39,15 @@
         const pos = this._relXY(mouseLike);
         const hit = this.activeTool ? null : this.hitTest(pos.x, pos.y);
 
-        if (!this.activeTool && !hit) return;
+        // Empty-chart touches must stay available to Lightweight Charts for
+        // pan/zoom. Still remember a possible TAP, though: if the finger is
+        // released without moving, it behaves like TradingView and clears the
+        // selected drawing. A drag cancels this candidate and remains pure pan.
+        if (!this.activeTool && !hit) {
+          this._mobileEmptyTapCandidate = { x: pos.x, y: pos.y, time: Date.now() };
+          return;
+        }
+        this._mobileEmptyTapCandidate = null;
 
         e.preventDefault();
         e.stopPropagation();
@@ -64,24 +72,43 @@
       }, { passive: false, capture: true });
 
       el.addEventListener("touchmove", (e) => {
-        if (!this._mobileTouchActive) return;
         const touch = firstTouch(e);
         if (!touch) return;
+        if (!this._mobileTouchActive) {
+          const candidate = this._mobileEmptyTapCandidate;
+          if (candidate) {
+            const pos = this._relXY(asMouseLike(touch));
+            if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) > 10) this._mobileEmptyTapCandidate = null;
+          }
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         this._onMouseMove(asMouseLike(touch));
       }, { passive: false, capture: true });
 
-      const finishTouch = (e) => {
-        if (!this._mobileTouchActive) return;
+      const finishTouch = (e, canceled) => {
+        if (!this._mobileTouchActive) {
+          const candidate = this._mobileEmptyTapCandidate;
+          if (!canceled && candidate && Date.now() - candidate.time < 500) {
+            const touch = firstTouch(e);
+            if (touch) {
+              const pos = this._relXY(asMouseLike(touch));
+              if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) <= 10) this.select(null);
+            }
+          }
+          this._mobileEmptyTapCandidate = null;
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         this._onMouseUp();
         this._mobileTouchActive = false;
         this._pointerInside = false;
+        this._mobileEmptyTapCandidate = null;
       };
-      el.addEventListener("touchend", finishTouch, { passive: false, capture: true });
-      el.addEventListener("touchcancel", finishTouch, { passive: false, capture: true });
+      el.addEventListener("touchend", (e) => finishTouch(e, false), { passive: false, capture: true });
+      el.addEventListener("touchcancel", (e) => finishTouch(e, true), { passive: false, capture: true });
     };
 
     // TradingView's "Keep drawing" mode: normally a completed drawing returns
@@ -359,9 +386,11 @@
         display: flex;
         align-items: center;
         gap: 5px;
+        width: max-content;
         max-width: calc(100% - 130px);
         min-height: 42px;
         padding: 5px 7px;
+        box-sizing: border-box;
         border: 1px solid rgba(140,154,186,.25);
         border-radius: 10px;
         background: rgba(20,26,42,.96);
@@ -387,6 +416,7 @@
       #chartsRoot .tv-obj-control,
       #chartsRoot .tv-obj-btn {
         flex: 0 0 auto;
+        width: auto !important;
         min-width: 34px;
         height: 30px;
         border: 1px solid rgba(140,154,186,.18);
@@ -395,11 +425,14 @@
         color: #dbe1ed;
         font: 600 12px/1 system-ui, sans-serif;
       }
+      #chartsRoot .tv-obj-control[data-tv-prop-width] { width: 58px !important; }
+      #chartsRoot .tv-obj-control[data-tv-prop-dash] { width: 54px !important; }
       #chartsRoot .tv-obj-btn { cursor: pointer; padding: 0 8px; }
       #chartsRoot .tv-obj-btn:hover { background: rgba(124,140,255,.13); }
       #chartsRoot .tv-obj-btn.danger:hover { color: #ff8f9d; background: rgba(255,100,120,.10); }
       #chartsRoot .tv-color {
-        width: 32px;
+        width: 32px !important;
+        min-width: 32px;
         padding: 3px;
         cursor: pointer;
       }
@@ -474,11 +507,18 @@
         #chartsRoot .tv-object-toolbar {
           top: 58px;
           left: 53px;
-          right: 8px;
+          right: auto;
           transform: none;
-          max-width: none;
+          width: max-content;
+          max-width: calc(100vw - 72px);
+          min-height: 38px;
+          gap: 4px;
+          padding: 4px 5px;
         }
-        #chartsRoot .tv-object-name { max-width: 105px; }
+        #chartsRoot .tv-object-name { display: none; }
+        #chartsRoot .tv-obj-control,
+        #chartsRoot .tv-obj-btn { height: 30px; min-width: 32px; }
+        #chartsRoot .tv-obj-btn { padding: 0 7px; }
       }
     `;
     document.head.appendChild(style);
