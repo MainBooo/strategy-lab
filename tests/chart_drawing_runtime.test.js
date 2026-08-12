@@ -35,6 +35,9 @@ class FakeTarget {
       metaKey: false,
       shiftKey: false,
       key: "",
+      cancelable: true,
+      touches: [],
+      changedTouches: [],
       defaultPrevented: false,
       propagationStopped: false,
       preventDefault() { this.defaultPrevented = true; },
@@ -100,6 +103,14 @@ function send(target, type, x, y, time, pointerType = "touch", pointerId = 1) {
   return target.dispatch(type, { clientX: x, clientY: y, timeStamp: time, pointerType, pointerId });
 }
 
+function makeTouch(identifier, x, y) {
+  return { identifier, clientX: x, clientY: y };
+}
+
+function sendTouch(target, type, touches, changedTouches, time) {
+  return target.dispatch(type, { touches, changedTouches, timeStamp: time });
+}
+
 function tap(env, x, y, time, pointerType = "touch", pointerId = 1) {
   const down = send(env.container, "pointerdown", x, y, time, pointerType, pointerId);
   const up = send(windowTarget, "pointerup", x, y, time + 40, pointerType, pointerId);
@@ -111,6 +122,40 @@ function drag(env, x1, y1, x2, y2, time, pointerType = "touch", pointerId = 1) {
   const move = send(windowTarget, "pointermove", x2, y2, time + 80, pointerType, pointerId);
   const up = send(windowTarget, "pointerup", x2, y2, time + 120, pointerType, pointerId);
   return { down, move, up };
+}
+
+function pointsFor(tool) {
+  const n = TOOL_DEFS[tool].anchorCount;
+  if (n === 1) return [{ time: 60, price: 100 }];
+  if (n === 3) return [{ time: 40, price: 100 }, { time: 160, price: 180 }, { time: 100, price: 230 }];
+  if (n < 0) return [{ time: 40, price: 100 }, { time: 100, price: 180 }, { time: 160, price: 120 }];
+  return [{ time: 40, price: 100 }, { time: 160, price: 180 }];
+}
+
+function findBodyPoint(env, drawing) {
+  if (drawing.type === "text" || drawing.type === "note") {
+    drawing._lastBox = { x1: 55, y1: 80, x2: 150, y2: 120 };
+    return { x: 100, y: 100 };
+  }
+  for (let y = 20; y <= 360; y += 5) {
+    for (let x = 20; x <= 760; x += 5) {
+      const hit = env.manager.hitTest(x, y, { pointerType: "touch" });
+      if (hit && hit.id === drawing.id && hit.handle == null) return { x, y };
+    }
+  }
+  throw new Error(`${drawing.type}: no body hit point found`);
+}
+
+function touchDragDrawing(env, drawing, start, dx = 30, dy = 25, touchId = 41, pointerId = 1) {
+  const t0 = makeTouch(touchId, start.x, start.y);
+  const touchStart = sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  const pointerDown = send(env.container, "pointerdown", start.x, start.y, 1010, "touch", pointerId);
+  const t1 = makeTouch(touchId, start.x + dx, start.y + dy);
+  const touchMove = sendTouch(windowTarget, "touchmove", [t1], [t1], 1060);
+  const pointerMove = send(windowTarget, "pointermove", start.x + dx, start.y + dy, 1070, "touch", pointerId);
+  const pointerUp = send(windowTarget, "pointerup", start.x + dx, start.y + dy, 1100, "touch", pointerId);
+  const touchEnd = sendTouch(windowTarget, "touchend", [], [t1], 1110);
+  return { touchStart, pointerDown, touchMove, pointerMove, pointerUp, touchEnd };
 }
 
 const allTools = [
@@ -381,13 +426,6 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
 
 // Outside tap is a byte-for-byte geometry/properties no-op for every editable drawing type.
 {
-  const pointsFor = (tool) => {
-    const n = TOOL_DEFS[tool].anchorCount;
-    if (n === 1) return [{ time: 30, price: 60 }];
-    if (n === 3) return [{ time: 20, price: 30 }, { time: 90, price: 100 }, { time: 120, price: 170 }];
-    if (n < 0) return [{ time: 20, price: 30 }, { time: 60, price: 90 }, { time: 100, price: 40 }];
-    return [{ time: 20, price: 30 }, { time: 100, price: 120 }];
-  };
   for (const tool of allTools) {
     const env = makeManager();
     const d = env.manager.addDrawing(tool, pointsFor(tool));
@@ -398,30 +436,150 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   }
 }
 
-// Two managers never share draft/selection/geometry state.
+// Selected Rectangle body touch drag: Safari guard owns the native gesture,
+// then Pointer Events alone transition into DRAG_OBJECT and translate both anchors.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  const before = JSON.parse(JSON.stringify(d.points));
+  const events = touchDragDrawing(env, d, { x: 100, y: 150 }, 35, 30, 51);
+  assert.strictEqual(events.touchStart.defaultPrevented, true);
+  assert.strictEqual(events.touchMove.defaultPrevented, true);
+  assert.strictEqual(events.pointerDown.defaultPrevented, true);
+  assert.strictEqual(events.pointerMove.defaultPrevented, true);
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(d.points)),
+    before.map((p) => ({ time: p.time + 35, price: p.price + 30 })),
+  );
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED);
+  assert.strictEqual(env.manager._ownedTouchIds.size, 0);
+}
+
+// Rectangle handle keeps priority over the selected body and only resizes one anchor.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  const before = JSON.parse(JSON.stringify(d.points));
+  const t0 = makeTouch(52, 40, 80);
+  const start = sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  send(env.container, "pointerdown", 40, 80, 1010);
+  const t1 = makeTouch(52, 75, 120);
+  sendTouch(windowTarget, "touchmove", [t1], [t1], 1060);
+  send(windowTarget, "pointermove", 75, 120, 1070);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_HANDLE);
+  send(windowTarget, "pointerup", 75, 120, 1100);
+  sendTouch(windowTarget, "touchend", [], [t1], 1110);
+  assert.strictEqual(start.defaultPrevented, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(d.points[0])), { time: 75, price: 120 });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(d.points[1])), before[1]);
+}
+
+// Safari touch guard suppresses native scrolling for body hits across every
+// drawing type, while Pointer Events remain the only geometry state machine.
+for (const tool of allTools) {
+  const env = makeManager();
+  const d = env.manager.addDrawing(tool, pointsFor(tool));
+  const start = findBodyPoint(env, d);
+  const before = JSON.stringify(d.points);
+  const events = touchDragDrawing(env, d, start, 30, 25, 100 + allTools.indexOf(tool));
+  assert.strictEqual(events.touchStart.defaultPrevented, true, `${tool}: touchstart not guarded`);
+  assert.strictEqual(events.touchMove.defaultPrevented, true, `${tool}: touchmove not guarded`);
+  assert.notStrictEqual(JSON.stringify(d.points), before, `${tool}: body drag did not change geometry`);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED, `${tool}: did not return to SELECTED`);
+  assert.strictEqual(env.manager._ownedTouchIds.size, 0, `${tool}: touch ownership leaked`);
+}
+
+// Tap without drag still suppresses Safari page scroll while leaving geometry byte-for-byte unchanged.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  const before = JSON.stringify(d.points);
+  const t0 = makeTouch(61, 100, 150);
+  const start = sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  send(env.container, "pointerdown", 100, 150, 1010);
+  const t1 = makeTouch(61, 105, 154);
+  const move = sendTouch(windowTarget, "touchmove", [t1], [t1], 1040);
+  send(windowTarget, "pointermove", 105, 154, 1050);
+  send(windowTarget, "pointerup", 105, 154, 1080);
+  sendTouch(windowTarget, "touchend", [], [t1], 1090);
+  assert.strictEqual(start.defaultPrevented, true);
+  assert.strictEqual(move.defaultPrevented, true);
+  assert.strictEqual(JSON.stringify(d.points), before);
+}
+
+// Empty chart after selection stays owned by Lightweight Charts, including native touch scrolling/pan.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  env.manager.select(d.id);
+  const t0 = makeTouch(62, 700, 350);
+  const start = sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  const down = send(env.container, "pointerdown", 700, 350, 1010);
+  const t1 = makeTouch(62, 730, 370);
+  const touchMove = sendTouch(windowTarget, "touchmove", [t1], [t1], 1060);
+  const pointerMove = send(windowTarget, "pointermove", 730, 370, 1070);
+  send(windowTarget, "pointerup", 730, 370, 1100);
+  sendTouch(windowTarget, "touchend", [], [t1], 1110);
+  assert.strictEqual(start.defaultPrevented, false);
+  assert.strictEqual(down.defaultPrevented, false);
+  assert.strictEqual(touchMove.defaultPrevented, false);
+  assert.strictEqual(pointerMove.defaultPrevented, false);
+  assert.strictEqual(env.manager._pointerSession, null);
+  assert.strictEqual(env.manager._ownedTouchIds.size, 0);
+}
+
+// Pointercancel rolls edited geometry back, releases capture and clears Safari touch ownership.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  const before = JSON.stringify(d.points);
+  const t0 = makeTouch(63, 100, 150);
+  const start = sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  send(env.container, "pointerdown", 100, 150, 1010);
+  const t1 = makeTouch(63, 150, 190);
+  sendTouch(windowTarget, "touchmove", [t1], [t1], 1050);
+  send(windowTarget, "pointermove", 150, 190, 1060);
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.DRAG_OBJECT);
+  send(windowTarget, "pointercancel", 150, 190, 1080);
+  sendTouch(windowTarget, "touchcancel", [], [t1], 1090);
+  assert.strictEqual(start.defaultPrevented, true);
+  assert.strictEqual(JSON.stringify(d.points), before);
+  assert.strictEqual(env.container.captured.size, 0);
+  assert.strictEqual(env.manager._ownedTouchIds.size, 0);
+}
+
+// Two managers never share draft/selection/geometry or Safari touch ownership.
 {
   const a = makeManager();
   const b = makeManager();
-  a.manager.setTool("trend_line");
-  drag(a, 20, 20, 100, 100, 1000);
-  assert.strictEqual(a.manager.drawings.length, 1);
-  assert.strictEqual(b.manager.drawings.length, 0);
-  assert.strictEqual(b.manager.activeTool, null);
-  assert.strictEqual(b.manager.draft, null);
+  const ad = a.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  a.manager.select(ad.id);
+  const t0 = makeTouch(64, 700, 350);
+  const startB = sendTouch(b.container, "touchstart", [t0], [t0], 1000);
+  const moveB = sendTouch(windowTarget, "touchmove", [makeTouch(64, 730, 370)], [makeTouch(64, 730, 370)], 1050);
+  sendTouch(windowTarget, "touchend", [], [makeTouch(64, 730, 370)], 1100);
+  assert.strictEqual(startB.defaultPrevented, false);
+  assert.strictEqual(moveB.defaultPrevented, false);
+  assert.strictEqual(a.manager._ownedTouchIds.size, 0);
+  assert.strictEqual(b.manager._ownedTouchIds.size, 0);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(ad.points)), [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
 }
 
-// Destroy is deterministic: listeners/capture/navigation ownership are cleared.
+// Destroy is deterministic: listeners/capture/navigation/touch ownership are cleared.
 {
   const env = makeManager();
-  env.manager.setTool("trend_line");
-  send(env.container, "pointerdown", 20, 20, 1000);
+  const d = env.manager.addDrawing("rectangle", [{ time: 40, price: 80 }, { time: 180, price: 220 }]);
+  const t0 = makeTouch(65, 100, 150);
+  sendTouch(env.container, "touchstart", [t0], [t0], 1000);
+  send(env.container, "pointerdown", 100, 150, 1010);
   assert.ok(env.container.captured.has(1));
+  assert.ok(env.manager._ownedTouchIds.has(65));
   env.manager.destroy();
   assert.strictEqual(env.container.captured.size, 0);
   assert.strictEqual(env.container.style.touchAction, "");
+  assert.strictEqual(env.manager._ownedTouchIds.size, 0);
   assert.strictEqual(env.manager._domCleanup, null);
 }
-
 
 // CRUD/history transitions keep explicit interaction state authoritative.
 {

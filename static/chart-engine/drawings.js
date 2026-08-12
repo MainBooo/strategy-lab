@@ -162,6 +162,12 @@
       this._domCleanup = null;
       this._baseTouchAction = "";
       this._chartNavigationLocked = false;
+      // Touch Events are deliberately NOT a second interaction pipeline.
+      // This set only remembers which native Safari touch sequence started on
+      // a drawing/handle so touchstart/touchmove can suppress page scrolling.
+      // Pointer Events remain authoritative for selection, state, geometry,
+      // history and persistence.
+      this._ownedTouchIds = new Set();
       this._destroyed = false;
 
       this.primitive = new DrawingLayerPrimitive(this);
@@ -514,6 +520,9 @@
       const onPointerUp = (e) => this._onPointerUp(e);
       const onPointerCancel = (e) => this._onPointerCancel(e);
       const onLostPointerCapture = (e) => this._onLostPointerCapture(e);
+      const onTouchStart = (e) => this._onTouchStartGuard(e);
+      const onTouchMove = (e) => this._onTouchMoveGuard(e);
+      const onTouchEnd = (e) => this._onTouchEndGuard(e);
       const onDblClick = (e) => this._onDblClick(e);
       const onKeyDown = (e) => this._onKeyDown(e);
 
@@ -524,6 +533,13 @@
       global.addEventListener("pointerup", onPointerUp, { capture: true });
       global.addEventListener("pointercancel", onPointerCancel, { capture: true });
       el.addEventListener("lostpointercapture", onLostPointerCapture);
+      // Safari may latch native page scrolling before a pointerdown handler can
+      // dynamically switch touch-action. These non-passive Touch Events do
+      // browser-gesture suppression only; they never mutate drawing geometry.
+      el.addEventListener("touchstart", onTouchStart, { capture: true, passive: false });
+      global.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+      global.addEventListener("touchend", onTouchEnd, { capture: true, passive: false });
+      global.addEventListener("touchcancel", onTouchEnd, { capture: true, passive: false });
       el.addEventListener("dblclick", onDblClick);
       el.addEventListener("keydown", onKeyDown);
 
@@ -535,6 +551,10 @@
         global.removeEventListener("pointerup", onPointerUp, true);
         global.removeEventListener("pointercancel", onPointerCancel, true);
         el.removeEventListener("lostpointercapture", onLostPointerCapture);
+        el.removeEventListener("touchstart", onTouchStart, true);
+        global.removeEventListener("touchmove", onTouchMove, true);
+        global.removeEventListener("touchend", onTouchEnd, true);
+        global.removeEventListener("touchcancel", onTouchEnd, true);
         el.removeEventListener("dblclick", onDblClick);
         el.removeEventListener("keydown", onKeyDown);
         this._domCleanup = null;
@@ -549,6 +569,56 @@
 
     _eventTime(e) {
       return e && Number.isFinite(e.timeStamp) ? e.timeStamp : Date.now();
+    }
+
+    _touchHitOwnsGesture(touch) {
+      if (!touch) return false;
+      if (this.activeTool) return true;
+      const pos = this._relXY(touch);
+      return !!this.hitTest(pos.x, pos.y, { pointerType: "touch" });
+    }
+
+    _preventTouchDefault(e) {
+      if (e && e.cancelable !== false && e.preventDefault) e.preventDefault();
+    }
+
+    _onTouchStartGuard(e) {
+      const touches = Array.from((e && e.touches) || []);
+      const changed = Array.from((e && e.changedTouches) || []);
+      if (!changed.length) return;
+
+      // Preserve chart pinch/zoom when a gesture starts as multi-touch on an
+      // empty chart. Once one touch already belongs to a drawing, however,
+      // the whole native sequence stays suppressed until that owned touch ends.
+      if (!this._ownedTouchIds.size && touches.length > 1) return;
+
+      for (const touch of changed) {
+        const id = touch && touch.identifier;
+        if (id == null || this._ownedTouchIds.has(id)) continue;
+        if (!this._ownedTouchIds.size && this._touchHitOwnsGesture(touch)) {
+          this._ownedTouchIds.add(id);
+        }
+      }
+      if (this._ownedTouchIds.size) this._preventTouchDefault(e);
+    }
+
+    _onTouchMoveGuard(e) {
+      if (!this._ownedTouchIds.size) return;
+      const touches = Array.from((e && e.touches) || []);
+      const changed = Array.from((e && e.changedTouches) || []);
+      const belongsToDrawing = touches.concat(changed).some((touch) => touch && this._ownedTouchIds.has(touch.identifier));
+      if (belongsToDrawing) this._preventTouchDefault(e);
+    }
+
+    _onTouchEndGuard(e) {
+      const changed = Array.from((e && e.changedTouches) || []);
+      for (const touch of changed) {
+        if (touch && touch.identifier != null) this._ownedTouchIds.delete(touch.identifier);
+      }
+    }
+
+    _clearTouchOwnership() {
+      this._ownedTouchIds.clear();
     }
 
     _setInteractionState(next) {
@@ -630,6 +700,7 @@
       this._dragState = null;
       this._draftPreviewPoint = null;
       this._releasePointer(session.pointerId);
+      if (session.pointerType === "touch") this._clearTouchOwnership();
       this._syncInteractionMode();
       if (emit) this._emit({ pointerCanceled: rollback });
     }
@@ -1007,6 +1078,7 @@
       this._lastDrawingTap = null;
       this.activeTool = null;
       this.draft = null;
+      this._clearTouchOwnership();
       this._setNavigationLocked(false);
       this.series.detachPrimitive(this.primitive);
     }

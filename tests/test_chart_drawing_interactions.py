@@ -15,15 +15,24 @@ def source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_drawing_engine_owns_one_pointer_event_pipeline():
+def test_drawing_engine_owns_pointer_pipeline_with_touch_guard_only_for_native_scroll():
     js = source(ENGINE)
     for event in ("pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture"):
         assert f'addEventListener("{event}"' in js
     assert 'addEventListener("mousedown"' not in js
-    assert 'addEventListener("touchstart"' not in js
-    assert 'addEventListener("touchmove"' not in js
-    assert 'addEventListener("touchend"' not in js
+    for event in ("touchstart", "touchmove", "touchend", "touchcancel"):
+        assert f'addEventListener("{event}"' in js
+    assert "passive: false" in js
     assert "setTimeout(" not in js
+
+    start = js[js.index("    _onTouchStartGuard(e) {"):js.index("    _onTouchMoveGuard(e) {")]
+    move = js[js.index("    _onTouchMoveGuard(e) {"):js.index("    _onTouchEndGuard(e) {")]
+    for body in (start, move):
+        assert "_preventTouchDefault" in body
+        for forbidden in ("_applyDrag(", "_placePoint(", "updateDrawing(", "_pushHistory(", "_emit(", "this.select("):
+            assert forbidden not in body
+    assert "this._ownedTouchIds.add" in start
+    assert "this.hitTest" not in move
 
 
 def test_mobile_module_no_longer_monkey_patches_drawing_manager_input():
@@ -100,6 +109,13 @@ def test_dynamic_touch_ownership_preserves_cursor_navigation():
     assert 'el.style.touchAction = locked ? "none"' in js
     assert "{ handleScroll: false, handleScale: false }" in js
     assert "{ handleScroll: true, handleScale: true }" in js
+    assert "this._ownedTouchIds = new Set()" in js
+    assert 'el.addEventListener("touchstart", onTouchStart, { capture: true, passive: false })' in js
+    assert 'global.addEventListener("touchmove", onTouchMove, { capture: true, passive: false })' in js
+    assert 'return !!this.hitTest(pos.x, pos.y, { pointerType: "touch" });' in js
+    assert "touches.length > 1" in js
+    assert "if (session.pointerType === \"touch\") this._clearTouchOwnership();" in js
+
     empty = js[js.index("// Empty Cursor-mode gesture belongs to Lightweight Charts."):
                js.index("_movementThreshold(pointerType)")]
     assert "preventDefault" not in empty
@@ -188,15 +204,18 @@ def test_event_level_runtime_regression_suite_exists():
     for scenario in (
         "Current Ray regression",
         "Tool A -> Tool B",
-        "Pointer cancel",
-        "Outside tap is a byte-for-byte",
+        "Selected Rectangle body touch drag",
+        "Rectangle handle keeps priority",
+        "Safari touch guard suppresses native scrolling",
+        "Tap without drag",
+        "Empty chart after selection",
+        "Pointercancel rolls edited geometry back",
         "Two managers never share",
         "Keep Drawing",
     ):
         assert scenario in js
     for pointer_type in ('"touch"', '"mouse"', '"pen"'):
         assert pointer_type in js
-
 
 
 def test_crud_and_history_keep_explicit_interaction_state_in_sync():
@@ -215,7 +234,6 @@ def test_mobile_escape_claims_event_before_delegating_to_engine():
     start = js.index(marker)
     body = js[start: js.index("refreshTradingViewRail(page)", start)]
     assert body.index("event.preventDefault()") < body.index("event.stopPropagation()") < body.index("dm.handleEscape()")
-
 
 
 def test_touch_object_editing_and_textual_editor_contracts():
