@@ -58,7 +58,7 @@
     { id: "extended_line", label: "Расширенная линия", icon: "⟷" },
     { id: "parallel_channel", label: "Параллельный канал", icon: "═" },
     { id: "rectangle", label: "Прямоугольник", icon: "▭" },
-    { id: "circle", label: "Окружность", icon: "◯" },
+    { id: "circle", label: "Эллипс", icon: "◯" },
     { id: "polyline", label: "Полилиния (Enter/двойной клик — завершить)", icon: "⌁" },
     { id: "text", label: "Текст", icon: "T" },
     { id: "note", label: "Заметка", icon: "🗨" },

@@ -104,6 +104,7 @@
       this._tailInFlight = false;
       this._tailVisHandler = null;
       this._tailFailures = 0;
+      this._activatePointerHandler = null;
     }
 
     // ---------------------------------------------------------- wiring ----
@@ -207,7 +208,10 @@
       });
       container.querySelector('[data-role="fs"]').onclick = (e) => { e.stopPropagation(); this.fsCtrl.toggle(); };
       container.querySelector('[data-role="close"]').onclick = (e) => { e.stopPropagation(); if (onClose) onClose(this); };
-      if (onActivate) container.addEventListener("mousedown", () => onActivate(this));
+      if (onActivate) {
+        this._activatePointerHandler = () => onActivate(this);
+        container.addEventListener("pointerdown", this._activatePointerHandler, true);
+      }
 
       this.updateHeader();
       this._loadOrInit();
@@ -272,8 +276,13 @@
 
     destroy() {
       this._stopTailRefresh();
+      if (this.el && this._activatePointerHandler) {
+        this.el.removeEventListener("pointerdown", this._activatePointerHandler, true);
+      }
+      this._activatePointerHandler = null;
       if (this.indicator) this.indicator.destroy();
       if (this.fsCtrl) this.fsCtrl.destroy();
+      if (this.drawingMgr) this.drawingMgr.destroy();
       if (this.core) this.core.destroy();
       this.core = null;
       this.indicatorMgr = null;

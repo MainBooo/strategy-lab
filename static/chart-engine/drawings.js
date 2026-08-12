@@ -15,26 +15,43 @@
   const HIT_TOLERANCE_PX = 6;
   const HANDLE_RADIUS_PX = 5;
 
-  // pointsNeeded: -1 means "unbounded" (polyline) - finished explicitly via
-  // dblclick or Enter, not by reaching a fixed count (see _placePoint).
+  const INTERACTION_STATES = Object.freeze({
+    NAVIGATE: "NAVIGATE",
+    TOOL_ARMED: "TOOL_ARMED",
+    PLACING: "PLACING",
+    SELECTED: "SELECTED",
+    DRAG_OBJECT: "DRAG_OBJECT",
+    DRAG_HANDLE: "DRAG_HANDLE",
+    TEXT_EDIT: "TEXT_EDIT",
+  });
+  const POINTER_DRAG_THRESHOLD_PX = 4;
+  const TOUCH_DRAG_THRESHOLD_PX = 10;
+  const TAP_MAX_MS = 500;
+  const DOUBLE_TAP_MS = 360;
+  const DOUBLE_TAP_PX = 28;
+
+  // Creation metadata is deliberately richer than anchor count.  The state
+  // machine uses it to decide whether a gesture can create a second anchor on
+  // release, whether completion is automatic, and how an unfinished object is
+  // previewed.  Persistence remains the same {time, price} points model.
   const TOOL_DEFS = {
-    horizontal_line: { pointsNeeded: 1, label: "Горизонтальный уровень" },
-    vertical_line: { pointsNeeded: 1, label: "Вертикальная линия" },
-    trend_line: { pointsNeeded: 2, label: "Линия тренда" },
-    ray: { pointsNeeded: 2, label: "Луч" },
-    extended_line: { pointsNeeded: 2, label: "Расширенная линия" },
-    parallel_channel: { pointsNeeded: 3, label: "Параллельный канал" },
-    rectangle: { pointsNeeded: 2, label: "Прямоугольная зона" },
-    circle: { pointsNeeded: 2, label: "Окружность" },
-    polyline: { pointsNeeded: -1, label: "Полилиния" },
-    price_range: { pointsNeeded: 2, label: "Измерение" },
-    time_range: { pointsNeeded: 2, label: "Диапазон времени" },
-    text: { pointsNeeded: 1, label: "Текстовая заметка" },
-    note: { pointsNeeded: 1, label: "Заметка" },
-    fib_retracement: { pointsNeeded: 2, label: "Коррекция Фибоначчи" },
-    fib_extension: { pointsNeeded: 3, label: "Расширение Фибоначчи" },
-    long_position: { pointsNeeded: 2, label: "Long позиция" },
-    short_position: { pointsNeeded: 2, label: "Short позиция" },
+    horizontal_line: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", editAxis: "price", label: "Горизонтальный уровень" },
+    vertical_line: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", editAxis: "time", label: "Вертикальная линия" },
+    trend_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Линия тренда" },
+    ray: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Луч" },
+    extended_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Расширенная линия" },
+    parallel_channel: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Параллельный канал" },
+    rectangle: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Прямоугольная зона" },
+    circle: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", semanticShape: "ellipse", label: "Эллипс" },
+    polyline: { pointsNeeded: -1, anchorCount: -1, creationGesture: "multi-tap", dragStagePoints: 0, completion: "explicit", preview: "next-anchor", label: "Полилиния" },
+    price_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Диапазон цены" },
+    time_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Диапазон времени" },
+    text: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Текст" },
+    note: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Заметка" },
+    fib_retracement: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Коррекция Фибоначчи" },
+    fib_extension: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Расширение Фибоначчи" },
+    long_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Long позиция" },
+    short_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Short позиция" },
   };
 
   const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
@@ -132,6 +149,16 @@
       this._listeners = new Set();
       this._dragState = null;
       this._pointerInside = false;
+      this.interactionState = INTERACTION_STATES.NAVIGATE;
+      this.keepDrawing = false;
+      this._pointerSession = null;
+      this._emptyPointerTap = null;
+      this._lastDrawingTap = null;
+      this._draftPreviewPoint = null;
+      this._domCleanup = null;
+      this._baseTouchAction = "";
+      this._chartNavigationLocked = false;
+      this._destroyed = false;
 
       this.primitive = new DrawingLayerPrimitive(this);
       this.series.attachPrimitive(this.primitive);
@@ -141,14 +168,24 @@
 
     // ---- tool lifecycle ----
     setTool(type) {
-      this.activeTool = type;
+      if (this._pointerSession) this._endPointerSession({ rollback: true });
+      this.activeTool = type || null;
       this.draft = null;
-      this._emit();
+      this._draftPreviewPoint = null;
+      this._dragState = null;
+      this._emptyPointerTap = null;
+      this._lastDrawingTap = null;
+      this._syncInteractionMode();
+      this._emit({ toolChanged: true });
     }
 
     cancelDraft() {
+      if (this._pointerSession) this._endPointerSession({ rollback: true });
       this.draft = null;
-      this._emit();
+      this._draftPreviewPoint = null;
+      this._lastDrawingTap = null;
+      this._syncInteractionMode();
+      this._emit({ draftCanceled: true });
     }
 
     // ---- CRUD (with undo/redo) ----
@@ -176,6 +213,7 @@
       this.drawings.push(d);
       this._pushHistory(before);
       this.selectedId = d.id;
+      this._syncInteractionMode();
       this._emit({ created: d.id });
       return d;
     }
@@ -198,6 +236,7 @@
       const removedDrawing = this.drawings.find((d) => d.id === id);
       this.drawings = this.drawings.filter((d) => d.id !== id);
       if (this.selectedId === id) this.selectedId = null;
+      this._syncInteractionMode();
       this._pushHistory(before);
       // The removed drawing's _backendId travels in the event because it's
       // about to be gone from this.drawings - the listener (ChartTile,
@@ -216,7 +255,8 @@
     }
 
     select(id) {
-      this.selectedId = id;
+      this.selectedId = id || null;
+      if (!this.activeTool && !this._pointerSession) this._syncInteractionMode();
       this._emit();
     }
 
@@ -225,6 +265,8 @@
       const before = this._undoStack.pop();
       this._redoStack.push(this._snapshot());
       this.drawings = JSON.parse(before);
+      this.selectedId = null;
+      this._syncInteractionMode();
       this._emit({ history: true });
     }
 
@@ -233,6 +275,8 @@
       const next = this._redoStack.pop();
       this._undoStack.push(this._snapshot());
       this.drawings = JSON.parse(next);
+      this.selectedId = null;
+      this._syncInteractionMode();
       this._emit({ history: true });
     }
 
@@ -258,6 +302,8 @@
         _backendId: r.id,
       }));
       this._undoStack = []; this._redoStack = [];
+      this.selectedId = null;
+      this._syncInteractionMode();
       this._emit({ loaded: true });
     }
 
@@ -443,20 +489,46 @@
       return { time, price };
     }
 
-    // ---- DOM wiring: click-to-place, drag-to-edit, keyboard shortcuts ----
+    // ---- Pointer Events interaction state machine ----
     _bindDom() {
       const el = this.core.container;
       el.style.position = el.style.position || "relative";
       el.tabIndex = el.tabIndex >= 0 ? el.tabIndex : 0;
+      this._baseTouchAction = el.style.touchAction || "";
 
-      el.addEventListener("mouseenter", () => { this._pointerInside = true; });
-      el.addEventListener("mouseleave", () => { this._pointerInside = false; });
+      const onPointerEnter = () => { this._pointerInside = true; };
+      const onPointerLeave = () => { if (!this._pointerSession) this._pointerInside = false; };
+      const onPointerDown = (e) => this._onPointerDown(e);
+      const onPointerMove = (e) => this._onPointerMove(e);
+      const onPointerUp = (e) => this._onPointerUp(e);
+      const onPointerCancel = (e) => this._onPointerCancel(e);
+      const onLostPointerCapture = (e) => this._onLostPointerCapture(e);
+      const onDblClick = (e) => this._onDblClick(e);
+      const onKeyDown = (e) => this._onKeyDown(e);
 
-      el.addEventListener("mousedown", (e) => this._onMouseDown(e));
-      window.addEventListener("mousemove", (e) => this._onMouseMove(e));
-      window.addEventListener("mouseup", (e) => this._onMouseUp(e));
-      el.addEventListener("dblclick", (e) => this._onDblClick(e));
-      el.addEventListener("keydown", (e) => this._onKeyDown(e));
+      el.addEventListener("pointerenter", onPointerEnter);
+      el.addEventListener("pointerleave", onPointerLeave);
+      el.addEventListener("pointerdown", onPointerDown, { capture: true });
+      global.addEventListener("pointermove", onPointerMove, { capture: true });
+      global.addEventListener("pointerup", onPointerUp, { capture: true });
+      global.addEventListener("pointercancel", onPointerCancel, { capture: true });
+      el.addEventListener("lostpointercapture", onLostPointerCapture);
+      el.addEventListener("dblclick", onDblClick);
+      el.addEventListener("keydown", onKeyDown);
+
+      this._domCleanup = () => {
+        el.removeEventListener("pointerenter", onPointerEnter);
+        el.removeEventListener("pointerleave", onPointerLeave);
+        el.removeEventListener("pointerdown", onPointerDown, true);
+        global.removeEventListener("pointermove", onPointerMove, true);
+        global.removeEventListener("pointerup", onPointerUp, true);
+        global.removeEventListener("pointercancel", onPointerCancel, true);
+        el.removeEventListener("lostpointercapture", onLostPointerCapture);
+        el.removeEventListener("dblclick", onDblClick);
+        el.removeEventListener("keydown", onKeyDown);
+        this._domCleanup = null;
+      };
+      this._syncInteractionMode();
     }
 
     _relXY(e) {
@@ -464,73 +536,371 @@
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     }
 
-    _onMouseDown(e) {
-      const { x, y } = this._relXY(e);
-      if (this.activeTool) {
-        this._placePoint(x, y);
-        return;
-      }
-      const hit = this.hitTest(x, y);
-      if (hit) {
-        this.select(hit.id);
-        const d = this.drawings.find((dd) => dd.id === hit.id);
-        if (d && !d.locked) {
-          this._dragState = { id: hit.id, handle: hit.handle, startX: x, startY: y, origPoints: JSON.parse(JSON.stringify(d.points)), origProps: JSON.parse(JSON.stringify(d.properties)) };
-        }
-      } else {
-        this.select(null);
+    _eventTime(e) {
+      return e && Number.isFinite(e.timeStamp) ? e.timeStamp : Date.now();
+    }
+
+    _setInteractionState(next) {
+      this.interactionState = next;
+    }
+
+    _setNavigationLocked(locked) {
+      locked = !!locked;
+      if (this._chartNavigationLocked === locked) return;
+      this._chartNavigationLocked = locked;
+      const el = this.core && this.core.container;
+      if (el) el.style.touchAction = locked ? "none" : (this._baseTouchAction || "");
+      if (this.chart && typeof this.chart.applyOptions === "function") {
+        this.chart.applyOptions(locked
+          ? { handleScroll: false, handleScale: false }
+          : { handleScroll: true, handleScale: true });
       }
     }
 
-    _placePoint(x, y) {
-      const def = TOOL_DEFS[this.activeTool];
-      if (!def) return;
+    _syncInteractionMode() {
+      const ownsGesture = !!(this._pointerSession && this._pointerSession.owned);
+      this._setNavigationLocked(!!this.activeTool || ownsGesture);
+      if (this._pointerSession) return;
+      if (this.activeTool) this._setInteractionState(this.draft ? INTERACTION_STATES.PLACING : INTERACTION_STATES.TOOL_ARMED);
+      else if (this.selectedId) this._setInteractionState(INTERACTION_STATES.SELECTED);
+      else this._setInteractionState(INTERACTION_STATES.NAVIGATE);
+    }
+
+    _capturePointer(e) {
+      const el = this.core.container;
+      if (el.setPointerCapture) {
+        try { el.setPointerCapture(e.pointerId); } catch (err) { /* capture can fail during teardown */ }
+      }
+    }
+
+    _releasePointer(pointerId) {
+      const el = this.core && this.core.container;
+      if (!el || pointerId == null || !el.releasePointerCapture) return;
+      try { el.releasePointerCapture(pointerId); } catch (err) { /* already released */ }
+    }
+
+    _claimPointer(e, session) {
+      this._pointerSession = Object.assign({
+        pointerId: e.pointerId,
+        pointerType: e.pointerType || "mouse",
+        owned: true,
+        startedAt: this._eventTime(e),
+        moved: false,
+      }, session || {});
+      this._capturePointer(e);
+      this._setNavigationLocked(true);
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
+    }
+
+    _rollbackPointerSession(session) {
+      if (!session) return;
+      if (session.kind === "create") {
+        this.drawings = JSON.parse(session.drawingsBefore);
+        this._undoStack = session.undoBefore.slice();
+        this._redoStack = session.redoBefore.slice();
+        this.draft = session.draftBefore ? JSON.parse(JSON.stringify(session.draftBefore)) : null;
+        this.activeTool = session.activeToolBefore;
+        this.selectedId = session.selectedBefore;
+      } else if (session.kind === "edit" && session.drawingBefore) {
+        const d = this.drawings.find((item) => item.id === session.drawingBefore.id);
+        if (d) {
+          d.points = JSON.parse(JSON.stringify(session.drawingBefore.points));
+          d.properties = JSON.parse(JSON.stringify(session.drawingBefore.properties));
+        }
+      }
+    }
+
+    _endPointerSession({ rollback = false, emit = false } = {}) {
+      const session = this._pointerSession;
+      if (!session) return;
+      this._pointerSession = null;
+      if (rollback) this._rollbackPointerSession(session);
+      this._dragState = null;
+      this._draftPreviewPoint = null;
+      this._releasePointer(session.pointerId);
+      this._syncInteractionMode();
+      if (emit) this._emit({ pointerCanceled: rollback });
+    }
+
+    _isDoublePlacementTap(e, pos, def) {
+      if (!def || def.completion !== "explicit" || !this.draft || this.draft.points.length < 2) return false;
+      const prev = this._lastDrawingTap;
+      if (!prev || prev.tool !== this.activeTool || prev.pointerType !== (e.pointerType || "mouse")) return false;
+      const dt = this._eventTime(e) - prev.time;
+      return dt >= 0 && dt <= DOUBLE_TAP_MS
+        && Math.hypot(pos.x - prev.x, pos.y - prev.y) <= DOUBLE_TAP_PX;
+    }
+
+    _recordPlacementTap(e, pos, tool) {
+      this._lastDrawingTap = {
+        time: this._eventTime(e),
+        x: pos.x,
+        y: pos.y,
+        tool,
+        pointerType: e.pointerType || "mouse",
+      };
+    }
+
+    _onPointerDown(e) {
+      if (e.isPrimary === false || this._pointerSession) return;
+      const pos = this._relXY(e);
+
+      if (this.activeTool) {
+        const def = TOOL_DEFS[this.activeTool];
+        const draftBefore = this.draft ? JSON.parse(JSON.stringify(this.draft)) : null;
+        const anchorsBefore = draftBefore ? draftBefore.points.length : 0;
+        const tool = this.activeTool;
+        this._claimPointer(e, {
+          kind: "create",
+          tool,
+          startX: pos.x,
+          startY: pos.y,
+          anchorsBefore,
+          activeToolBefore: tool,
+          selectedBefore: this.selectedId,
+          draftBefore,
+          drawingsBefore: this._snapshot(),
+          undoBefore: this._undoStack.slice(),
+          redoBefore: this._redoStack.slice(),
+          provisionalIndex: null,
+          completedByDoubleTap: false,
+        });
+
+        if (this._isDoublePlacementTap(e, pos, def)) {
+          this._pointerSession.completedByDoubleTap = true;
+          this._finishDraft();
+          this._lastDrawingTap = null;
+          return;
+        }
+
+        this._placePoint(pos.x, pos.y, { deferFinish: true });
+        if (anchorsBefore > 0 && this.draft) {
+          this._pointerSession.provisionalIndex = this.draft.points.length - 1;
+        }
+        this._setInteractionState(INTERACTION_STATES.PLACING);
+        return;
+      }
+
+      const hit = this.hitTest(pos.x, pos.y);
+      if (hit) {
+        const d = this.drawings.find((item) => item.id === hit.id);
+        this.select(hit.id);
+        this._claimPointer(e, {
+          kind: d && !d.locked ? "edit" : "select",
+          hit,
+          startX: pos.x,
+          startY: pos.y,
+          historyBefore: this._snapshot(),
+          drawingBefore: d ? {
+            id: d.id,
+            points: JSON.parse(JSON.stringify(d.points)),
+            properties: JSON.parse(JSON.stringify(d.properties)),
+          } : null,
+        });
+        return;
+      }
+
+      // Empty Cursor-mode gesture belongs to Lightweight Charts. We only keep
+      // enough information to distinguish a stationary outside tap from pan.
+      this._emptyPointerTap = {
+        pointerId: e.pointerId,
+        x: pos.x,
+        y: pos.y,
+        startedAt: this._eventTime(e),
+      };
+    }
+
+    _movementThreshold(pointerType) {
+      return pointerType === "touch" ? TOUCH_DRAG_THRESHOLD_PX : POINTER_DRAG_THRESHOLD_PX;
+    }
+
+    _updateDraftPointAt(index, x, y) {
+      if (!this.draft || index == null || !this.draft.points[index]) return;
       let { time, price } = this.pixelToPoint(x, y);
       if (time == null || price == null) return;
       ({ time, price } = this.snapPoint(time, price));
-      this.draft = this.draft || { type: this.activeTool, points: [] };
-      this.draft.points.push({ time, price });
-      // Unbounded tools (polyline, pointsNeeded === -1) never auto-finish on
-      // point count - only _finishDraft() (dblclick/Enter) closes them, so
-      // an arbitrary number of vertices can be placed first.
-      if (def.pointsNeeded > 0 && this.draft.points.length >= def.pointsNeeded) {
-        this._finishDraft();
-      }
+      this.draft.points[index] = { time, price };
       this._emit();
     }
 
-    /** Commits the in-progress draft as a real drawing. Used both by the
-     * fixed-point-count auto-finish in _placePoint() and by the explicit
-     * dblclick/Enter finish for unbounded tools (polyline) - requires at
-     * least 2 points there, since a single-point "polyline" isn't a line. */
-    _finishDraft() {
-      if (!this.draft) return;
-      const def = TOOL_DEFS[this.draft.type];
-      if (def.pointsNeeded < 0 && this.draft.points.length < 2) return;
-      const points = this.draft.points;
-      const type = this.draft.type;
-      this.draft = null;
-      let properties;
-      if (type === "long_position" || type === "short_position") properties = defaultProperties(type);
-      this.addDrawing(type, points, properties);
-      this.activeTool = null;
-    }
+    _onPointerMove(e) {
+      const session = this._pointerSession;
+      if (session && session.pointerId === e.pointerId) {
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        const pos = this._relXY(e);
+        const distance = Math.hypot(pos.x - session.startX, pos.y - session.startY);
+        if (distance > this._movementThreshold(session.pointerType)) session.moved = true;
 
-    _onMouseMove(e) {
-      const { x, y } = this._relXY(e);
-      if (this._dragState) {
-        this._applyDrag(x, y);
+        if (session.kind === "create") {
+          if (session.provisionalIndex != null) this._updateDraftPointAt(session.provisionalIndex, pos.x, pos.y);
+          else if (this.draft) {
+            this._draftPreviewPoint = { x: pos.x, y: pos.y };
+            this._emit();
+          }
+          return;
+        }
+
+        if (session.kind === "edit" && session.moved) {
+          if (!this._dragState) {
+            const d = this.drawings.find((item) => item.id === session.hit.id);
+            if (!d) return;
+            this._dragState = {
+              id: session.hit.id,
+              handle: session.hit.handle,
+              startX: session.startX,
+              startY: session.startY,
+              origPoints: JSON.parse(JSON.stringify(session.drawingBefore.points)),
+              origProps: JSON.parse(JSON.stringify(session.drawingBefore.properties)),
+              beforeSnapshot: session.historyBefore,
+            };
+            this._setInteractionState(session.hit.handle == null
+              ? INTERACTION_STATES.DRAG_OBJECT
+              : INTERACTION_STATES.DRAG_HANDLE);
+          }
+          this._applyDrag(pos.x, pos.y);
+        }
         return;
       }
-      if (!this._pointerInside) { this.hoverId = null; return; }
-      if (this.activeTool && this.draft) { this._draftPreviewPoint = { x, y }; this._emit(); return; }
-      const hit = this.hitTest(x, y);
-      const newHover = hit ? hit.id : null;
-      if (newHover !== this.hoverId) { this.hoverId = newHover; this._emit(); }
+
+      const candidate = this._emptyPointerTap;
+      if (candidate && candidate.pointerId === e.pointerId) {
+        const pos = this._relXY(e);
+        if (Math.hypot(pos.x - candidate.x, pos.y - candidate.y) > this._movementThreshold(e.pointerType || "mouse")) {
+          this._emptyPointerTap = null;
+        }
+        return;
+      }
+
+      if ((e.pointerType || "mouse") === "mouse" && this._pointerInside) {
+        const pos = this._relXY(e);
+        const hit = this.hitTest(pos.x, pos.y);
+        const nextHover = hit ? hit.id : null;
+        if (nextHover !== this.hoverId) {
+          this.hoverId = nextHover;
+          this._emit();
+        }
+      }
+    }
+
+    _finishCreatePointer(e, session) {
+      const pos = this._relXY(e);
+      const def = TOOL_DEFS[session.tool];
+      if (!def) return;
+
+      if (session.completedByDoubleTap) return;
+
+      if (session.anchorsBefore === 0 && session.moved && def.dragStagePoints >= 2 && this.draft) {
+        this._placePoint(pos.x, pos.y, { deferFinish: true });
+      }
+
+      if (def.anchorCount > 0 && this.draft && this.draft.points.length >= def.anchorCount) {
+        this._finishDraft();
+      } else if (def.completion === "explicit" && !session.moved && this.draft) {
+        this._recordPlacementTap(e, pos, session.tool);
+      } else if (def.completion !== "explicit") {
+        this._lastDrawingTap = null;
+      }
+    }
+
+    _finishEditPointer(session) {
+      if (!this._dragState) return;
+      const id = this._dragState.id;
+      const before = this._dragState.beforeSnapshot;
+      this._dragState = null;
+      if (before != null) this._pushHistory(before);
+      this._emit({ updated: id, pointerDrag: true });
+    }
+
+    _onPointerUp(e) {
+      const session = this._pointerSession;
+      if (session && session.pointerId === e.pointerId) {
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        if (session.kind === "create") this._finishCreatePointer(e, session);
+        else if (session.kind === "edit") this._finishEditPointer(session);
+        this._endPointerSession();
+        return;
+      }
+
+      const candidate = this._emptyPointerTap;
+      if (!candidate || candidate.pointerId !== e.pointerId) return;
+      const pos = this._relXY(e);
+      if (this._eventTime(e) - candidate.startedAt <= TAP_MAX_MS
+        && Math.hypot(pos.x - candidate.x, pos.y - candidate.y) <= this._movementThreshold(e.pointerType || "mouse")) {
+        // Strong invariant: an empty-chart tap in Cursor mode only deselects.
+        this.select(null);
+      }
+      this._emptyPointerTap = null;
+    }
+
+    _onPointerCancel(e) {
+      const session = this._pointerSession;
+      if (session && session.pointerId === e.pointerId) {
+        if (e.preventDefault) e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        this._endPointerSession({ rollback: true, emit: true });
+        return;
+      }
+      if (this._emptyPointerTap && this._emptyPointerTap.pointerId === e.pointerId) this._emptyPointerTap = null;
+    }
+
+    _onLostPointerCapture(e) {
+      const session = this._pointerSession;
+      if (session && session.pointerId === e.pointerId) this._endPointerSession({ rollback: true, emit: true });
+    }
+
+    _placePoint(x, y, { deferFinish = false } = {}) {
+      const type = this.draft ? this.draft.type : this.activeTool;
+      const def = TOOL_DEFS[type];
+      if (!def) return null;
+      let { time, price } = this.pixelToPoint(x, y);
+      if (time == null || price == null) return null;
+      ({ time, price } = this.snapPoint(time, price));
+      this.draft = this.draft || { type, points: [] };
+      this.draft.points.push({ time, price });
+      this._draftPreviewPoint = null;
+      this._setInteractionState(INTERACTION_STATES.PLACING);
+      if (!deferFinish && def.anchorCount > 0 && this.draft.points.length >= def.anchorCount) {
+        return this._finishDraft();
+      }
+      this._emit();
+      return null;
+    }
+
+    _finishDraft() {
+      if (!this.draft) return null;
+      const def = TOOL_DEFS[this.draft.type];
+      if (!def) return null;
+      if (def.completion === "explicit" && this.draft.points.length < 2) return null;
+      if (def.anchorCount > 0 && this.draft.points.length < def.anchorCount) return null;
+
+      const points = this.draft.points.map((point) => ({ time: point.time, price: point.price }));
+      const type = this.draft.type;
+      let properties;
+      if (type === "long_position" || type === "short_position") properties = defaultProperties(type);
+      if (type === "text" || type === "note") {
+        properties = defaultProperties(type);
+        this._setInteractionState(INTERACTION_STATES.TEXT_EDIT);
+        if (typeof global.prompt === "function") {
+          const next = global.prompt(type === "text" ? "Текст" : "Текст заметки", properties.text || "");
+          if (next != null) properties.text = next;
+        }
+      }
+
+      this.draft = null;
+      this._draftPreviewPoint = null;
+      this.activeTool = this.keepDrawing ? type : null;
+      const drawing = this.addDrawing(type, points, properties);
+      this._lastDrawingTap = null;
+      this._syncInteractionMode();
+      return drawing;
     }
 
     _applyDrag(x, y) {
-      const { id, handle, startX, startY, origPoints, origProps } = this._dragState;
+      const { id, handle, startX, startY, origPoints, origProps } = this._dragState || {};
+      if (!id) return;
       const d = this.drawings.find((dd) => dd.id === id);
       if (!d) return;
       const { time, price } = this.pixelToPoint(x, y);
@@ -544,50 +914,58 @@
           const pct = Math.abs(price - entry) / entry * 100;
           d.properties = Object.assign({}, origProps, handle === "stop" ? { stopOffsetPct: pct } : { takeOffsetPct: pct });
         } else {
-          const dt = time - this.pixelToPoint(startX, startY).time;
-          d.points = origPoints.map((p) => ({ time: p.time + dt, price: p.price }));
+          const start = this.pixelToPoint(startX, startY);
+          const dt = time - start.time;
+          const dp = price - start.price;
+          d.points = origPoints.map((p) => ({
+            time: p.time != null ? p.time + dt : null,
+            price: p.price != null ? p.price + dp : null,
+          }));
         }
       } else if (handle != null) {
         const snapped = this.snapPoint(time, price);
         const pts = origPoints.slice();
-        pts[handle] = d.type === "horizontal_line" ? { time: pts[handle].time, price: snapped.price }
-          : d.type === "vertical_line" ? { time: snapped.time, price: pts[handle].price }
+        const editAxis = TOOL_DEFS[d.type] && TOOL_DEFS[d.type].editAxis;
+        pts[handle] = editAxis === "price" ? { time: pts[handle].time, price: snapped.price }
+          : editAxis === "time" ? { time: snapped.time, price: pts[handle].price }
           : snapped;
         d.points = pts;
       } else {
-        // whole-shape drag: translate all points by the same time/price delta
         const start = this.pixelToPoint(startX, startY);
         const dt = time - start.time, dp = price - start.price;
-        d.points = origPoints.map((p) => ({ time: p.time != null ? p.time + dt : null, price: p.price != null ? p.price + dp : null }));
+        const editAxis = TOOL_DEFS[d.type] && TOOL_DEFS[d.type].editAxis;
+        d.points = origPoints.map((p) => ({
+          time: p.time == null ? null : (editAxis === "price" ? p.time : p.time + dt),
+          price: p.price == null ? null : (editAxis === "time" ? p.price : p.price + dp),
+        }));
       }
+      // Preview-only notification. Persistence receives one {updated:id} on
+      // pointerup, never one network save trigger per pointermove.
       this._emit();
     }
 
-    _onMouseUp() {
-      if (this._dragState) {
-        const id = this._dragState.id;
-        const d = this.drawings.find((dd) => dd.id === id);
-        this._dragState = null;
-        if (d) this._pushHistory(this._snapshot()); // coalesce: history already reflects final state, this just closes the drag
-        this._emit();
+    handleEscape() {
+      const def = this.draft && TOOL_DEFS[this.draft.type];
+      if (def && def.completion === "explicit" && this.draft.points.length >= 2) {
+        this._finishDraft();
+        return "finished";
       }
+      this.setTool(null);
+      return "canceled";
     }
 
     _onDblClick(e) {
-      // Mid-draft (polyline): double-click both places one last vertex at
-      // the cursor (matching the click that triggered it) and immediately
-      // finishes the shape, rather than requiring a separate confirm step.
-      if (this.activeTool && this.draft && TOOL_DEFS[this.draft.type].pointsNeeded < 0) {
+      if (this.activeTool && this.draft && TOOL_DEFS[this.draft.type].completion === "explicit") {
+        if (e.preventDefault) e.preventDefault();
         this._finishDraft();
-        this._emit();
         return;
       }
       const { x, y } = this._relXY(e);
       const hit = this.hitTest(x, y);
       if (hit) {
         const d = this.drawings.find((dd) => dd.id === hit.id);
-        if (d && (d.type === "text" || d.type === "note")) {
-          const next = prompt("Текст заметки", d.properties.text || "");
+        if (d && (d.type === "text" || d.type === "note") && typeof global.prompt === "function") {
+          const next = global.prompt("Текст заметки", d.properties.text || "");
           if (next != null) this.updateDrawing(d.id, { properties: { text: next } });
         }
       }
@@ -596,19 +974,27 @@
     _onKeyDown(e) {
       if (!this._pointerInside && document.activeElement !== this.core.container) return;
       const meta = e.ctrlKey || e.metaKey;
-      if (e.key === "Enter" && this.draft && TOOL_DEFS[this.draft.type].pointsNeeded < 0) {
-        e.preventDefault(); this._finishDraft(); this._emit(); return;
+      if (e.key === "Enter" && this.draft && TOOL_DEFS[this.draft.type].completion === "explicit") {
+        e.preventDefault(); this._finishDraft(); return;
       }
-      if (e.key === "Escape") { this.draft = null; this.activeTool = null; this._emit(); return; }
+      if (e.key === "Escape") { e.preventDefault(); this.handleEscape(); return; }
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedId) {
         e.preventDefault(); this.removeDrawing(this.selectedId); return;
       }
       if (meta && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
       if (meta && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { e.preventDefault(); this.redo(); return; }
-      if (meta && e.key.toLowerCase() === "d" && this.selectedId) { e.preventDefault(); this.duplicateDrawing(this.selectedId); return; }
+      if (meta && e.key.toLowerCase() === "d" && this.selectedId) { e.preventDefault(); this.duplicateDrawing(this.selectedId); }
     }
 
     destroy() {
+      this._destroyed = true;
+      if (this._pointerSession) this._endPointerSession({ rollback: true });
+      if (this._domCleanup) this._domCleanup();
+      this._emptyPointerTap = null;
+      this._lastDrawingTap = null;
+      this.activeTool = null;
+      this.draft = null;
+      this._setNavigationLocked(false);
       this.series.detachPrimitive(this.primitive);
     }
 
@@ -782,9 +1168,13 @@
       // one) without needing every individual ops.push() above to remember
       // to include it - dash/d weren't set per-case, showPrice reads d
       // directly at draw time.
-      for (let i = startLen; i < ops.length; i++) { ops[i].dash = dash; ops[i].d = ops[i].d || d; }
-      if (ops.length && selected) ops[ops.length - 1].selected = true;
-      if (ops.length && hovered) ops[ops.length - 1].hovered = true;
+      for (let i = startLen; i < ops.length; i++) {
+        ops[i].dash = dash;
+        ops[i].d = ops[i].d || d;
+        ops[i].showHandles = !!(selected || isDraft);
+        if (selected) ops[i].selected = true;
+        if (hovered) ops[i].hovered = true;
+      }
     }
 
     renderer() {
@@ -809,29 +1199,30 @@
       ctx.lineWidth = (op.width || 1) * r;
       ctx.strokeStyle = op.color;
       ctx.fillStyle = op.color;
+      const drawHandle = (...args) => { if (op.showHandles) this._handle(...args); };
       ctx.setLineDash((op.dash || []).map((v) => v * r));
       if (op.hovered && !op.selected) { ctx.shadowColor = op.color; ctx.shadowBlur = 4 * r; }
 
       switch (op.kind) {
         case "hline":
           ctx.beginPath(); ctx.moveTo(0, op.y * rv); ctx.lineTo(w, op.y * rv); ctx.stroke();
-          this._handle(ctx, w - 10 * r, op.y * rv, r);
+          if (op.handle) drawHandle(ctx, op.handle.x * r, op.handle.y * rv, r);
           if (op.label) this._text(ctx, op.label, 8 * r, op.y * rv - 6 * rv, op.color);
           break;
         case "vline":
           ctx.beginPath(); ctx.moveTo(op.x * r, 0); ctx.lineTo(op.x * r, h); ctx.stroke();
-          this._handle(ctx, op.x * r, 16 * rv, r);
+          if (op.handle) drawHandle(ctx, op.handle.x * r, op.handle.y * rv, r);
           break;
         case "segment":
           ctx.beginPath(); ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv); ctx.stroke();
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         case "rect": {
           const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
           const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
           if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = op.alpha ?? 1; }
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "channel": {
@@ -847,7 +1238,7 @@
             }
             ctx.beginPath(); ctx.moveTo(op.ox1 * r, op.oy1 * rv); ctx.lineTo(op.ox2 * r, op.oy2 * rv); ctx.stroke();
           }
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "ellipse": {
@@ -856,14 +1247,14 @@
           ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
           if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fill(); ctx.globalAlpha = op.alpha ?? 1; }
           ctx.stroke();
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "polyline": {
           ctx.beginPath();
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "timerange": {
@@ -878,7 +1269,7 @@
           const bars = this.manager.core.candles.filter((c) => c.time >= Math.min(t1, t2) && c.time <= Math.max(t1, t2)).length;
           const label = `${fmtDuration(seconds)} · ${bars} бар.`;
           this._text(ctx, label, (x1 + x2) / 2 - 30 * r, 16 * rv, op.color);
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, op.h * rv / 2, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "note": {
@@ -887,7 +1278,7 @@
           ctx.font = `${13 * rv}px Inter, sans-serif`;
           ctx.fillText(op.d.properties.text || "", px + 10 * r, py + 4 * rv);
           op.d._lastBox = { x1: op.x - 6, y1: op.y - 10, x2: op.x + 10 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 10 };
-          this._handle(ctx, px, py, r);
+          drawHandle(ctx, px, py, r);
           break;
         }
         case "fib": {
@@ -899,7 +1290,7 @@
             ctx.beginPath(); ctx.moveTo(op.x1 * r, y * rv); ctx.lineTo(x2, y * rv); ctx.stroke();
             this._text(ctx, `${(level * 100).toFixed(1)}% · ${price.toFixed(2)}`, op.x1 * r + 4 * r, y * rv - 4 * rv, op.color);
           });
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "measure": {
@@ -916,7 +1307,7 @@
           const pct = priceA ? ((priceB - priceA) / priceA * 100) : 0;
           const label = `${(priceB - priceA) >= 0 ? "+" : ""}${(priceB - priceA).toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
           this._text(ctx, label, (x1 + x2) / 2 - 40 * r, (y1 + y2) / 2, up ? theme.up : theme.down);
-          op.handles.forEach((p) => p && this._handle(ctx, p.x * r, p.y * rv, r));
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "text":
@@ -924,7 +1315,7 @@
           ctx.fillStyle = op.color;
           ctx.fillText(op.d.properties.text || "", op.x * r + 4 * r, op.y * rv);
           op.d._lastBox = { x1: op.x, y1: op.y - 16, x2: op.x + ctx.measureText(op.d.properties.text || "").width / r + 8, y2: op.y + 4 };
-          this._handle(ctx, op.x * r, op.y * rv, r);
+          drawHandle(ctx, op.x * r, op.y * rv, r);
           break;
         case "position":
           this._drawPosition(ctx, op, r, rv);
@@ -998,12 +1389,20 @@
       const stopPct = entry ? (riskAbs / entry * 100) : 0;
       this._text(ctx, `Цель: ${rewardAbs.toFixed(2)} (${takePct.toFixed(2)}%)`, x1 + 6 * r, yTake * rv - 6 * rv, theme.up);
       this._text(ctx, `Стоп: ${riskAbs.toFixed(2)} (${stopPct.toFixed(2)}%)  R/R ${rr.toFixed(2)}`, x1 + 6 * r, yStop * rv + 14 * rv, theme.down);
+      if (op.showHandles) {
+        const midX = (x1 + x2) / 2;
+        this._handle(ctx, x1, yEntry * rv, r);
+        this._handle(ctx, x2, yEntry * rv, r);
+        this._handle(ctx, midX, yStop * rv, r);
+        this._handle(ctx, midX, yTake * rv, r);
+      }
     }
   }
 
   global.ChartEngine.Drawings = {
     DrawingManager,
     TOOL_DEFS,
+    INTERACTION_STATES,
     defaultProperties,
     positionStopPrice,
     positionTakePrice,
