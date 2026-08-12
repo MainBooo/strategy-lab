@@ -994,7 +994,11 @@
             onClose: (t) => this._closeTile(t.id),
           });
           tile.setSecurities(this.securities);
-          tile.drawingMgr.onChange(() => {
+          tile.drawingMgr.onChange((mgr, detail) => {
+            // Canvas preview/hover updates happen at pointer frequency. They
+            // must repaint the primitive, not rebuild the properties/object
+            // DOM while the user is dragging on iPhone.
+            if (detail && (detail.preview || detail.hover)) return;
             if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
           });
           tile.onRangeChange((range) => { if (this.syncFlags.scroll || this.syncFlags.zoom) this._broadcastRange(tile, range); });
@@ -1239,6 +1243,7 @@
       const d = dm ? dm.drawings.find((x) => x.id === dm.selectedId) : null;
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
+      const isTextual = d.type === "text" || d.type === "note";
       const tile = this.activeTile;
       const tfList = tile ? tile.listTimeframes() : [];
       const visibleTf = d.properties.visibleTimeframes || [];
@@ -1248,21 +1253,28 @@
           <span class="ca-more-heading">Координаты</span>
           ${d.points.map((p, i) => `<div class="ca-coord-row">${d.points.length > 1 ? `#${i + 1}: ` : ""}${fmtCoordTime(p.time)}${p.price != null ? ` · ${fmtPrice(p.price)}` : ""}</div>`).join("")}
         </div>
+        ${isTextual ? `
+          <label class="ca-prop-text-label">${d.type === "note" ? "Текст заметки" : "Текст"}
+            <textarea id="propText" class="ca-prop-textarea" rows="4" placeholder="Введите текст…"></textarea>
+          </label>
+          <div class="muted-note ca-prop-text-hint">Текст сохраняется после завершения ввода.</div>
+        ` : ""}
         <label>Цвет <input type="color" id="propColor" value="${toHex(d.properties.color)}"></label>
-        <label>Толщина <input type="number" id="propWidth" min="1" max="6" value="${d.properties.width || 1}"></label>
-        <label>Стиль линии
-          <select id="propDash">
-            <option value="solid" ${d.properties.dash !== "dashed" && d.properties.dash !== "dotted" ? "selected" : ""}>Сплошная</option>
-            <option value="dashed" ${d.properties.dash === "dashed" ? "selected" : ""}>Штрихи</option>
-            <option value="dotted" ${d.properties.dash === "dotted" ? "selected" : ""}>Точки</option>
-          </select>
-        </label>
+        ${!isTextual ? `
+          <label>Толщина <input type="number" id="propWidth" min="1" max="6" value="${d.properties.width || 1}"></label>
+          <label>Стиль линии
+            <select id="propDash">
+              <option value="solid" ${d.properties.dash !== "dashed" && d.properties.dash !== "dotted" ? "selected" : ""}>Сплошная</option>
+              <option value="dashed" ${d.properties.dash === "dashed" ? "selected" : ""}>Штрихи</option>
+              <option value="dotted" ${d.properties.dash === "dotted" ? "selected" : ""}>Точки</option>
+            </select>
+          </label>
+        ` : ""}
         <label>Прозрачность <input type="range" id="propOpacity" min="10" max="100" value="${Math.round((d.properties.opacity != null ? d.properties.opacity : 1) * 100)}"></label>
         <label class="toggle"><input type="checkbox" id="propLocked" ${d.locked ? "checked" : ""}><span>Заблокировать</span></label>
         <label class="toggle"><input type="checkbox" id="propHidden" ${d.hidden ? "checked" : ""}><span>Скрыть</span></label>
-        <label class="toggle"><input type="checkbox" id="propShowPrice" ${d.properties.showPrice ? "checked" : ""}><span>Показывать цену</span></label>
+        ${!isTextual ? `<label class="toggle"><input type="checkbox" id="propShowPrice" ${d.properties.showPrice ? "checked" : ""}><span>Показывать цену</span></label>` : ""}
         <label>Подпись (для списка объектов) <input type="text" id="propLabel" value="${escapeAttr(d.properties.label || "")}"></label>
-        ${d.type === "text" || d.type === "note" ? `<label>Текст <input type="text" id="propText" value="${escapeAttr(d.properties.text || "")}"></label>` : ""}
         ${isPosition ? `
           <label>Кол-во <input type="number" id="propQty" value="${d.properties.quantity || 0}"></label>
           <label>Стоп, % <input type="number" step="0.1" id="propStopPct" value="${(d.properties.stopOffsetPct || 0).toFixed(2)}"></label>
@@ -1278,20 +1290,31 @@
         <button class="secondary" id="propDuplicate">Дублировать (Ctrl+D)</button>
         <button class="secondary" id="propDelete">Удалить</button>
       `;
-      panel.querySelector("#propColor").oninput = (e) => dm.updateDrawing(d.id, { properties: { color: e.target.value } });
-      panel.querySelector("#propWidth").oninput = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
-      panel.querySelector("#propDash").onchange = (e) => dm.updateDrawing(d.id, { properties: { dash: e.target.value } });
-      panel.querySelector("#propOpacity").oninput = (e) => dm.updateDrawing(d.id, { properties: { opacity: Number(e.target.value) / 100 } });
+
+      // updateDrawing() re-renders this panel. Commit-style change events keep
+      // the focused textarea/number input alive while the user is typing.
+      const colorInput = panel.querySelector("#propColor");
+      if (colorInput) colorInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { color: e.target.value } });
+      const widthInput = panel.querySelector("#propWidth");
+      if (widthInput) widthInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
+      const dashInput = panel.querySelector("#propDash");
+      if (dashInput) dashInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { dash: e.target.value } });
+      const opacityInput = panel.querySelector("#propOpacity");
+      if (opacityInput) opacityInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { opacity: Number(e.target.value) / 100 } });
       panel.querySelector("#propLocked").onchange = (e) => dm.updateDrawing(d.id, { locked: e.target.checked });
       panel.querySelector("#propHidden").onchange = (e) => dm.updateDrawing(d.id, { hidden: e.target.checked });
-      panel.querySelector("#propShowPrice").onchange = (e) => dm.updateDrawing(d.id, { properties: { showPrice: e.target.checked } });
-      panel.querySelector("#propLabel").oninput = (e) => { dm.updateDrawing(d.id, { properties: { label: e.target.value } }); this._renderObjects(); };
+      const showPrice = panel.querySelector("#propShowPrice");
+      if (showPrice) showPrice.onchange = (e) => dm.updateDrawing(d.id, { properties: { showPrice: e.target.checked } });
+      panel.querySelector("#propLabel").onchange = (e) => { dm.updateDrawing(d.id, { properties: { label: e.target.value } }); this._renderObjects(); };
       const textInput = panel.querySelector("#propText");
-      if (textInput) textInput.oninput = (e) => dm.updateDrawing(d.id, { properties: { text: e.target.value } });
+      if (textInput) {
+        textInput.value = d.properties.text || "";
+        textInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { text: e.target.value } });
+      }
       if (isPosition) {
-        panel.querySelector("#propQty").oninput = (e) => dm.updateDrawing(d.id, { properties: { quantity: Number(e.target.value) } });
-        panel.querySelector("#propStopPct").oninput = (e) => dm.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
-        panel.querySelector("#propTakePct").oninput = (e) => dm.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
+        panel.querySelector("#propQty").onchange = (e) => dm.updateDrawing(d.id, { properties: { quantity: Number(e.target.value) } });
+        panel.querySelector("#propStopPct").onchange = (e) => dm.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
+        panel.querySelector("#propTakePct").onchange = (e) => dm.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
       }
       const tfAll = panel.querySelector("#propTfAll");
       const tfGrid = panel.querySelector("#propTfGrid");

@@ -376,15 +376,20 @@
     const color = /^#[0-9a-f]{6}$/i.test(drawing.properties.color || "") ? drawing.properties.color : "#7c8cff";
     const width = Number(drawing.properties.width || 1);
     const dash = drawing.properties.dash || "solid";
+    const isTextual = drawing.type === "text" || drawing.type === "note";
     bar.innerHTML = `
       <span class="tv-object-name" title="${escapeHtml(drawingLabel(drawing))}">${escapeHtml(drawingLabel(drawing))}</span>
       <input class="tv-obj-control tv-color" data-tv-prop-color type="color" value="${color}" title="Цвет">
-      <select class="tv-obj-control" data-tv-prop-width title="Толщина">${[1,2,3,4].map((n) => `<option value="${n}" ${width === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
-      <select class="tv-obj-control" data-tv-prop-dash title="Стиль линии">
-        <option value="solid" ${dash === "solid" ? "selected" : ""}>—</option>
-        <option value="dashed" ${dash === "dashed" ? "selected" : ""}>– –</option>
-        <option value="dotted" ${dash === "dotted" ? "selected" : ""}>···</option>
-      </select>
+      ${isTextual ? `
+        <button class="tv-obj-btn" data-tv-obj-edit-text title="Редактировать текст" aria-label="Редактировать текст">✎</button>
+      ` : `
+        <select class="tv-obj-control" data-tv-prop-width title="Толщина">${[1,2,3,4].map((n) => `<option value="${n}" ${width === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
+        <select class="tv-obj-control" data-tv-prop-dash title="Стиль линии">
+          <option value="solid" ${dash === "solid" ? "selected" : ""}>—</option>
+          <option value="dashed" ${dash === "dashed" ? "selected" : ""}>– –</option>
+          <option value="dotted" ${dash === "dotted" ? "selected" : ""}>···</option>
+        </select>
+      `}
       <button class="tv-obj-btn ${drawing.locked ? "active" : ""}" data-tv-obj-lock title="${drawing.locked ? "Разблокировать" : "Заблокировать"}">${drawing.locked ? "🔒" : "🔓"}</button>
       <button class="tv-obj-btn" data-tv-obj-duplicate title="Дублировать">⧉</button>
       <button class="tv-obj-btn" data-tv-obj-more title="Свойства">⚙</button>
@@ -392,9 +397,26 @@
     `;
     bar.classList.remove("hidden");
 
-    bar.querySelector("[data-tv-prop-color]").oninput = (e) => dm.updateDrawing(drawing.id, { properties: { color: e.target.value } });
-    bar.querySelector("[data-tv-prop-width]").onchange = (e) => dm.updateDrawing(drawing.id, { properties: { width: Number(e.target.value) } });
-    bar.querySelector("[data-tv-prop-dash]").onchange = (e) => dm.updateDrawing(drawing.id, { properties: { dash: e.target.value } });
+    const colorInput = bar.querySelector("[data-tv-prop-color]");
+    if (colorInput) colorInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { color: e.target.value } });
+    const widthInput = bar.querySelector("[data-tv-prop-width]");
+    if (widthInput) widthInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { width: Number(e.target.value) } });
+    const dashInput = bar.querySelector("[data-tv-prop-dash]");
+    if (dashInput) dashInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { dash: e.target.value } });
+    const editTextButton = bar.querySelector("[data-tv-obj-edit-text]");
+    if (editTextButton) editTextButton.onclick = () => {
+      if (typeof page._setBottomCollapsed === "function") page._setBottomCollapsed(false);
+      const tab = page.root.querySelector('.ca-side-tab[data-side="props"]');
+      if (tab) tab.click();
+      if (typeof page._renderProps === "function") page._renderProps();
+      requestAnimationFrame(() => {
+        const field = page.root.querySelector("#propText");
+        if (!field) return;
+        field.focus();
+        if (typeof field.setSelectionRange === "function") field.setSelectionRange(field.value.length, field.value.length);
+        if (typeof field.scrollIntoView === "function") field.scrollIntoView({ block: "nearest" });
+      });
+    };
     bar.querySelector("[data-tv-obj-lock]").onclick = () => dm.updateDrawing(drawing.id, { locked: !drawing.locked });
     bar.querySelector("[data-tv-obj-duplicate]").onclick = () => dm.duplicateDrawing(drawing.id);
     bar.querySelector("[data-tv-obj-delete]").onclick = () => dm.removeDrawing(drawing.id);
@@ -533,6 +555,9 @@
       #chartsRoot .tv-indicator-title { font-size:13px; font-weight:700; color:#edf1fa; }
       #chartsRoot .tv-indicator-count { color:#7f8aa1; font-size:11px; }
       #chartsRoot .tv-indicator-search { width:100%; min-height:40px; margin:0 0 9px; padding:0 11px; border:1px solid rgba(140,154,186,.22); border-radius:8px; background:rgba(5,8,16,.42); color:#edf1fa; outline:none; font:500 13px system-ui,sans-serif; }
+      #chartsRoot .ca-prop-textarea { width:100%; min-height:84px; box-sizing:border-box; padding:10px 11px; border:1px solid rgba(140,154,186,.22); border-radius:8px; background:rgba(5,8,16,.42); color:#edf1fa; outline:none; resize:vertical; font:500 14px/1.4 system-ui,sans-serif; }
+      #chartsRoot .ca-prop-textarea:focus { border-color:rgba(124,140,255,.72); box-shadow:0 0 0 2px rgba(124,140,255,.12); }
+      #chartsRoot .ca-prop-text-hint { margin-top:-4px; margin-bottom:8px; }
       #chartsRoot .tv-indicator-tabs { display:flex; gap:4px; margin-bottom:8px; }
       #chartsRoot .tv-indicator-tab { padding:6px 9px; border:0; border-radius:7px; background:transparent; color:#8f9ab0; font-size:11px; font-weight:650; }
       #chartsRoot .tv-indicator-tab.active { color:#dfe5f5; background:rgba(124,140,255,.13); }

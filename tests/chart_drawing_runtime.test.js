@@ -315,6 +315,40 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   assert.strictEqual(v.manager.drawings[0].points[0].price, vp.price);
 }
 
+// Touch editing uses a forgiving hit corridor, and hidden handles on an
+// unselected object never resize it. First drag moves the whole object; once
+// selected, dragging a visible anchor edits only that anchor.
+{
+  const env = makeManager();
+  env.manager.setTool("trend_line");
+  drag(env, 20, 20, 120, 120, 1000);
+  const drawing = env.manager.drawings[0];
+  env.manager.select(null);
+
+  // 16px vertically off y=x is ~11.3px perpendicular: outside the old 6px
+  // mouse corridor, inside the touch corridor.
+  const touchGrab = drag(env, 70, 86, 100, 116, 2000);
+  assert.strictEqual(touchGrab.down.defaultPrevented, true);
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(drawing.points)),
+    [{ time: 50, price: 50 }, { time: 150, price: 150 }],
+  );
+
+  env.manager.select(null);
+  drag(env, 50, 50, 80, 80, 2800); // exact hidden anchor => whole-object move
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(drawing.points)),
+    [{ time: 80, price: 80 }, { time: 180, price: 180 }],
+  );
+
+  // The object is now selected, so the same anchor is an explicit edit handle.
+  drag(env, 80, 80, 105, 115, 3600);
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(drawing.points)),
+    [{ time: 105, price: 115 }, { time: 180, price: 180 }],
+  );
+}
+
 // Pointer cancel rolls creation/edit state back and releases capture.
 {
   const env = makeManager();
