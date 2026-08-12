@@ -1,0 +1,22 @@
+name: Temporary drawing object edit diagnostic
+on:
+  push:
+    branches: [fix/drawing-object-editing]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect drawing drag and properties code
+        run: |
+          set -euxo pipefail
+          echo '=== _applyDrag ==='
+          grep -n -A95 -B20 '_applyDrag(x, y)' static/chart-engine/drawings.js || true
+          echo '=== hitTest ==='
+          grep -n -A180 -B15 'hitTest(px, py)' static/chart-engine/drawings.js || true
+          echo '=== render props ==='
+          grep -n -A260 -B30 '_renderProps' static/chart-analysis.js || true
+          echo '=== text/note editor references ==='
+          grep -RniE 'Текст заметки|properties\.text|data-tv-prop|note|text' static/chart-analysis.js static/chart-mobile-interactions.js | head -220 || true
