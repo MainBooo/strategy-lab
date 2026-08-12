@@ -113,7 +113,11 @@
           <label>Стратегия <select id="tcStrategy"><option value="">Все стратегии</option></select></label>
           <label>Направление <select id="tcDirection"><option value="">Все</option><option value="long">Long</option><option value="short">Short</option></select></label>
           <label>Результат <select id="tcResult"><option value="">Все сделки</option><option value="true">Прибыльные</option><option value="false">Убыточные</option></select></label>
+          <label>Причина выхода <select id="tcExitReason"><option value="">Все причины</option><option value="take">Take-profit</option><option value="stop">Stop-loss</option><option value="breakeven">Breakeven</option><option value="max_holding">Макс. удержание</option><option value="end_of_period">Конец периода</option></select></label>
+          <label>С даты <input id="tcDateFrom" type="date"></label>
+          <label>По дату <input id="tcDateTo" type="date"></label>
           <label>№ сделки <input id="tcTradeNumber" type="number" min="1" placeholder="любая"></label>
+          <button class="secondary" id="tcClearFilters" title="Сбросить фильтры сделок">Сбросить фильтры</button>
           <button class="secondary" id="tcHideAll" title="Скрыть все сделки на графике">Скрыть сделки</button>
           <button class="secondary" id="tcResetRange" title="Вернуть масштаб графика к общему диапазону тестирования">К общему диапазону</button>
         </div>
@@ -167,7 +171,7 @@
         .map((t) => `<option value="${t}">${t}</option>`).join("");
       container.querySelector("#tcTicker").onchange = (e) => this.selectTicker(e.target.value);
 
-      ["tcStrategy", "tcDirection", "tcResult", "tcTradeNumber"].forEach((id) => {
+      ["tcStrategy", "tcDirection", "tcResult", "tcExitReason", "tcDateFrom", "tcDateTo", "tcTradeNumber"].forEach((id) => {
         container.querySelector("#" + id).addEventListener("input", () => this._applyFilters());
       });
       this._wireDisplayToggles(container);
@@ -175,6 +179,7 @@
       container.querySelector("#tcNext").onclick = () => this.selection.next();
       container.querySelector("#tcFsPrev").onclick = () => this.selection.prev();
       container.querySelector("#tcFsNext").onclick = () => this.selection.next();
+      container.querySelector("#tcClearFilters").onclick = () => this._clearFilters();
       container.querySelector("#tcHideAll").onclick = () => this._hideAllTrades();
       container.querySelector("#tcResetRange").onclick = () => this._resetRange();
       container.querySelector("#tcFsHideAll").onclick = () => { this._hideAllTrades(); this._closeFsSettings(); };
@@ -238,6 +243,21 @@
       const btn = this.container.querySelector("#tcFsSettingsBtn");
       if (panel) panel.classList.add("hidden");
       if (btn) btn.classList.remove("active");
+    },
+
+    _clearFilters() {
+      const el = (id) => this.container.querySelector("#" + id);
+      ["tcStrategy", "tcDirection", "tcResult", "tcExitReason", "tcDateFrom", "tcDateTo", "tcTradeNumber"].forEach((id) => {
+        const node = el(id);
+        if (node) node.value = "";
+      });
+      el("tcShowAll").checked = true;
+      el("tcShowAllFs").checked = true;
+      el("tcOnlySelected").checked = false;
+      el("tcOnlySelectedFs").checked = false;
+      this.selection.select(null);
+      this._applyFilters();
+      this._resetRange();
     },
 
     _hideAllTrades() {
@@ -374,12 +394,19 @@
       const strategyId = el("tcStrategy").value;
       const direction = el("tcDirection").value;
       const profitable = el("tcResult").value;
+      const exitReason = el("tcExitReason").value;
+      const dateFrom = el("tcDateFrom").value;
+      const dateTo = el("tcDateTo").value;
       const number = el("tcTradeNumber").value;
       this.selection.setFilters((t) => {
         if (strategyId && t.strategy_id !== strategyId) return false;
         if (direction && t.direction !== direction) return false;
         if (profitable === "true" && !(t.net_profit > 0)) return false;
         if (profitable === "false" && !(t.net_profit <= 0)) return false;
+        if (exitReason && t.exit_reason !== exitReason) return false;
+        const entryDate = String(t.entry_datetime || "").slice(0, 10);
+        if (dateFrom && entryDate && entryDate < dateFrom) return false;
+        if (dateTo && entryDate && entryDate > dateTo) return false;
         if (number && String(t.number) !== String(number)) return false;
         return true;
       });
@@ -492,6 +519,61 @@
       return best;
     },
   };
+
+  /**
+   * Result-card shortcut: after a portfolio backtest finishes, surface the
+   * graph as a first-class next action instead of making the user hunt for
+   * the same run in the history table. The backtest job already returns the
+   * persisted DB run id as run_id_db, so this opens the exact saved run and
+   * therefore the exact candles/trades used by the calculation.
+   */
+  function ensureBacktestChartAction(result) {
+    const resultsCard = document.getElementById("backtestResults");
+    const errors = document.getElementById("backtestErrors");
+    if (!resultsCard || !errors) return;
+
+    let wrap = document.getElementById("backtestTradeChartAction");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "backtestTradeChartAction";
+      wrap.className = "success-actions";
+      errors.insertAdjacentElement("afterend", wrap);
+    }
+
+    const runId = result && result.run_id_db;
+    const trades = Number(result && result.trades || 0);
+    const tickers = new Set((result && result.by_ticker || []).map((row) => row.ticker)).size;
+    wrap.innerHTML = `
+      <button class="primary" id="openBacktestTradeChartBtn" ${runId && trades ? "" : "disabled"}>Все сделки на графике${trades ? ` (${trades})` : ""}</button>
+      <span class="muted-note">${trades ? `${tickers} инструмент${tickers === 1 ? "" : tickers >= 2 && tickers <= 4 ? "а" : "ов"} · фильтры по стратегии, направлению, результату, причине выхода и датам` : "В этом запуске нет сделок для отображения."}</span>
+    `;
+
+    const btn = document.getElementById("openBacktestTradeChartBtn");
+    if (!btn || !runId || !trades) return;
+    btn.onclick = async () => {
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Открываем график…";
+      try {
+        await global.openTradeViewer(runId);
+        const chartTab = document.querySelector('.tv-subtab[data-tv-view="chart"]');
+        if (chartTab) chartTab.click();
+      } catch (err) {
+        console.error("Could not open backtest trade chart", err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    };
+  }
+
+  const originalRenderBacktestResult = global.renderBacktestResult;
+  if (typeof originalRenderBacktestResult === "function") {
+    global.renderBacktestResult = function (result) {
+      originalRenderBacktestResult(result);
+      ensureBacktestChartAction(result);
+    };
+  }
 
   global.TradeChart = TradeChart;
 })(window);
