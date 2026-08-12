@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Safe update script for MOEX Strategy Lab V3.
+# Safe update script for Strategy Lab.
 # Backs up user data, installs deps, validates code + nginx config,
 # restarts only the moex-strategy-lab service, and health-checks it.
 set -euo pipefail

@@ -1,4 +1,4 @@
-# MOEX Strategy Lab V3
+# Strategy Lab
 
 ## Что добавлено
 

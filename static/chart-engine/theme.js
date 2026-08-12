@@ -1,6 +1,6 @@
 /* Chart engine: theme tokens shared by the trade chart and the analysis
  * module. Values are lifted from static/styles.css :root so both modules
- * render on the same dark palette as the rest of MOEX Strategy Lab V3
+ * render on the same dark palette as the rest of Strategy Lab
  * instead of lightweight-charts' defaults. The app only has a dark theme
  * today (no light-mode toggle exists), so that's all this covers. */
 (function (global) {

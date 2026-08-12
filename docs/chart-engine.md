@@ -1,4 +1,4 @@
-# Графическое ядро MOEX Strategy Lab V3
+# Графическое ядро Strategy Lab
 
 Единое графическое ядро на базе [lightweight-charts](https://github.com/tradingview/lightweight-charts)
 (vendored `static/vendor/lightweight-charts.standalone.production.js`, v5.2.0, Apache-2.0),
