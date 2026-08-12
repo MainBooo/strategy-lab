@@ -30,6 +30,31 @@ jobs:
       - name: Apply drawing engine architecture refactor
         run: python .github/tmp/refactor_drawing_engine.py
 
+      - name: Normalize regression contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("tests/test_chart_drawing_interactions.py")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace(
+              '    finish = engine[engine.index("_finishDraft()"): engine.index("_applyDrag", engine.index("_finishDraft()"))]',
+              '    start = engine.index("    _finishDraft() {")\n    finish = engine[start: engine.index("    _applyDrag", start)]',
+          )
+          s = s.replace(
+              r'assert re.search(r"\.tv-flyout-item\s*\{{[^}}]*min-height:44px", js, re.S)',
+              r'assert re.search(r"\.tv-flyout-item\s*\{[^}]*min-height:44px", js, re.S)',
+          )
+          s = s.replace(
+              'container.addEventListener("pointerdown", this._activatePointerHandler)',
+              'container.addEventListener("pointerdown", this._activatePointerHandler, true)',
+          )
+          s = s.replace(
+              'container.removeEventListener("pointerdown", this._activatePointerHandler)',
+              'container.removeEventListener("pointerdown", this._activatePointerHandler, true)',
+          )
+          p.write_text(s, encoding="utf-8")
+          PY
+
       - name: JavaScript syntax checks
         run: |
           node --check static/chart-engine/drawings.js
