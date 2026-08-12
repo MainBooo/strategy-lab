@@ -1,6 +1,29 @@
 (function () {
   "use strict";
 
+  // Analytics is best-effort infrastructure. The queue keeps auth events safe
+  // even if the Metrika script has not loaded yet (or is blocked entirely).
+  if (!window.StrategyLabAnalytics) {
+    window.StrategyLabAnalytics = {
+      q: [],
+      trackGoal: function () { this.q.push(["goal"].concat(Array.from(arguments))); },
+      trackPageView: function () { this.q.push(["page"].concat(Array.from(arguments))); },
+      trackVirtualPage: function () { this.q.push(["virtual"].concat(Array.from(arguments))); }
+    };
+  }
+  if (!document.querySelector('script[data-strategy-lab-analytics="1"]')) {
+    const analyticsScript = document.createElement("script");
+    analyticsScript.src = "/static/analytics.js";
+    analyticsScript.async = false;
+    analyticsScript.dataset.strategyLabAnalytics = "1";
+    analyticsScript.onerror = function () { /* analytics must never block auth/app */ };
+    document.head.appendChild(analyticsScript);
+  }
+
+  function trackGoal(name, params) {
+    try { window.StrategyLabAnalytics.trackGoal(name, params || {}); } catch (e) { /* best-effort */ }
+  }
+
   function csrfToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.content : "";
@@ -84,6 +107,7 @@
       }),
     });
   }, () => {
+    trackGoal("login_completed");
     const next = safeNext(document.getElementById("loginForm").dataset.next);
     window.location.href = next;
   });
@@ -98,6 +122,7 @@
       }),
     });
   }, () => {
+    trackGoal("registration_completed");
     const next = safeNext(document.getElementById("registerForm").dataset.next);
     window.location.href = next;
   });
@@ -105,7 +130,10 @@
   const logoutBtn = document.getElementById("logoutBtn");
   if (logoutBtn) {
     logoutBtn.addEventListener("click", async () => {
-      try { await authFetch("/api/auth/logout", { method: "POST" }); } catch (e) { /* best-effort */ }
+      try {
+        await authFetch("/api/auth/logout", { method: "POST" });
+        trackGoal("logout");
+      } catch (e) { /* best-effort */ }
       window.location.href = "/";
     });
   }
