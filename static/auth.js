@@ -1,6 +1,75 @@
 (function () {
   "use strict";
 
+  // Mobile Safari/LTE can occasionally leave a GET fetch pending for a very
+  // long time even though the page HTML itself has already loaded. The core
+  // app waits for a few startup GETs before it fully initializes, so bound
+  // only those idempotent requests and retry once. State-changing requests,
+  // backtests, downloads and chart data are intentionally untouched.
+  if (!window.__strategyLabStartupFetchGuard) {
+    window.__strategyLabStartupFetchGuard = true;
+    const nativeFetch = window.fetch.bind(window);
+    const STARTUP_TIMEOUT_MS = 12000;
+    const STARTUP_RETRY_DELAY_MS = 400;
+
+    function startupGet(url, method) {
+      if (String(method || "GET").toUpperCase() !== "GET") return false;
+      const value = typeof url === "string" ? url : (url && url.url) || "";
+      let path = value;
+      try { path = new URL(value, window.location.origin).pathname + new URL(value, window.location.origin).search; } catch (e) {}
+      return path === "/api/securities" ||
+        path === "/api/portfolios" ||
+        path === "/api/backtests?page_size=50" ||
+        path === "/api/strategies" ||
+        path === "/api/market-ticker" ||
+        path === "/account/api/commerce-context" ||
+        path === "/account/api/strategy-orders";
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function fetchAttempt(input, init) {
+      const options = Object.assign({}, init || {});
+      const originalSignal = options.signal;
+      const controller = new AbortController();
+      let abortedByCaller = false;
+      const onAbort = function () {
+        abortedByCaller = true;
+        try { controller.abort(originalSignal.reason); } catch (e) { controller.abort(); }
+      };
+      if (originalSignal) {
+        if (originalSignal.aborted) onAbort();
+        else originalSignal.addEventListener("abort", onAbort, { once: true });
+      }
+      options.signal = controller.signal;
+      const timer = setTimeout(() => controller.abort(), STARTUP_TIMEOUT_MS);
+      try {
+        return await nativeFetch(input, options);
+      } catch (error) {
+        if (abortedByCaller) throw error;
+        error.__strategyLabRetryable = true;
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        if (originalSignal) originalSignal.removeEventListener("abort", onAbort);
+      }
+    }
+
+    window.fetch = async function (input, init) {
+      const method = (init && init.method) || (input && input.method) || "GET";
+      if (!startupGet(input, method)) return nativeFetch(input, init);
+      try {
+        return await fetchAttempt(input, init);
+      } catch (error) {
+        if (!error || !error.__strategyLabRetryable) throw error;
+        await sleep(STARTUP_RETRY_DELAY_MS);
+        return fetchAttempt(input, init);
+      }
+    };
+  }
+
   // Analytics is best-effort infrastructure. The queue keeps auth events safe
   // even if the Metrika script has not loaded yet (or is blocked entirely).
   if (!window.StrategyLabAnalytics) {
