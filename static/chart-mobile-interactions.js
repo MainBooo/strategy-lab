@@ -207,6 +207,12 @@
     if (lock && dm) lock.classList.toggle("active", dm.drawings.length > 0 && dm.drawings.every((d) => d.locked));
     const hide = page.root.querySelector("[data-tv-action='hide-all']");
     if (hide && dm) hide.classList.toggle("active", dm.drawings.length > 0 && dm.drawings.every((d) => d.hidden));
+    const objects = page.root.querySelector("[data-tv-action='objects']");
+    if (objects) {
+      const panelOpen = page._bottomCollapsed === false;
+      objects.classList.toggle("active", panelOpen);
+      objects.setAttribute("aria-pressed", panelOpen ? "true" : "false");
+    }
   }
 
   function buildTradingViewRail(page) {
@@ -230,7 +236,7 @@
       <button type="button" class="tv-rail-action" data-tv-action="keep" title="Оставаться в режиме рисования" aria-label="Оставаться в режиме рисования">✎</button>
       <button type="button" class="tv-rail-action" data-tv-action="lock-all" title="Заблокировать все объекты" aria-label="Заблокировать все объекты">⌑</button>
       <button type="button" class="tv-rail-action" data-tv-action="hide-all" title="Скрыть все объекты" aria-label="Скрыть все объекты">◉</button>
-      <button type="button" class="tv-rail-action" data-tv-action="objects" title="Дерево объектов" aria-label="Дерево объектов">☷</button>
+      <button type="button" class="tv-rail-action" data-tv-action="objects" title="Дерево объектов" aria-label="Дерево объектов" aria-pressed="false">☷</button>
       <button type="button" class="tv-rail-action" data-tv-action="remove-all" title="Удалить все объекты" aria-label="Удалить все объекты">⌫</button>
       <div class="tv-tool-flyout hidden" id="tvToolFlyout" role="menu" aria-label="Инструменты рисования"></div>
     `;
@@ -289,9 +295,12 @@
       } else if (action === "hide-all") {
         bulkUpdate(page, "hidden", !(dm.drawings.length && dm.drawings.every((d) => d.hidden)));
       } else if (action === "objects") {
-        if (typeof page._setBottomCollapsed === "function") page._setBottomCollapsed(false);
-        const tab = page.root.querySelector('.ca-side-tab[data-side="objects"]');
-        if (tab) tab.click();
+        const opening = page._bottomCollapsed !== false;
+        if (typeof page._setBottomCollapsed === "function") page._setBottomCollapsed(!opening);
+        if (opening) {
+          const tab = page.root.querySelector('.ca-side-tab[data-side="objects"]');
+          if (tab) tab.click();
+        }
       } else if (action === "remove-all") {
         if (dm.drawings.length && global.confirm("Удалить все объекты разметки на активном графике?")) {
           dm.drawings.slice().forEach((d) => dm.removeDrawing(d.id));
@@ -606,6 +615,15 @@
     renderObjectToolbar(this);
     return result;
   };
+
+  if (typeof Page._setBottomCollapsed === "function") {
+    const originalSetBottomCollapsed = Page._setBottomCollapsed;
+    Page._setBottomCollapsed = function () {
+      const result = originalSetBottomCollapsed.apply(this, arguments);
+      refreshTradingViewRail(this);
+      return result;
+    };
+  }
 
   if (typeof Page._renderProps === "function") {
     const originalRenderProps = Page._renderProps;
