@@ -37,6 +37,14 @@
 .pill.status-paid,.pill.status-ready,.pill.status-completed { color:var(--success); }
 .pill.status-cancelled { color:var(--danger); }
 
+.account-order-detail-panel { width:min(760px,100%); }
+.account-order-detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.account-order-detail-grid .admin-detail-block { border:1px solid var(--line); border-radius:var(--radius-md); padding:13px; min-width:0; }
+.account-order-detail-grid .admin-detail-block.wide { grid-column:1/-1; }
+.account-order-detail-grid .admin-detail-block span { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; }
+.account-order-detail-grid .admin-detail-block p { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; line-height:1.5; }
+.account-order-privacy-note { margin-top:16px; }
+
 .commerce-result-page { max-width:720px; margin:0 auto; }
 .commerce-result-card { margin-top:28px; }
 .commerce-result-actions { display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
@@ -53,6 +61,8 @@
   .support-amounts { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .private-strategy-card { flex-direction:column; align-items:stretch; }
   .private-strategy-actions a { flex:1; text-align:center; }
+  .account-order-detail-grid { grid-template-columns:1fr; }
+  .account-order-detail-grid .admin-detail-block.wide { grid-column:auto; }
 }
 
 @media (max-width:430px) {
