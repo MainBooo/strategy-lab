@@ -63,10 +63,6 @@ def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.executescript(SCHEMA)
-        # is_admin predates the initial ship of this table on some installs
-        # only in the sense that any additive column here follows the same
-        # try/ALTER pattern the rest of the codebase uses (see
-        # market_data_store.init_db) - safe to run unconditionally.
         try:
             conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
@@ -94,8 +90,7 @@ def create_user(email: str, password_hash: str, display_name: str) -> dict:
     now = time.time()
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO users (id,email,password_hash,display_name,created_at,updated_at,is_active) "
-            "VALUES (?,?,?,?,?,?,1)",
+            "INSERT INTO users (id,email,password_hash,display_name,created_at,updated_at,is_active) VALUES (?,?,?,?,?,?,1)",
             (user_id, email, password_hash, display_name.strip(), now, now),
         )
     return get_by_id(user_id)
@@ -115,6 +110,15 @@ def get_by_id(user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def list_users() -> list[dict]:
+    """Admin-facing user list without ever exposing password/reset hashes."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id,email,display_name,created_at,updated_at,last_login_at,is_active,is_admin FROM users ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def touch_last_login(user_id: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (time.time(), user_id))
@@ -125,28 +129,23 @@ def update_profile(user_id: str, *, display_name: str | None = None) -> dict | N
         return get_by_id(user_id)
     with _connect() as conn:
         conn.execute("UPDATE users SET display_name=?,updated_at=? WHERE id=?",
-                      (display_name.strip(), time.time(), user_id))
+                     (display_name.strip(), time.time(), user_id))
     return get_by_id(user_id)
 
 
 def update_password_hash(user_id: str, new_hash: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
-                      (new_hash, time.time(), user_id))
+                     (new_hash, time.time(), user_id))
 
 
 def deactivate_user(user_id: str) -> None:
-    """Soft-delete: is_active=0, account can no longer log in. Never removes
-    the row itself - backtests/portfolios/chart layouts may still reference
-    this user_id, and turning it into a dangling foreign key would orphan a
-    user's own historical data instead of just locking them out."""
+    """Soft-delete the login while retaining historical ownership links."""
     with _connect() as conn:
         conn.execute("UPDATE users SET is_active=0,updated_at=? WHERE id=?", (time.time(), user_id))
 
 
 def create_reset_token(user_id: str) -> str:
-    """Returns the raw token (only ever available at creation time - not
-    recoverable from the DB, which stores only its hash)."""
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now = time.time()
@@ -167,7 +166,7 @@ def list_favorites(user_id: str) -> list[str]:
 def add_favorite(user_id: str, ticker: str) -> None:
     with _connect() as conn:
         conn.execute("INSERT OR IGNORE INTO user_favorites (user_id,ticker,created_at) VALUES (?,?,?)",
-                      (user_id, ticker.upper(), time.time()))
+                     (user_id, ticker.upper(), time.time()))
 
 
 def remove_favorite(user_id: str, ticker: str) -> None:
@@ -176,11 +175,6 @@ def remove_favorite(user_id: str, ticker: str) -> None:
 
 
 def consume_reset_token(raw_token: str) -> str | None:
-    """Validates and marks a reset token used in one call - returns the
-    associated user_id, or None if the token is unknown/expired/already
-    used. Marking it used before the caller changes the password (not
-    after) means a crash mid-request can never leave a still-valid token
-    lying around for a retry to reuse."""
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now = time.time()
     with _connect() as conn:
