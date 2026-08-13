@@ -22,13 +22,14 @@
     }
   }
 
-  if (!addPaymentsKpi()) {
+  async function init() {
+    if (await addPaymentsKpi()) return;
     const root = document.getElementById("adminContent");
-    if (root) {
-      const observer = new MutationObserver(async () => {
-        if (await addPaymentsKpi()) observer.disconnect();
-      });
-      observer.observe(root, { childList: true, subtree: true });
-    }
+    if (!root) return;
+    const observer = new MutationObserver(async () => {
+      if (await addPaymentsKpi()) observer.disconnect();
+    });
+    observer.observe(root, { childList: true, subtree: true });
   }
+  init();
 })();
