@@ -54,15 +54,11 @@
     if (!el) return;
     el.textContent = text;
     el.className = "message " + (isError ? "error" : "success");
-    // A wrong password/duplicate email etc. is common enough on these forms
-    // that a purely textual message is easy to miss - the shake draws the
-    // eye to it without being alarming (CSS animation, auto-removes itself
-    // via animationend so re-triggering on a second failed attempt works).
     if (isError && text) {
       const form = el.closest("form");
       if (form) {
         form.classList.remove("shake");
-        void form.offsetWidth; // restart the animation if it's already mid-shake
+        void form.offsetWidth;
         form.classList.add("shake");
         form.addEventListener("animationend", () => form.classList.remove("shake"), { once: true });
       }
@@ -89,10 +85,6 @@
     });
   }
 
-  // Only same-origin, path-only redirects are ever honored - an absolute/
-  // protocol-relative "next" would be an open redirect (see auth_routes.py's
-  // server-side check, which is authoritative; this is just a UX nicety so
-  // a bad value doesn't even get submitted as the visible link target).
   function safeNext(raw) {
     if (!raw) return "/";
     if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
@@ -143,5 +135,26 @@
   if (menuBtn && dropdown) {
     menuBtn.addEventListener("click", (e) => { e.stopPropagation(); dropdown.classList.toggle("hidden"); });
     document.addEventListener("click", () => dropdown.classList.add("hidden"));
+  }
+
+  // Commerce is an optional product layer. Loading it from the already-shared
+  // auth bundle avoids duplicating script tags across the large index template
+  // and every account/admin Jinja page. A load failure must never block the
+  // free trading laboratory itself.
+  if (!document.querySelector('script[data-strategy-lab-commerce="1"]')) {
+    const commerceScript = document.createElement("script");
+    commerceScript.src = "/static/commerce.js";
+    commerceScript.defer = true;
+    commerceScript.dataset.strategyLabCommerce = "1";
+    commerceScript.onerror = function () { /* commerce must not block core app */ };
+    document.head.appendChild(commerceScript);
+  }
+  if (!document.querySelector('script[data-strategy-lab-order-detail="1"]')) {
+    const detailScript = document.createElement("script");
+    detailScript.src = "/static/commerce-account-detail.js";
+    detailScript.defer = true;
+    detailScript.dataset.strategyLabOrderDetail = "1";
+    detailScript.onerror = function () { /* order details are progressive enhancement */ };
+    document.head.appendChild(detailScript);
   }
 })();
