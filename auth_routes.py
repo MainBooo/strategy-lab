@@ -22,6 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import auth
 import auth_db
 import backtests_db as bdb
+import commerce_audit  # noqa: F401 - installs the strict audit privacy boundary
 import commerce_routes
 from csrf import csrf_protect, ensure_csrf_token
 from rate_limit import SlidingWindowLimiter, client_ip
@@ -265,7 +266,7 @@ def api_settings_password():
     new_password = str(p.get("new_password") or "")
     user = auth.current_user()
     if not check_password_hash(user["password_hash"], current_password):
-        return jsonify({"error": "Текущий пароль невер."}), 400
+        return jsonify({"error": "Текущий пароль неверен."}), 400
     if len(new_password) < MIN_PASSWORD_LENGTH:
         return jsonify({"error": f"Новый пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов."}), 400
     if len(new_password) > 256:
