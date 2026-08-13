@@ -310,7 +310,8 @@ def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: st
     explicit ranges and pagination keep the caller's requested limit.
     """
     ticker = ticker.upper()
-    if _cap_initial and before is None and from_date <= sync.EARLIEST_PLAUSIBLE_DATE:
+    is_all_history = from_date <= sync.EARLIEST_PLAUSIBLE_DATE
+    if _cap_initial and before is None and is_all_history:
         limit = min(limit, _INITIAL_PAGE_LIMIT.get(timeframe, 500))
     if timeframe in AGGREGATE_TIMEFRAMES:
         return _get_aggregated_candles(ticker=ticker, board=board, timeframe=timeframe, from_date=from_date,
@@ -327,7 +328,13 @@ def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: st
     store.touch_access(ticker, board, canon_tf)
 
     cov = store.coverage(ticker, board, canon_tf)
-    next_cursor = candles[0]["time"] if len(candles) == limit else None
+    state = store.get_sync_state(ticker, board, canon_tf) or {}
+    page_is_full = len(candles) == limit
+    cached_older_exists = bool(candles) and cov["earliest_ts"] is not None and cov["earliest_ts"] < candles[0]["time"]
+    uncached_older_may_exist = bool(candles) and is_all_history and not state.get("backfilled_complete") \
+        and from_ts < candles[0]["time"]
+    has_older = page_is_full or (is_all_history and (cached_older_exists or uncached_older_may_exist))
+    next_cursor = candles[0]["time"] if candles and has_older else None
     has_newer = bool(candles) and cov["latest_ts"] is not None and candles[-1]["time"] < cov["latest_ts"]
     return {
         "candles": candles,
