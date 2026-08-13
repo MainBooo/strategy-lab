@@ -56,3 +56,21 @@ def login_required(view):
             return redirect(url_for("auth.login_page", next=request.full_path))
         return view(*args, **kwargs)
     return wrapped
+
+
+def admin_required(view):
+    """Reusable server-side guard for every admin page/API action."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = current_user()
+        if user is None:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Требуется вход в аккаунт."}), 401
+            from flask import redirect, url_for
+            return redirect(url_for("auth.login_page", next=request.full_path))
+        if not user.get("is_admin"):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Недостаточно прав."}), 403
+            return "Недостаточно прав.", 403
+        return view(*args, **kwargs)
+    return wrapped
