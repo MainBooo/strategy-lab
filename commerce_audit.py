@@ -3,12 +3,13 @@ from __future__ import annotations
 """Privacy boundary for commerce admin audit records.
 
 Auditability is useful for price/status/link actions, but a trading strategy
-can itself be valuable confidential information.  This wrapper deliberately
+can itself be valuable confidential information. This wrapper deliberately
 allows only operational fields into AdminAuditLog and patches commerce_db's
 audit function before commerce routes are registered.
 """
 
 import commerce_db as cdb
+import commerce_user_search  # noqa: F401 - installs cross-store admin search
 
 _original_audit = cdb.audit
 _ALLOWED = {
