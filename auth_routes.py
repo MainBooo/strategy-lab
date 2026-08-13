@@ -22,10 +22,15 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import auth
 import auth_db
 import backtests_db as bdb
+import commerce_routes
 from csrf import csrf_protect, ensure_csrf_token
 from rate_limit import SlidingWindowLimiter, client_ip
 
 auth_bp = Blueprint("auth", __name__)
+# Commerce stays in the existing Flask/Jinja stack. Registering it as a child
+# blueprint keeps the large order/billing/admin surface out of app.py while
+# preserving the same session, CSRF and template infrastructure.
+auth_bp.register_blueprint(commerce_routes.commerce_bp)
 
 _PORTFOLIOS = None
 
@@ -33,6 +38,7 @@ _PORTFOLIOS = None
 def configure(portfolios_store) -> None:
     global _PORTFOLIOS
     _PORTFOLIOS = portfolios_store
+    commerce_routes.configure(portfolios_store)
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -46,12 +52,6 @@ ACCOUNT_ACTION_LIMITER = SlidingWindowLimiter(max_requests=20, window_seconds=30
 
 
 def _rate_limited(limiter_name: str):
-    """Takes the limiter's *name* in this module, not the object itself, and
-    looks it up fresh via globals() on every request - binding the object
-    directly would capture it once at decoration time (import time), making
-    it impossible to swap out (e.g. tests monkeypatching a fresh limiter
-    in - a bound reference would silently keep using the original, never-
-    reset instance and accumulate hits across the whole test session)."""
     def deco(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -64,12 +64,6 @@ def _rate_limited(limiter_name: str):
 
 
 def _safe_next(raw: str | None) -> str:
-    """Only a same-origin, path-only redirect target is ever honored - the
-    authoritative check (auth.js's client-side version is just a UX
-    nicety). Rejects protocol-relative ("//evil.example") and absolute
-    URLs alike so a crafted ?next= can never send a user off-site after
-    login (open redirect - see the account-system spec's explicit
-    requirement)."""
     if not raw or not raw.startswith("/") or raw.startswith("//") or "\\" in raw:
         return "/"
     return raw
@@ -153,8 +147,6 @@ def api_register():
     try:
         user = auth_db.create_user(email, password_hash, display_name)
     except sqlite3.IntegrityError:
-        # Two concurrent registrations for the same email raced past the
-        # pre-check above - the UNIQUE constraint is the real guard.
         return jsonify({"error": "Этот email уже зарегистрирован."}), 400
 
     auth.log_in(user, remember=True)
@@ -273,16 +265,12 @@ def api_settings_password():
     new_password = str(p.get("new_password") or "")
     user = auth.current_user()
     if not check_password_hash(user["password_hash"], current_password):
-        return jsonify({"error": "Текущий пароль неверен."}), 400
+        return jsonify({"error": "Текущий пароль невер."}), 400
     if len(new_password) < MIN_PASSWORD_LENGTH:
         return jsonify({"error": f"Новый пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов."}), 400
     if len(new_password) > 256:
         return jsonify({"error": "Пароль слишком длинный."}), 400
     auth_db.update_password_hash(user["id"], generate_password_hash(new_password))
-    # Rotating the session id (via a fresh login) invalidates this device's
-    # old cookie value; other devices' sessions aren't tracked server-side
-    # in this minimal signed-cookie session model, so they stay valid until
-    # they expire naturally - a documented limitation, not an oversight.
     auth.log_in(user, remember=True)
     return jsonify({"ok": True})
 
