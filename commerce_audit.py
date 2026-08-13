@@ -9,6 +9,7 @@ audit function before commerce routes are registered.
 """
 
 import commerce_db as cdb
+import commerce_data_safety  # noqa: F401 - sanitizes private names / admin payment DTOs
 import commerce_user_search  # noqa: F401 - installs cross-store admin search
 
 _original_audit = cdb.audit
