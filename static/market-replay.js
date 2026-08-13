@@ -14,6 +14,31 @@
   const TF_LABELS = { "1m": "1 минута", "10m": "10 минут", "60m": "1 час", "1d": "1 день", "1w": "1 неделя", "1mo": "1 месяц" };
   const SESSION_KEY = "moexlab_replay_session_id";
   const BASE_INTERVAL_MS = 700;
+  const STYLE_ID = "marketReplayMobileStyles";
+  const STYLE_HREF = "/static/market-replay-mobile.css";
+
+  // Same restrained inline-SVG language used by the chart-analysis/trade-chart
+  // toolbars. Keeping the few Replay glyphs local avoids a new icon dependency.
+  const ICN = {
+    expand: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
+    compress: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M13 21v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>',
+    restart: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>',
+    stepBack: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14"/><path d="m18 6-8 6 8 6V6z"/></svg>',
+    play: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m8 5 11 7-11 7V5z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>',
+    stepFwd: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14"/><path d="m6 6 8 6-8 6V6z"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>',
+    more: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
+  };
+
+  function ensureReplayStyles() {
+    if (!document.head || document.getElementById(STYLE_ID)) return;
+    const link = document.createElement("link");
+    link.id = STYLE_ID;
+    link.rel = "stylesheet";
+    link.href = STYLE_HREF;
+    document.head.appendChild(link);
+  }
 
   function fmtDateTime(unixSeconds) {
     if (!unixSeconds) return "—";
@@ -37,6 +62,9 @@
     if (last >= 2 && last <= 4) return "лота";
     return "лотов";
   }
+  function speedLabel(s) {
+    return s === "max" ? "MAX" : `${s}×`;
+  }
 
   const Page = {
     root: null,
@@ -45,14 +73,17 @@
     core: null,
     overlay: null,
     markersHandle: null,
+    fsCtrl: null,
     playing: false,
     _playTimer: null,
     _busy: false,
+    _orderBusy: false,
     securities: [],
     sessions: [],
 
     init(root) {
       this.root = root;
+      ensureReplayStyles();
       if (this._built) { this._refreshSessionList(); return; }
       this._built = true;
       this._build();
@@ -114,29 +145,59 @@
             </div>
             <div class="mr-cb-right">
               <span id="mrPercent">0%</span>
-              <button class="secondary" id="mrNewSession">Новая сессия</button>
-              <button class="danger" id="mrDeleteSession">Удалить сессию</button>
+              <div class="mr-session-menu">
+                <button class="mr-icon-control secondary" id="mrSessionMenuBtn" type="button"
+                  title="Действия с Replay-сессией" aria-label="Действия с Replay-сессией"
+                  aria-haspopup="true" aria-expanded="false">${ICN.more}</button>
+                <div class="mr-session-menu-panel hidden" id="mrSessionMenuPanel">
+                  <button class="secondary" id="mrNewSession">Новая сессия</button>
+                  <button class="danger" id="mrDeleteSession">Удалить сессию</button>
+                </div>
+              </div>
             </div>
           </div>
+
           <div class="mr-layout">
             <div class="mr-chart-col">
-              <div class="mr-chart-host" id="mrChartHost"></div>
-              <div class="mr-transport">
-                <button class="secondary" id="mrRestart" title="Перезапустить (сброс к началу)">⟲ Перезапустить</button>
-                <button class="secondary" id="mrStepBack" title="Шаг назад (←)">◀ Назад</button>
-                <button class="primary" id="mrPlayPause" title="Play/Pause (пробел)">▶ Играть</button>
-                <button class="secondary" id="mrStepFwd" title="Шаг вперёд (→)">Вперёд ▶</button>
-                <label class="mr-speed-inline">Скорость
-                  <select id="mrSpeedLive">${SPEED_OPTIONS.map((s) => `<option value="${s}">${s === "max" ? "Максимум" : s + "×"}</option>`).join("")}</select>
-                </label>
-                <button class="secondary" id="mrGotoBtn" title="Перейти к дате">Перейти к дате…</button>
+              <div class="mr-chart-surface">
+                <div class="mr-chart-host" id="mrChartHost"></div>
+                <button class="mr-icon-control mr-fullscreen-control" id="mrFullscreenBtn" type="button"
+                  title="Полноэкранный Market Replay" aria-label="Полноэкранный Market Replay"
+                  aria-pressed="false">${ICN.expand}</button>
               </div>
+
+              <div class="mr-quick-trade" aria-label="Быстрые торговые действия">
+                <button class="mr-buy" id="mrBuy" title="Купить (B)" aria-label="Купить">Купить</button>
+                <button class="mr-sell" id="mrSell" title="Продать (S)" aria-label="Продать">Продать</button>
+              </div>
+              <div class="mr-order-message" id="mrOrderMessage"></div>
+
+              <div class="mr-transport" aria-label="Управление Market Replay">
+                <button class="mr-icon-control secondary" id="mrRestart" type="button"
+                  title="Перезапустить (сброс к началу)" aria-label="Перезапустить Replay">${ICN.restart}</button>
+                <button class="mr-icon-control secondary" id="mrStepBack" type="button"
+                  title="Шаг назад (←)" aria-label="Шаг назад">${ICN.stepBack}</button>
+                <button class="mr-icon-control primary mr-play-control" id="mrPlayPause" type="button"
+                  title="Играть (пробел)" aria-label="Играть" aria-pressed="false">${ICN.play}</button>
+                <button class="mr-icon-control secondary" id="mrStepFwd" type="button"
+                  title="Шаг вперёд (→)" aria-label="Шаг вперёд">${ICN.stepFwd}</button>
+                <label class="mr-speed-inline" title="Скорость воспроизведения">
+                  <span class="mr-visually-hidden">Скорость воспроизведения</span>
+                  <select id="mrSpeedLive" aria-label="Скорость воспроизведения">${SPEED_OPTIONS.map((s) => `<option value="${s}">${speedLabel(s)}</option>`).join("")}</select>
+                </label>
+                <button class="mr-icon-control secondary mr-date-control" id="mrGotoBtn" type="button"
+                  title="Перейти к дате" aria-label="Перейти к дате">${ICN.calendar}<span class="mr-date-label">Дата</span></button>
+              </div>
+
               <div class="mr-goto hidden" id="mrGotoPanel">
-                <input type="date" id="mrGotoDate"><input type="number" id="mrGotoHour" min="0" max="23" placeholder="Час"><input type="number" id="mrGotoMinute" min="0" max="59" placeholder="Мин">
+                <input type="date" id="mrGotoDate" aria-label="Дата перехода">
+                <input type="number" id="mrGotoHour" min="0" max="23" placeholder="Час" aria-label="Час перехода">
+                <input type="number" id="mrGotoMinute" min="0" max="59" placeholder="Мин" aria-label="Минута перехода">
                 <button class="primary" id="mrGotoApply">Перейти</button>
                 <button class="secondary" id="mrGotoCancel">Отмена</button>
               </div>
             </div>
+
             <div class="mr-side-col">
               <div class="mr-card mr-account">
                 <div class="mr-account-row"><span>Свободные средства</span><strong id="mrCash">—</strong></div>
@@ -146,16 +207,13 @@
                 <div class="mr-account-row mr-account-total"><span>Итого</span><strong id="mrTotal">—</strong></div>
               </div>
               <div class="mr-card mr-order">
-                <h4>Ручная сделка</h4>
+                <h4>Позиция и параметры</h4>
                 <div class="mr-position-status" id="mrPositionStatus"></div>
-                <label>Лоты <input type="number" id="mrLots" min="1" step="1" value="1"></label>
-                <label>Stop Loss <input type="number" id="mrStopLoss" step="0.01" placeholder="необязательно"></label>
-                <label>Take Profit <input type="number" id="mrTakeProfit" step="0.01" placeholder="необязательно"></label>
-                <div class="mr-order-buttons">
-                  <button class="mr-buy" id="mrBuy" title="Buy (B)">Buy</button>
-                  <button class="mr-sell" id="mrSell" title="Sell (S)">Sell</button>
+                <div class="mr-order-fields">
+                  <label>Лоты <input type="number" id="mrLots" min="1" step="1" value="1"></label>
+                  <label>Stop Loss <input type="number" id="mrStopLoss" step="0.01" placeholder="необязательно"></label>
+                  <label>Take Profit <input type="number" id="mrTakeProfit" step="0.01" placeholder="необязательно"></label>
                 </div>
-                <div class="mr-order-message" id="mrOrderMessage"></div>
               </div>
               <div class="mr-card mr-trades">
                 <h4>Сделки сессии</h4>
@@ -166,6 +224,9 @@
         </div>
       `;
       this.root.querySelector("#mrStartDate").value = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
+      // One DOM control -> one existing action. Replay/trading business logic
+      // stays in the original methods below; this block only wires the new UI.
       this.root.querySelector("#mrStart").onclick = () => this._startSession();
       this.root.querySelector("#mrNewSession").onclick = () => this._backToSetup();
       this.root.querySelector("#mrDeleteSession").onclick = () => this._deleteSession();
@@ -179,6 +240,54 @@
       this.root.querySelector("#mrSpeedLive").onchange = (e) => this._setSpeed(e.target.value);
       this.root.querySelector("#mrBuy").onclick = () => this._handleBuy();
       this.root.querySelector("#mrSell").onclick = () => this._handleSell();
+      this.root.querySelector("#mrSessionMenuBtn").onclick = () => this._toggleSessionMenu();
+
+      const player = this.root.querySelector("#mrPlayerRoot");
+      if (CE.Fullscreen && CE.Fullscreen.FullscreenController) {
+        this.fsCtrl = new CE.Fullscreen.FullscreenController(player, {
+          onChange: (active) => this._onFullscreenChange(active),
+        });
+        this.root.querySelector("#mrFullscreenBtn").onclick = () => this.fsCtrl.toggle();
+      } else {
+        // The shared controller is loaded before Market Replay in index.html;
+        // leaving a disabled button is safer than inventing a second FS system.
+        const btn = this.root.querySelector("#mrFullscreenBtn");
+        btn.disabled = true;
+        btn.title = "Полноэкранный режим недоступен";
+        btn.setAttribute("aria-label", btn.title);
+      }
+    },
+
+    _toggleSessionMenu() {
+      const panel = this.root.querySelector("#mrSessionMenuPanel");
+      const btn = this.root.querySelector("#mrSessionMenuBtn");
+      const opening = panel.classList.contains("hidden");
+      panel.classList.toggle("hidden", !opening);
+      btn.setAttribute("aria-expanded", String(opening));
+    },
+
+    _closeSessionMenu() {
+      const panel = this.root && this.root.querySelector("#mrSessionMenuPanel");
+      const btn = this.root && this.root.querySelector("#mrSessionMenuBtn");
+      if (panel) panel.classList.add("hidden");
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    },
+
+    _onFullscreenChange(active) {
+      const btn = this.root.querySelector("#mrFullscreenBtn");
+      if (btn) {
+        btn.innerHTML = active ? ICN.compress : ICN.expand;
+        btn.title = active ? "Выйти из полноэкранного Market Replay (Esc)" : "Полноэкранный Market Replay";
+        btn.setAttribute("aria-label", btn.title);
+        btn.setAttribute("aria-pressed", String(active));
+        btn.classList.toggle("active", active);
+      }
+      if (document.body) document.body.classList.toggle("mr-fullscreen-active", active);
+      this._closeSessionMenu();
+
+      // Keep the one existing ChartCore instance. Resize only its pixel box:
+      // no setData/fitContent/session reload, so Replay index and user zoom stay.
+      requestAnimationFrame(() => this.core && this.core._onResize());
     },
 
     // Buy/Sell are contextual, like a real trading terminal's one-click
@@ -277,6 +386,8 @@
 
     _backToSetup() {
       this._stopPlaying();
+      if (this.fsCtrl && this.fsCtrl.active) this.fsCtrl.exit();
+      this._closeSessionMenu();
       localStorage.removeItem(SESSION_KEY);
       this.state = null;
       this.root.querySelector("#mrPlayerRoot").classList.add("hidden");
@@ -305,6 +416,7 @@
         this.markersHandle = global.LightweightCharts.createSeriesMarkers(this.core.candleSeries, []);
       }
       this._orderMessage("");
+      this._updatePlayButton();
       this._applyState(state);
       this._loadTrades();
     },
@@ -505,10 +617,21 @@
 
     _togglePlay() { this.playing ? this._stopPlaying() : this._startPlaying(); },
 
+    _updatePlayButton() {
+      const btn = this.root && this.root.querySelector("#mrPlayPause");
+      if (!btn) return;
+      const label = this.playing ? "Пауза" : "Играть";
+      btn.innerHTML = this.playing ? ICN.pause : ICN.play;
+      btn.title = `${label} (пробел)`;
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("aria-pressed", String(this.playing));
+      btn.classList.toggle("active", this.playing);
+    },
+
     _startPlaying() {
       if (!this.state || this.state.finished) return;
       this.playing = true;
-      this.root.querySelector("#mrPlayPause").textContent = "⏸ Пауза";
+      this._updatePlayButton();
       this.root.querySelector("#mrStatusPill").textContent = "Воспроизведение";
       this.root.querySelector("#mrStatusPill").className = "pill status-running";
       const speed = this.root.querySelector("#mrSpeedLive").value;
@@ -519,9 +642,8 @@
     _stopPlaying() {
       this.playing = false;
       if (this._playTimer) { clearInterval(this._playTimer); this._playTimer = null; }
-      const btn = this.root.querySelector("#mrPlayPause");
-      if (btn) btn.textContent = "▶ Играть";
-      const pill = this.root.querySelector("#mrStatusPill");
+      this._updatePlayButton();
+      const pill = this.root && this.root.querySelector("#mrStatusPill");
       if (pill) { pill.textContent = "Пауза"; pill.className = "pill status-queued"; }
     },
 
@@ -564,6 +686,8 @@
       else if (e.code === "ArrowLeft") { e.preventDefault(); this._stepBack(); }
       else if (e.code === "KeyB") { e.preventDefault(); this._handleBuy(); }
       else if (e.code === "KeyS") { e.preventDefault(); this._handleSell(); }
+      // Esc is deliberately not duplicated here: native fullscreen owns it,
+      // and FullscreenController already wires Esc for its CSS fallback.
     },
   };
 

@@ -1,0 +1,463 @@
+/* Market Replay mobile-first terminal polish.
+ * Loaded lazily by market-replay.js so Replay-specific rules stay isolated
+ * from the shared chart-analysis/trade-chart stylesheet. */
+
+/* ---------- compact header / actions ---------- */
+body.mr-fullscreen-active { overflow: hidden; }
+
+.mr-player .mr-controlbar {
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 40px;
+}
+.mr-player .mr-cb-left,
+.mr-player .mr-cb-right {
+  gap: 8px;
+  min-width: 0;
+}
+.mr-player .mr-cb-left { flex: 1 1 auto; }
+.mr-player .mr-cb-right { flex: 0 0 auto; }
+.mr-player #mrSymbolLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mr-player #mrPercent {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mr-session-menu { position: relative; flex: 0 0 auto; }
+.mr-session-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 172px;
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  box-shadow: 0 14px 36px rgba(0,0,0,.42);
+}
+.mr-session-menu-panel.hidden { display: none; }
+.mr-session-menu-panel button {
+  width: 100%;
+  min-height: 38px;
+  margin: 0;
+  padding: 8px 10px;
+  justify-content: flex-start;
+  font-size: 12px;
+}
+
+/* ---------- chart surface + fullscreen button ---------- */
+.mr-chart-surface {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 480px;
+}
+.mr-chart-surface .mr-chart-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+.mr-fullscreen-control {
+  position: absolute !important;
+  top: 9px;
+  right: 9px;
+  z-index: 6;
+  background: rgba(12,16,25,.78) !important;
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.28);
+}
+.mr-fullscreen-control.active {
+  color: var(--accent);
+  border-color: var(--accent) !important;
+  background: rgba(124,140,255,.18) !important;
+}
+
+/* ---------- compact replay controls ---------- */
+.mr-icon-control {
+  width: 42px !important;
+  height: 42px;
+  min-width: 42px;
+  min-height: 42px !important;
+  flex: 0 0 42px;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mr-icon-control svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+.mr-icon-control.primary { width: 42px !important; }
+.mr-icon-control.active {
+  color: #fff;
+  border-color: rgba(124,140,255,.72);
+  box-shadow: 0 0 0 1px rgba(124,140,255,.22) inset;
+}
+.mr-play-control {
+  border: 1px solid transparent;
+  box-shadow: 0 6px 18px rgba(124,140,255,.22);
+}
+.mr-transport {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+}
+.mr-transport .mr-icon-control { flex: 0 0 42px !important; }
+.mr-transport .mr-date-control {
+  width: auto !important;
+  min-width: 42px;
+  flex: 0 0 auto !important;
+  padding: 0 11px !important;
+  gap: 6px;
+}
+.mr-date-label {
+  font-size: 12px;
+  font-weight: 700;
+}
+.mr-speed-inline {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.mr-speed-inline select {
+  width: 66px;
+  min-width: 66px;
+  height: 42px;
+  min-height: 42px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  text-align-last: center;
+}
+.mr-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0,0,0,0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* ---------- trade buttons are part of the chart control stack ---------- */
+.mr-quick-trade {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.mr-quick-trade button {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .01em;
+}
+.mr-order-message {
+  min-height: 0;
+  margin-top: 4px;
+}
+.mr-order-message:not(:empty) {
+  min-height: 16px;
+  margin-top: 6px;
+}
+
+.mr-order-fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+/* ---------- app-level / native fullscreen share the same layout ---------- */
+.mr-player.is-fullscreen,
+.mr-player:fullscreen,
+.mr-player:-webkit-full-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  padding:
+    calc(8px + env(safe-area-inset-top, 0px))
+    calc(8px + env(safe-area-inset-right, 0px))
+    calc(8px + env(safe-area-inset-bottom, 0px))
+    calc(8px + env(safe-area-inset-left, 0px));
+  overflow: hidden;
+  display: flex !important;
+  flex-direction: column;
+  background: var(--bg);
+  box-sizing: border-box;
+}
+.mr-player.is-fullscreen .mr-controlbar,
+.mr-player:fullscreen .mr-controlbar,
+.mr-player:-webkit-full-screen .mr-controlbar {
+  flex: 0 0 auto;
+}
+.mr-player.is-fullscreen .mr-layout,
+.mr-player:fullscreen .mr-layout,
+.mr-player:-webkit-full-screen .mr-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-columns: minmax(0,1fr) minmax(260px,300px);
+  gap: 10px;
+  align-items: stretch;
+}
+.mr-player.is-fullscreen .mr-chart-col,
+.mr-player:fullscreen .mr-chart-col,
+.mr-player:-webkit-full-screen .mr-chart-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mr-player.is-fullscreen .mr-chart-surface,
+.mr-player:fullscreen .mr-chart-surface,
+.mr-player:-webkit-full-screen .mr-chart-surface {
+  flex: 1 1 auto;
+  min-height: 260px;
+  height: auto;
+}
+.mr-player.is-fullscreen .mr-chart-host,
+.mr-player:fullscreen .mr-chart-host,
+.mr-player:-webkit-full-screen .mr-chart-host {
+  border-radius: 7px;
+}
+.mr-player.is-fullscreen .mr-side-col,
+.mr-player:fullscreen .mr-side-col,
+.mr-player:-webkit-full-screen .mr-side-col {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 2px;
+}
+.mr-player.is-fullscreen .mr-card,
+.mr-player:fullscreen .mr-card,
+.mr-player:-webkit-full-screen .mr-card {
+  padding: 11px;
+}
+.mr-player.is-fullscreen .mr-card h4,
+.mr-player:fullscreen .mr-card h4,
+.mr-player:-webkit-full-screen .mr-card h4 {
+  margin-bottom: 7px;
+}
+.mr-player.is-fullscreen .mr-account-row,
+.mr-player:fullscreen .mr-account-row,
+.mr-player:-webkit-full-screen .mr-account-row {
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+/* Existing tablet breakpoint used to set the raw chart host to 360px.
+ * The surface now owns height; override that inherited host constraint. */
+@media (max-width: 980px) {
+  .mr-chart-surface { height: 360px; }
+  .mr-chart-surface .mr-chart-host { height: 100%; }
+}
+
+/* ---------- iPhone-first normal + fullscreen layout ---------- */
+@media (max-width: 560px) {
+  .mr-player .mr-controlbar {
+    flex-direction: row !important;
+    align-items: center !important;
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .mr-player .mr-cb-left {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 7px;
+    line-height: 1.2;
+  }
+  .mr-player #mrSymbolLabel {
+    flex: 1 1 100%;
+    font-size: 13px;
+  }
+  .mr-player .mr-clock {
+    font-size: 11px;
+  }
+  .mr-player #mrStatusPill { display: none; }
+  .mr-player #mrPercent {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 10.5px;
+  }
+
+  .mr-chart-surface {
+    height: clamp(300px, 44dvh, 360px);
+  }
+  .mr-fullscreen-control {
+    top: 7px;
+    right: 7px;
+  }
+
+  /* Five 42px touch targets + compact speed selector fit 390px with room
+     to spare, so Replay no longer expands into the old 3-row text toolbar. */
+  .mr-transport {
+    justify-content: space-between;
+    gap: 5px;
+  }
+  .mr-transport .mr-icon-control {
+    width: 42px !important;
+    min-width: 42px;
+    flex: 0 0 42px !important;
+  }
+  .mr-transport .mr-date-control {
+    width: 42px !important;
+    padding: 0 !important;
+  }
+  .mr-date-label { display: none; }
+  .mr-speed-inline select {
+    width: 58px;
+    min-width: 58px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  .mr-quick-trade { margin-top: 6px; }
+  .mr-quick-trade button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
+  /* Position/order details become the first secondary card after the
+     chart/trade/transport stack; the full account and journal follow it. */
+  .mr-side-col .mr-order { order: 1; }
+  .mr-side-col .mr-account { order: 2; }
+  .mr-side-col .mr-trades { order: 3; }
+
+  .mr-card { padding: 11px; }
+  .mr-order-fields {
+    grid-template-columns: repeat(3, minmax(0,1fr));
+    gap: 6px;
+  }
+  .mr-order-fields label {
+    min-width: 0;
+    margin: 0;
+    font-size: 10.5px;
+  }
+  .mr-order-fields input {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 6px;
+    font-size: 12px;
+  }
+  .mr-position-status {
+    margin-bottom: 8px;
+    padding-bottom: 7px;
+  }
+
+  .mr-goto {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) 62px 62px;
+    gap: 6px;
+  }
+  .mr-goto.hidden { display: none; }
+  .mr-goto input[type="number"] { width: 100%; }
+  .mr-goto button {
+    grid-column: span 1;
+    min-height: 38px;
+  }
+  #mrGotoApply { grid-column: 1 / span 2; }
+  #mrGotoCancel { grid-column: 3; }
+}
+
+@media (max-width: 700px) {
+  .mr-player.is-fullscreen,
+  .mr-player:fullscreen,
+  .mr-player:-webkit-full-screen {
+    padding:
+      calc(6px + env(safe-area-inset-top, 0px))
+      calc(6px + env(safe-area-inset-right, 0px))
+      calc(6px + env(safe-area-inset-bottom, 0px))
+      calc(6px + env(safe-area-inset-left, 0px));
+  }
+
+  .mr-player.is-fullscreen .mr-layout,
+  .mr-player:fullscreen .mr-layout,
+  .mr-player:-webkit-full-screen .mr-layout {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    gap: 8px;
+  }
+  .mr-player.is-fullscreen .mr-chart-col,
+  .mr-player:fullscreen .mr-chart-col,
+  .mr-player:-webkit-full-screen .mr-chart-col {
+    flex: 0 0 auto;
+  }
+  .mr-player.is-fullscreen .mr-chart-surface,
+  .mr-player:fullscreen .mr-chart-surface,
+  .mr-player:-webkit-full-screen .mr-chart-surface {
+    flex: none;
+    height: clamp(280px, 48dvh, 460px);
+    min-height: 280px;
+  }
+  .mr-player.is-fullscreen .mr-side-col,
+  .mr-player:fullscreen .mr-side-col,
+  .mr-player:-webkit-full-screen .mr-side-col {
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  /* Fullscreen is the trading terminal, not the session-history viewer.
+     The journal remains intact and reappears on exit; hiding it here only
+     prioritises chart + order state + cash/P&L inside a phone viewport. */
+  .mr-player.is-fullscreen .mr-trades,
+  .mr-player:fullscreen .mr-trades,
+  .mr-player:-webkit-full-screen .mr-trades {
+    display: none;
+  }
+}
+
+/* Very short phones / landscape: trade and controls still win over chart,
+ * but the chart retains a useful floor instead of collapsing. */
+@media (max-height: 650px) and (max-width: 900px) {
+  .mr-player.is-fullscreen .mr-chart-surface,
+  .mr-player:fullscreen .mr-chart-surface,
+  .mr-player:-webkit-full-screen .mr-chart-surface {
+    height: clamp(240px, 46dvh, 330px);
+    min-height: 240px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mr-fullscreen-control,
+  .mr-icon-control,
+  .mr-quick-trade button { transition: none !important; }
+}
