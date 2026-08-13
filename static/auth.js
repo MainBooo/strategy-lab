@@ -149,4 +149,12 @@
     commerceScript.onerror = function () { /* commerce must not block core app */ };
     document.head.appendChild(commerceScript);
   }
+  if (!document.querySelector('script[data-strategy-lab-order-detail="1"]')) {
+    const detailScript = document.createElement("script");
+    detailScript.src = "/static/commerce-account-detail.js";
+    detailScript.defer = true;
+    detailScript.dataset.strategyLabOrderDetail = "1";
+    detailScript.onerror = function () { /* order details are progressive enhancement */ };
+    document.head.appendChild(detailScript);
+  }
 })();
