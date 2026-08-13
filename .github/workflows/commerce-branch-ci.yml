@@ -33,7 +33,8 @@ jobs:
         run: |
           node --check static/auth.js
           node --check static/commerce.js
-          node --check static/admin.js
           node --check static/commerce-account-detail.js
+          node --check static/admin.js
+          node --check static/admin-overview-payments.js
       - name: Test suite
         run: pytest -q
