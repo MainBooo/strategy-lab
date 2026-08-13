@@ -1,0 +1,15 @@
+{% extends "_base.html" %}
+{% block title %}Результат оплаты — Strategy Lab{% endblock %}
+{% block content %}
+<section class="tab-page commerce-result-page">
+  <article class="card commerce-result-card">
+    <span class="step">Оплата</span>
+    <h2 id="paymentResultTitle">Проверяем оплату…</h2>
+    <p class="lead" id="paymentResultText">Получаем подтверждение от YooKassa. Возврат на эту страницу сам по себе не считается подтверждением платежа.</p>
+    <div class="commerce-result-actions" id="paymentResultActions"><a class="secondary" href="/account/strategies">Мои стратегии</a></div>
+  </article>
+</section>
+<script>
+window.STRATEGY_LAB_PAYMENT_RESULT={{ {"payment_id": payment_id, "type": payment_type}|tojson }};
+</script>
+{% endblock %}
