@@ -5,6 +5,8 @@
   <title>{% block title %}Strategy Lab{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static',filename='auth.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='commerce-mobile.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='commerce-notifications.css') }}">
   <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body>
@@ -45,5 +47,6 @@
 </footer>
 </main>
 <script src="{{ url_for('static',filename='auth.js') }}"></script>
+<script src="{{ url_for('static',filename='commerce-notifications.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body></html>
