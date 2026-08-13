@@ -17,6 +17,7 @@ def _stub_native_store(monkeypatch):
         "latest_ts": 9_999_999_999,
         "candle_count": 10_000,
     })
+    monkeypatch.setattr(store, "get_sync_state", lambda *args, **kwargs: {"backfilled_complete": 1})
 
     def fake_get_candles(ticker, board, timeframe, *, ts_from=None, ts_to=None, before=None, limit=5000):
         seen["limit"] = limit
@@ -24,8 +25,8 @@ def _stub_native_store(monkeypatch):
         # Two rows are enough to exercise the response path; the contract we
         # care about here is the limit passed into the indexed store query.
         return [
-            {"time": 100, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1},
-            {"time": 200, "open": 2, "high": 2, "low": 2, "close": 2, "volume": 2},
+            {"time": 1_700_000_000, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1},
+            {"time": 1_700_086_400, "open": 2, "high": 2, "low": 2, "close": 2, "volume": 2},
         ]
 
     monkeypatch.setattr(store, "get_candles", fake_get_candles)
@@ -81,6 +82,71 @@ def test_before_cursor_keeps_pagination_page_size(monkeypatch):
 
     assert seen["limit"] == 2000
     assert seen["before"] == 1234567890
+
+
+def test_bounded_all_history_page_keeps_cursor_until_backfill_is_complete(monkeypatch):
+    first = 1_700_000_000
+    candles = [
+        {"time": first, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1},
+        {"time": first + 86400, "open": 2, "high": 2, "low": 2, "close": 2, "volume": 2},
+    ]
+
+    monkeypatch.setattr(candle_api, "_ensure_coverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "touch_access", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "get_candles", lambda *args, **kwargs: candles)
+    monkeypatch.setattr(store, "coverage", lambda *args, **kwargs: {
+        "earliest_ts": first,
+        "latest_ts": candles[-1]["time"],
+        "candle_count": len(candles),
+    })
+    monkeypatch.setattr(store, "get_sync_state", lambda *args, **kwargs: {"backfilled_complete": 0})
+
+    result = candle_api.get_candles(
+        None,
+        ticker="SBER",
+        board="TQBR",
+        timeframe="1d",
+        from_date=sync.EARLIEST_PLAUSIBLE_DATE,
+        till_date="2026-08-13",
+        limit=5000,
+    )
+
+    # Only two rows were returned (far below the 500-row initial page cap),
+    # but the bounded cache is not fully backfilled yet, so scrolling left
+    # must still be offered and trigger the next older window.
+    assert result["nextCursor"] == first
+    assert result["hasOlder"] is True
+
+
+def test_history_cursor_stops_at_real_start_after_backfill_complete(monkeypatch):
+    first = 1_000_000_000
+    candles = [
+        {"time": first, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1},
+        {"time": first + 86400, "open": 2, "high": 2, "low": 2, "close": 2, "volume": 2},
+    ]
+
+    monkeypatch.setattr(candle_api, "_ensure_coverage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "touch_access", lambda *args, **kwargs: None)
+    monkeypatch.setattr(store, "get_candles", lambda *args, **kwargs: candles)
+    monkeypatch.setattr(store, "coverage", lambda *args, **kwargs: {
+        "earliest_ts": first,
+        "latest_ts": candles[-1]["time"],
+        "candle_count": len(candles),
+    })
+    monkeypatch.setattr(store, "get_sync_state", lambda *args, **kwargs: {"backfilled_complete": 1})
+
+    result = candle_api.get_candles(
+        None,
+        ticker="SBER",
+        board="TQBR",
+        timeframe="1d",
+        from_date=sync.EARLIEST_PLAUSIBLE_DATE,
+        till_date="2026-08-13",
+        limit=5000,
+    )
+
+    assert result["nextCursor"] is None
+    assert result["hasOlder"] is False
 
 
 def test_aggregated_initial_request_uses_its_own_page_limit(monkeypatch):
