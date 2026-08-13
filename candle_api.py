@@ -48,28 +48,47 @@ def _date_to_ts(d: str) -> int:
     return calendar.timegm((y, m, day, 0, 0, 0, 0, 0, 0))
 
 
+# Initial "all history" chart requests are deliberately page-sized. The
+# frontend may ask for a generous limit (historically 5000), but returning
+# thousands of bars makes fitContent hit the time-scale compression floor on
+# narrow/mobile charts and visually leaves only a short recent fragment. The
+# chart engine already has cursor-based lazy loading to the left, so start
+# with a useful recent window and let older history arrive only when needed.
+# Explicit custom ranges and `before` pagination are never capped here.
+_INITIAL_PAGE_LIMIT = {
+    "1m": 1200,
+    "10m": 1000,
+    "30m": 900,
+    "60m": 800,
+    "4h": 600,
+    "1d": 500,
+    "1w": 260,
+    "1mo": 120,
+}
+
 # Bounds how far back a single /api/candles request will backfill from MOEX
 # when the requested from_date reaches further back than what's cached.
-# None = uncapped (daily/weekly/monthly: the spec explicitly allows loading
-# the full daily history in one go - at most a few thousand bars/pages
-# across MOEX's whole listed history for one ticker).
+# Every timeframe is windowed: even daily/weekly/monthly history is fetched
+# progressively instead of making a cold chart download the instrument's
+# entire lifetime before it can render. Repeated scroll-left requests extend
+# the contiguous cached range one window at a time.
 #
-# Intraday timeframes are capped to a bounded *window immediately adjacent
-# to the already-cached range* - not a raw page-count cutoff. MOEX's
-# candles.json only paginates forward (ascending from `from`, via `start`),
-# with no descending/reverse option, so capping by page count alone would
-# fetch the OLDEST pages of a huge gap first (e.g. from a ticker's 2011
-# listing date) instead of the chunk right next to what's already shown -
-# leaving a silent hole between the newly-fetched fragment and the existing
-# cache while `earliest_ts` (a plain MIN(ts), not contiguity-aware) would
-# still claim coverage back to 2011. Bounding the *window* instead keeps
-# every backfill contiguous with what's already there; repeated scroll-left
-# calls extend it further back one bounded chunk at a time.
-_BACKFILL_WINDOW_DAYS = {"1m": 14, "10m": 45, "60m": 220, "1d": None, "1w": None, "1mo": None}
+# MOEX candles.json only paginates forward (ascending from `from`, via
+# `start`), with no descending/reverse option. Bounding the window adjacent
+# to the cached range therefore matters: a raw page-count cutoff from 2000
+# would fetch the oldest fragment first and leave a hole before recent data.
+_BACKFILL_WINDOW_DAYS = {
+    "1m": 14,
+    "10m": 45,
+    "60m": 220,
+    "1d": 730,
+    "1w": 365 * 5,
+    "1mo": 365 * 10,
+}
 # Belt-and-suspenders page cap on top of the window bound, in case a bounded
 # window unexpectedly contains far more data than typical (e.g. a data
 # anomaly) - never the primary bounding mechanism, just a hang guard.
-_BACKFILL_MAX_PAGES = {"1m": 80, "10m": 80, "60m": 120, "1d": None, "1w": None, "1mo": None}
+_BACKFILL_MAX_PAGES = {"1m": 80, "10m": 80, "60m": 120, "1d": 40, "1w": 20, "1mo": 20}
 
 
 def _ensure_coverage(ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
@@ -252,7 +271,8 @@ def _get_aggregated_candles(*, ticker: str, board: str, timeframe: str, from_dat
     base_interval_seconds = TIMEFRAME_TO_MOEX_INTERVAL[agg["base"]] * 60
     factor = agg["bucket_seconds"] // base_interval_seconds
     base = get_candles(None, ticker=ticker, board=board, timeframe=agg["base"], from_date=from_date,
-                        till_date=till_date, limit=limit * factor + factor, before=before, market=market, engine=engine)
+                        till_date=till_date, limit=limit * factor + factor, before=before,
+                        market=market, engine=engine, _cap_initial=False)
     bars = _aggregate(base["candles"], agg["bucket_seconds"])
     # The oldest bucket can be partial if the base fetch was truncated
     # mid-bucket (base["nextCursor"] set): drop it instead of showing a
@@ -274,7 +294,7 @@ def _get_aggregated_candles(*, ticker: str, board: str, timeframe: str, from_dat
 
 def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: str, from_date: str, till_date: str,
                  limit: int, before: int | None = None, market: str = DEFAULT_MARKET,
-                 engine: str = DEFAULT_ENGINE) -> dict:
+                 engine: str = DEFAULT_ENGINE, _cap_initial: bool = True) -> dict:
     """Returns {"candles": [...], "nextCursor": int|None, "hasOlder": bool,
     "hasNewer": bool, "actualFrom": int|None, "actualTill": int|None} -
     unix-seconds OHLCV, ascending.
@@ -286,9 +306,12 @@ def get_candles(data_dir: Path | None, *, ticker: str, board: str, timeframe: st
     from_date/till_date bound the window we're willing to serve; `before`
     (unix seconds), if given, additionally caps the latest bar returned so
     the frontend can page further into the past without re-fetching bars
-    it already has.
+    it already has. An implicit all-history initial request is page-capped;
+    explicit ranges and pagination keep the caller's requested limit.
     """
     ticker = ticker.upper()
+    if _cap_initial and before is None and from_date <= sync.EARLIEST_PLAUSIBLE_DATE:
+        limit = min(limit, _INITIAL_PAGE_LIMIT.get(timeframe, 500))
     if timeframe in AGGREGATE_TIMEFRAMES:
         return _get_aggregated_candles(ticker=ticker, board=board, timeframe=timeframe, from_date=from_date,
                                         till_date=till_date, limit=limit, before=before, market=market, engine=engine)
