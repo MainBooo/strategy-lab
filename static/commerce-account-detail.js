@@ -7,5 +7,6 @@
     s.onerror=function(){}; document.head.appendChild(s);
   }
   load("/static/commerce-notifications.js","commerce-notifications");
+  load("/static/commerce-notification-ack-fix.js","commerce-notification-ack-fix");
   if(location.pathname==="/account/strategies") load("/static/commerce-account-detail-core.js","commerce-order-detail-core");
 })();
