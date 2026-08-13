@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+{% block title %}Администрирование — Strategy Lab{% endblock %}
+{% block content %}
+<section class="admin-shell" id="adminShell">
+  <aside class="admin-sidebar">
+    <a class="admin-back" href="/">← Strategy Lab</a>
+    <div class="admin-brand"><span class="step">ADMIN</span><strong>Администрирование</strong></div>
+    <nav class="admin-nav">
+      <a href="/admin" data-admin-section="overview">Обзор</a>
+      <a href="/admin/strategy-orders" data-admin-section="orders">Заявки</a>
+      <a href="/admin/payments" data-admin-section="payments">Платежи</a>
+      <a href="/admin/users" data-admin-section="users">Пользователи</a>
+    </nav>
+  </aside>
+  <div class="admin-main">
+    <div class="admin-mobile-head"><strong>Strategy Lab — Admin</strong><button type="button" class="secondary" id="adminMenuToggle">Меню</button></div>
+    <div id="adminContent"><div class="card"><p class="hint">Загрузка…</p></div></div>
+  </div>
+</section>
+<script>
+window.STRATEGY_LAB_ADMIN={{ {"section": initial_section, "entity_id": initial_entity_id}|tojson }};
+</script>
+{% endblock %}
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static',filename='admin.js') }}"></script>
+{% endblock %}
