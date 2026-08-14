@@ -360,12 +360,17 @@ button {
     width: 44px;
     min-width: 44px;
     max-width: 44px;
+    max-height: 100%;
     padding: 2px;
     gap: 0;
+    z-index: 540;
     overflow-y: auto;
-    overflow-x: visible;
+    overflow-x: hidden;
     overscroll-behavior-y: contain;
+    scrollbar-width: none;
   }
+  body.charts-active #chartsRoot .ca-tools.tv-rail::-webkit-scrollbar { display: none; }
+  body.charts-active #chartsRoot .ca-tools.tv-rail:has(.tv-tool-flyout:not(.hidden)) { overflow: visible; }
   body.charts-active #chartsRoot .tv-tool-group-btn,
   body.charts-active #chartsRoot .tv-rail-action {
     width: 40px;
