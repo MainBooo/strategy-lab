@@ -148,6 +148,27 @@ def check_chart(page: Page, width: int, height: int, phone: bool, issues: list[s
     else:
         issues.append("drawing rail Properties/Objects toggle is not available")
 
+    # Fullscreen uses the existing FullscreenController and must keep the
+    # same ChartCore object on both enter and exit. A raw DOM click lets the
+    # controller exercise its CSS fallback in headless browsers that reject
+    # native fullscreen without OS-level user activation.
+    page.evaluate("() => { window.__responsiveSmokeFsCore = window.ChartAnalysisPage?.tiles?.[0]?.core || null; document.querySelector('#caFullscreenBtn')?.click(); }")
+    page.wait_for_timeout(220)
+    fs_active = page.evaluate("() => document.querySelector('#chartsRoot')?.classList.contains('is-fullscreen')")
+    fs_same_core = page.evaluate("() => !!window.__responsiveSmokeFsCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeFsCore")
+    if not fs_active:
+        issues.append("workspace fullscreen did not enter")
+    if not fs_same_core:
+        issues.append("ChartCore was recreated while entering fullscreen")
+    page.evaluate("() => document.querySelector('#caFullscreenBtn')?.click()")
+    page.wait_for_timeout(220)
+    fs_left = page.evaluate("() => !document.querySelector('#chartsRoot')?.classList.contains('is-fullscreen')")
+    fs_same_core_after = page.evaluate("() => !!window.__responsiveSmokeFsCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeFsCore")
+    if not fs_left:
+        issues.append("workspace fullscreen did not exit")
+    if not fs_same_core_after:
+        issues.append("ChartCore was recreated while exiting fullscreen")
+
     check_document_overflow(page, issues)
 
 
