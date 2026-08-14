@@ -78,7 +78,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3h6"/><path d="M10 3v5l-5 9a2 2 0 0 0 1.75 3h10.5A2 2 0 0 0 19 17l-5-9V3"/><path d="M8 14h8"/></svg>
       </span>
       <strong>5</strong>
-      <span>Режимов исследования</span>
+      <span>Модулей</span>
     </div>
     <div class="hero-stat">
       <span class="hero-stat-icon" aria-hidden="true">
