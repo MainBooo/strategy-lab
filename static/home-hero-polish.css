@@ -1,89 +1,259 @@
 /* Final visual polish for the premium Strategy Lab home hero.
    Loaded after home-hero.css so these rules are intentionally authoritative. */
 
-/* Turn the decorative market bars into real candlesticks: body + wick.
-   This stays CSS-only and purely presentational. */
+/* -------------------------------------------------------------------------
+   Hero market chart
+   The original decorative bars were all anchored to the same baseline, which
+   still read as a volume histogram. These spans are now positioned as true
+   floating candle bodies with independent bodies, wicks and vertical levels.
+   ------------------------------------------------------------------------- */
 .hero-market-bars {
-  left: 34%;
+  left: 31%;
   right: 18px;
-  bottom: 8px;
-  height: 132px;
-  gap: 11px;
+  bottom: 3px;
+  height: 146px;
+  gap: 12px;
   align-items: flex-end;
-  opacity: .28;
+  opacity: .50;
   overflow: visible;
+  z-index: 1;
 }
 
 .hero-market-bars span {
+  --body: 26px;
+  --lift: 28px;
+  --wick-up: 12px;
+  --wick-down: 12px;
   position: relative;
-  width: 8px;
-  min-height: 14px;
-  height: var(--bar, 35%);
+  width: 9px;
+  min-height: 0;
+  height: var(--body) !important;
+  flex: 0 0 auto;
   border-radius: 2px;
-  background: linear-gradient(180deg, rgba(71,234,183,.95), rgba(24,153,119,.62));
-  box-shadow: 0 0 12px rgba(54,225,174,.14);
+  transform: translateY(calc(-1 * var(--lift)));
+  background: linear-gradient(180deg, rgba(71,234,183,.96), rgba(23,151,117,.72));
+  border: 1px solid rgba(82,236,190,.20);
+  box-shadow: 0 0 13px rgba(54,225,174,.17), inset 0 1px 0 rgba(255,255,255,.08);
 }
 
 .hero-market-bars span::before {
   content: "";
   position: absolute;
   left: 50%;
-  top: -14px;
-  bottom: -13px;
+  top: calc(-1 * var(--wick-up));
+  bottom: calc(-1 * var(--wick-down));
   width: 1px;
   transform: translateX(-50%);
-  background: rgba(73,226,181,.92);
-  box-shadow: 0 0 8px rgba(73,226,181,.1);
+  background: rgba(84,229,187,.94);
+  box-shadow: 0 0 7px rgba(73,226,181,.16);
+  z-index: -1;
 }
 
-/* Slight vertical offsets make the candles read as OHLC data rather than a histogram. */
-.hero-market-bars span:nth-child(2),
-.hero-market-bars span:nth-child(6),
-.hero-market-bars span:nth-child(9),
-.hero-market-bars span:nth-child(13) { transform: translateY(11px); }
-.hero-market-bars span:nth-child(3),
+/* Individual OHLC-like body heights and price levels. */
+.hero-market-bars span:nth-child(1)  { --body: 24px; --lift: 10px; --wick-up: 11px; --wick-down: 8px; }
+.hero-market-bars span:nth-child(2)  { --body: 34px; --lift: 18px; --wick-up: 14px; --wick-down: 10px; }
+.hero-market-bars span:nth-child(3)  { --body: 28px; --lift: 35px; --wick-up: 10px; --wick-down: 15px; }
+.hero-market-bars span:nth-child(4)  { --body: 39px; --lift: 28px; --wick-up: 16px; --wick-down: 12px; }
+.hero-market-bars span:nth-child(5)  { --body: 23px; --lift: 47px; --wick-up: 13px; --wick-down: 10px; }
+.hero-market-bars span:nth-child(6)  { --body: 43px; --lift: 42px; --wick-up: 11px; --wick-down: 14px; }
+.hero-market-bars span:nth-child(7)  { --body: 27px; --lift: 61px; --wick-up: 15px; --wick-down: 9px; }
+.hero-market-bars span:nth-child(8)  { --body: 37px; --lift: 55px; --wick-up: 12px; --wick-down: 15px; }
+.hero-market-bars span:nth-child(9)  { --body: 25px; --lift: 72px; --wick-up: 10px; --wick-down: 12px; }
+.hero-market-bars span:nth-child(10) { --body: 41px; --lift: 60px; --wick-up: 17px; --wick-down: 10px; }
+.hero-market-bars span:nth-child(11) { --body: 31px; --lift: 77px; --wick-up: 13px; --wick-down: 13px; }
+.hero-market-bars span:nth-child(12) { --body: 45px; --lift: 68px; --wick-up: 15px; --wick-down: 11px; }
+.hero-market-bars span:nth-child(13) { --body: 27px; --lift: 85px; --wick-up: 10px; --wick-down: 14px; }
+.hero-market-bars span:nth-child(14) { --body: 36px; --lift: 78px; --wick-up: 14px; --wick-down: 9px; }
+
+/* Red candles are deliberately irregular, like a real sequence. */
+.hero-market-bars span:nth-child(4),
 .hero-market-bars span:nth-child(7),
-.hero-market-bars span:nth-child(11) { transform: translateY(-7px); }
-.hero-market-bars span:nth-child(5),
 .hero-market-bars span:nth-child(10),
-.hero-market-bars span:nth-child(14) { transform: translateY(5px); }
-
-/* A few red candles make the chart feel like a real market chart. */
-.hero-market-bars span:nth-child(4n) {
-  background: linear-gradient(180deg, rgba(255,102,121,.82), rgba(169,52,74,.56));
-  box-shadow: 0 0 11px rgba(255,102,121,.08);
+.hero-market-bars span:nth-child(13) {
+  background: linear-gradient(180deg, rgba(255,105,125,.91), rgba(167,50,73,.69));
+  border-color: rgba(255,118,137,.17);
+  box-shadow: 0 0 12px rgba(255,102,121,.13), inset 0 1px 0 rgba(255,255,255,.055);
 }
-.hero-market-bars span:nth-child(4n)::before { background: rgba(255,110,129,.82); }
+.hero-market-bars span:nth-child(4)::before,
+.hero-market-bars span:nth-child(7)::before,
+.hero-market-bars span:nth-child(10)::before,
+.hero-market-bars span:nth-child(13)::before { background: rgba(255,118,137,.90); }
 
 /* Fine luminous price path behind the candles. */
 .hero-market-bars::after {
   content: "";
   position: absolute;
-  left: -20%;
-  right: -4%;
-  bottom: 13%;
-  height: 72%;
-  border-top: 1px solid rgba(76,231,187,.28);
-  border-radius: 50% 50% 0 0;
-  transform: rotate(-6deg) skewX(-11deg);
-  filter: drop-shadow(0 0 7px rgba(76,231,187,.12));
+  left: -28%;
+  right: -3%;
+  bottom: 23%;
+  height: 66%;
+  border-top: 1.5px solid rgba(76,231,187,.42);
+  border-radius: 52% 48% 0 0;
+  transform: rotate(-7deg) skewX(-8deg);
+  filter: drop-shadow(0 0 7px rgba(76,231,187,.16));
+  pointer-events: none;
 }
+
+/* Keep the chart behind labels, while letting it remain clearly visible. */
+.hero-stat { z-index: 3; }
+.hero-stats::before { z-index: 0; }
+.hero-stats::after { z-index: 0; }
+
+/* -------------------------------------------------------------------------
+   Header/topbar fit
+   Keep all desktop/tablet actions on one composed row for as long as there is
+   enough space, instead of wrapping Login/Register onto a visually random row.
+   ------------------------------------------------------------------------- */
+@media (min-width: 981px) and (max-width: 1180px) {
+  .hero-topbar { align-items: center; padding: 0; gap: 16px; }
+  .hero-premium .hero-meta {
+    max-width: none;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    gap: 7px;
+  }
+  .hero-premium .hero-meta .status,
+  .hero-premium .hero-meta .beta-badge,
+  .hero-premium .hero-meta .secondary,
+  .hero-premium .hero-meta .primary,
+  .hero-premium .hero-meta #supportProjectBtn,
+  .hero-premium .hero-meta .commerce-support-header,
+  .hero-premium .account-trigger {
+    min-height: 38px;
+    padding: 8px 11px;
+    font-size: 10.5px;
+  }
+  .hero-premium .beta-badge { padding-inline: 11px; font-size: 8.5px; }
+  .hero-brand { font-size: 19px; }
+  .hero-brand-mark { width: 34px; height: 34px; }
+}
+
+/* -------------------------------------------------------------------------
+   Primary app tabs
+   Reduce active-tab visual mass while preserving the existing moving
+   indicator and data-tab interaction contract.
+   ------------------------------------------------------------------------- */
+.tabs.app-primary-tabs {
+  padding: 6px;
+  min-height: 60px;
+  border-radius: 17px;
+}
+.tabs.app-primary-tabs .tab {
+  min-height: 46px;
+  padding: 0 13px;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 620;
+}
+.tabs.app-primary-tabs .tab svg { width: 18px; height: 18px; opacity: .82; }
+.tabs.app-primary-tabs .tab-indicator {
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(102,119,239,.90), rgba(83,96,207,.88));
+  box-shadow: 0 6px 18px rgba(91,104,232,.16), inset 0 1px 0 rgba(255,255,255,.085);
+}
+.tabs.app-primary-tabs .tab.active {
+  background: linear-gradient(135deg, rgba(102,119,239,.90), rgba(83,96,207,.88));
+  box-shadow: 0 6px 18px rgba(91,104,232,.16);
+}
+#appPrimaryTabs.indicator-ready .tab.active { background: transparent; box-shadow: none; }
+
+/* -------------------------------------------------------------------------
+   Portfolio filters
+   Explicit grid layouts prevent the two checkbox filters from drifting onto
+   arbitrary rows depending on label lengths and browser font metrics.
+   ------------------------------------------------------------------------- */
+#tab-portfolio > .card:first-child .catalog-toolbar {
+  display: grid;
+  grid-template-columns: minmax(330px, 2fr) minmax(150px, .72fr) minmax(205px, .95fr) max-content max-content;
+  gap: 10px;
+  align-items: stretch;
+}
+#tab-portfolio > .card:first-child .catalog-toolbar > * {
+  min-width: 0;
+  margin: 0;
+}
+#tab-portfolio > .card:first-child .catalog-toolbar .catalog-search,
+#tab-portfolio > .card:first-child .catalog-toolbar select,
+#tab-portfolio > .card:first-child .catalog-toolbar .toggle {
+  height: 48px;
+}
+#tab-portfolio > .card:first-child .catalog-toolbar .toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  white-space: nowrap;
+  padding: 0 14px;
+}
+#tab-portfolio > .card:first-child .catalog-toolbar .toggle input { flex: 0 0 auto; }
 
 /* Slightly stronger chart presence on desktop, matching the approved mockup. */
-@media (min-width: 981px) {
+@media (min-width: 1181px) {
   .hero-stats { min-height: 258px; }
-  .hero-market-bars { opacity: .31; }
+  .hero-market-bars { opacity: .52; }
 }
 
-/* Tablet: keep the premium hero balanced instead of letting the stats dominate. */
-@media (max-width: 980px) {
-  .hero-main { gap: 22px; }
-  .hero-stats { min-height: 208px; }
-  .hero-market-bars { height: 112px; opacity: .25; }
+/* Tablet landscape / compact desktop: filters become a deliberate two-row
+   composition and the hero preserves two columns instead of feeling squashed. */
+@media (min-width: 721px) and (max-width: 1100px) {
+  #tab-portfolio > .card:first-child .catalog-toolbar {
+    grid-template-columns: minmax(250px, 1.45fr) minmax(150px, .75fr) minmax(205px, 1fr);
+  }
+  #tab-portfolio > .card:first-child .catalog-toolbar > :nth-child(4),
+  #tab-portfolio > .card:first-child .catalog-toolbar > :nth-child(5) {
+    justify-self: start;
+    min-width: 190px;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 980px) {
+  .hero-main {
+    grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr);
+    align-items: center;
+    gap: 20px;
+    padding-top: 25px;
+  }
+  .hero-copy h1 { font-size: clamp(43px, 6vw, 54px); }
+  .hero-copy > p { margin-top: 17px; font-size: 15px; line-height: 1.5; }
+  .hero-cta { margin-top: 20px; gap: 8px; }
+  .hero-cta .primary,
+  .hero-cta .secondary { min-height: 48px; padding-inline: 16px; font-size: 12px; }
+  .hero-cta .primary { min-width: 190px; }
+
+  .hero-stats {
+    grid-template-columns: 1fr 1fr;
+    min-height: 228px;
+  }
+  .hero-stat { min-height: 114px; padding: 13px 15px; }
+  .hero-stat:nth-of-type(3) { border-left: 0; border-top: 1px solid rgba(255,255,255,.07); }
+  .hero-stat:nth-of-type(4) { border-top: 1px solid rgba(255,255,255,.07); }
+  .hero-stat-icon { width: 37px; height: 37px; margin-bottom: 8px; border-radius: 11px; }
+  .hero-stat-icon svg { width: 18px; height: 18px; }
+  .hero-stat strong { font-size: 24px; margin-bottom: 3px; }
+  .hero-stat span:last-child { font-size: 9.5px; }
+
+  .hero-market-bars { left: 31%; height: 112px; gap: 8px; opacity: .38; }
+  .hero-market-bars span { width: 6px; }
 }
 
 /* Phones use the existing fixed bottom navigation. The desktop tab strip must
    not reappear just because home-hero.css is loaded after styles.css. */
+@media (max-width: 720px) {
+  #tab-portfolio > .card:first-child .catalog-toolbar {
+    grid-template-columns: 1fr 1fr;
+    gap: 9px;
+  }
+  #tab-portfolio > .card:first-child .catalog-toolbar > :first-child {
+    grid-column: 1 / -1;
+  }
+  #tab-portfolio > .card:first-child .catalog-toolbar .toggle {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 620px) {
   .tabs.app-primary-tabs { display: none !important; }
   .tabs.mobile-bottom-nav { display: flex; }
@@ -132,7 +302,7 @@
     white-space: nowrap;
   }
 
-  .hero-main { gap: 18px; padding: 21px 0 2px; }
+  .hero-main { grid-template-columns: 1fr; gap: 18px; padding: 21px 0 2px; }
   .hero-copy .eyebrow { margin-bottom: 10px; font-size: 8.5px; }
   .hero-copy h1 { font-size: clamp(38px, 11vw, 46px); line-height: 1; }
   .hero-copy > p { margin-top: 14px; font-size: 14px; line-height: 1.5; }
@@ -147,38 +317,45 @@
     border-radius: 16px;
   }
 
-  .hero-stat {
-    min-height: 102px;
-    padding: 12px 14px;
-  }
-
-  .hero-stat-icon {
-    width: 34px;
-    height: 34px;
-    margin-bottom: 8px;
-    border-radius: 10px;
-  }
+  .hero-stat { min-height: 102px; padding: 12px 14px; }
+  .hero-stat-icon { width: 34px; height: 34px; margin-bottom: 8px; border-radius: 10px; }
   .hero-stat-icon svg { width: 17px; height: 17px; }
   .hero-stat strong { margin-bottom: 3px; font-size: 22px; }
   .hero-stat span:last-child { font-size: 9px; line-height: 1.25; }
 
   .hero-market-bars {
-    left: 34%;
+    left: 31%;
     right: 8px;
-    bottom: 4px;
-    height: 94px;
-    gap: 7px;
-    opacity: .25;
+    bottom: 1px;
+    height: 98px;
+    gap: 6px;
+    opacity: .37;
   }
   .hero-market-bars span { width: 5px; }
-  .hero-market-bars span::before { top: -9px; bottom: -9px; }
+  .hero-market-bars span:nth-child(1)  { --body: 16px; --lift: 5px; }
+  .hero-market-bars span:nth-child(2)  { --body: 22px; --lift: 10px; }
+  .hero-market-bars span:nth-child(3)  { --body: 18px; --lift: 19px; }
+  .hero-market-bars span:nth-child(4)  { --body: 25px; --lift: 15px; }
+  .hero-market-bars span:nth-child(5)  { --body: 16px; --lift: 28px; }
+  .hero-market-bars span:nth-child(6)  { --body: 27px; --lift: 24px; }
+  .hero-market-bars span:nth-child(7)  { --body: 18px; --lift: 37px; }
+  .hero-market-bars span:nth-child(8)  { --body: 24px; --lift: 32px; }
+  .hero-market-bars span:nth-child(9)  { --body: 16px; --lift: 43px; }
+  .hero-market-bars span:nth-child(10) { --body: 26px; --lift: 36px; }
+  .hero-market-bars span:nth-child(11) { --body: 20px; --lift: 47px; }
+  .hero-market-bars span:nth-child(12) { --body: 29px; --lift: 41px; }
+  .hero-market-bars span:nth-child(13) { --body: 18px; --lift: 51px; }
+  .hero-market-bars span:nth-child(14) { --body: 23px; --lift: 45px; }
+  .hero-market-bars span::before { --wick-up: 7px; --wick-down: 7px; }
 
-  .ticker-tape {
-    margin-bottom: 10px;
-    border-radius: 13px;
-  }
+  .ticker-tape { margin-bottom: 10px; border-radius: 13px; }
   .ticker-tape-seq { padding: 9px 0; }
   .ticker-tape-item { padding: 0 12px; font-size: 11.5px; }
+}
+
+@media (max-width: 480px) {
+  #tab-portfolio > .card:first-child .catalog-toolbar { grid-template-columns: 1fr; }
+  #tab-portfolio > .card:first-child .catalog-toolbar > :first-child { grid-column: auto; }
 }
 
 @media (max-width: 430px) {
