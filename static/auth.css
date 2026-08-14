@@ -1,4 +1,5 @@
 @import url("/static/home-hero.css");
+@import url("/static/home-hero-polish.css");
 
 /* Auth/account UI - reuses styles.css tokens (--accent, --line, --muted,
    .card/.form-grid/.primary/.secondary/.message/.hint) so these pages read
