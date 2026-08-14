@@ -1,0 +1,27 @@
+name: Post-login fix validation
+
+on:
+  push:
+    branches:
+      - fix/post-login-app-loading
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: JavaScript syntax
+        run: |
+          node --check static/app.js
+          node --check static/auth.js
+      - name: Python tests
+        run: python -m pytest -q
