@@ -70,6 +70,26 @@
     };
   }
 
+  // app.js currently waits for securities + portfolio/backtest startup data
+  // before it calls loadTickerTape(). After a login redirect, especially in
+  // Safari private browsing with a cold cache, that can leave the ticker on
+  // its initial "loading" placeholder even though ticker data itself is
+  // available. Kick the independent ticker loader as soon as the document is
+  // parsed; app.js has been evaluated by then because both scripts are classic
+  // synchronous scripts at the end of the page. The placeholder check avoids
+  // an unnecessary second request when normal bootstrap already completed.
+  if (document.getElementById("tickerTapeTrack")) {
+    document.addEventListener("DOMContentLoaded", function () {
+      setTimeout(function () {
+        const track = document.getElementById("tickerTapeTrack");
+        if (!track || typeof window.loadTickerTape !== "function") return;
+        if ((track.textContent || "").includes("Загрузка котировок")) {
+          window.loadTickerTape();
+        }
+      }, 0);
+    }, { once: true });
+  }
+
   // Analytics is best-effort infrastructure. The queue keeps auth events safe
   // even if the Metrika script has not loaded yet (or is blocked entirely).
   if (!window.StrategyLabAnalytics) {
