@@ -1738,15 +1738,52 @@ document.addEventListener("keydown",e=>{
 
 // ------------------------------------------------------------- ticker tape
 let tickerTapeTimer=null;
+
+function fetchTickerTapeData(){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open("GET",`/api/market-ticker?_ts=${Date.now()}`,true);
+    xhr.timeout=8000;
+    xhr.setRequestHeader("Accept","application/json");
+
+    xhr.onload=()=>{
+      if(xhr.status<200||xhr.status>=300){
+        reject(new Error(`HTTP ${xhr.status}`));
+        return;
+      }
+      try{
+        resolve(JSON.parse(xhr.responseText||"{}"));
+      }catch(e){
+        reject(new Error("Некорректный ответ котировок"));
+      }
+    };
+
+    xhr.onerror=()=>reject(new Error("Ошибка сети"));
+    xhr.ontimeout=()=>reject(new Error("Таймаут котировок"));
+    xhr.send();
+  });
+}
+
 async function loadTickerTape(){
+  clearTimeout(tickerTapeTimer);
+
   try{
-    const r=await fetch("/api/market-ticker");
-    const d=await r.json();
+    const d=await fetchTickerTapeData();
     renderTickerTape(d);
-    tickerTapeTimer=setTimeout(loadTickerTape,(d.quotes&&d.quotes.length)?45000:60000);
+
+    tickerTapeTimer=setTimeout(
+      loadTickerTape,
+      (d.quotes&&d.quotes.length)?45000:12000
+    );
   }catch(e){
-    renderTickerTape({quotes:[],error:"Котировки временно недоступны"});
-    tickerTapeTimer=setTimeout(loadTickerTape,60000);
+    console.warn("Ticker tape load failed:",e);
+
+    renderTickerTape({
+      quotes:[],
+      error:"Котировки временно недоступны. Повторяем…"
+    });
+
+    tickerTapeTimer=setTimeout(loadTickerTape,12000);
   }
 }
 function renderTickerTape(d){
