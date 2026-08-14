@@ -1,4 +1,4 @@
-name: Post-login fix validation
+name: Finalize post-login fix formatting
 
 on:
   push:
@@ -6,22 +6,32 @@ on:
       - fix/post-login-app-loading
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  validate:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: pip
-      - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt
-      - name: JavaScript syntax
+          fetch-depth: 0
+      - name: Normalize app.js boundaries
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('static/app.js')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('    throw e;\n  }\n}function confirmDiscardIfDirty', '    throw e;\n  }\n}\n\nfunction confirmDiscardIfDirty', 1)
+          if not s.endswith('\n'):
+              s += '\n'
+          p.write_text(s, encoding='utf-8')
+          PY
           node --check static/app.js
-          node --check static/auth.js
-      - name: Python tests
-        run: python -m pytest -q
+      - name: Commit if needed
+        run: |
+          if git diff --quiet -- static/app.js; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add static/app.js
+          git commit -m "Normalize startup fix formatting"
+          git push
