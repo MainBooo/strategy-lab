@@ -449,7 +449,9 @@ async function loadPortfolios(){
     }
     throw e;
   }
-}function confirmDiscardIfDirty(portfolioId){
+}
+
+function confirmDiscardIfDirty(portfolioId){
   if(!editorDirty.has(portfolioId))return true;
   return confirm("В этом портфеле есть несохранённые изменения. Закрыть без сохранения?");
 }
