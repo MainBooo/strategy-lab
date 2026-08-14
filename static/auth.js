@@ -2,7 +2,7 @@
   "use strict";
 
   // Analytics is best-effort infrastructure. The queue keeps auth events safe
-  // even if the Metrika script has not loaded yet (or is blocked entirely).
+  // until the optional analytics bundle is loaded after the core page finishes.
   if (!window.StrategyLabAnalytics) {
     window.StrategyLabAnalytics = {
       q: [],
@@ -11,14 +11,31 @@
       trackVirtualPage: function () { this.q.push(["virtual"].concat(Array.from(arguments))); }
     };
   }
-  if (!document.querySelector('script[data-strategy-lab-analytics="1"]')) {
-    const analyticsScript = document.createElement("script");
-    analyticsScript.src = "/static/analytics.js";
-    analyticsScript.async = false;
-    analyticsScript.dataset.strategyLabAnalytics = "1";
-    analyticsScript.onerror = function () { /* analytics must never block auth/app */ };
-    document.head.appendChild(analyticsScript);
+
+  function afterInitialLoad(callback) {
+    const run = function () { setTimeout(callback, 0); };
+    if (document.readyState === "complete") run();
+    else window.addEventListener("load", run, { once: true });
   }
+
+  function loadOptionalScript(src, datasetKey, marker) {
+    if (document.querySelector(`script[${marker}="1"]`)) return;
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset[datasetKey] = "1";
+    script.onerror = function () { /* optional enhancement must never block core app */ };
+    document.head.appendChild(script);
+  }
+
+  // Keep analytics/commerce completely outside the browser's initial page-load
+  // lifecycle. This is important on Safari Private/LTE: a stalled optional
+  // resource must not leave the newly authenticated page spinning forever.
+  afterInitialLoad(function () {
+    loadOptionalScript("/static/analytics.js", "strategyLabAnalytics", "data-strategy-lab-analytics");
+    loadOptionalScript("/static/commerce.js", "strategyLabCommerce", "data-strategy-lab-commerce");
+    loadOptionalScript("/static/commerce-account-detail.js", "strategyLabOrderDetail", "data-strategy-lab-order-detail");
+  });
 
   function trackGoal(name, params) {
     try { window.StrategyLabAnalytics.trackGoal(name, params || {}); } catch (e) { /* best-effort */ }
@@ -135,26 +152,5 @@
   if (menuBtn && dropdown) {
     menuBtn.addEventListener("click", (e) => { e.stopPropagation(); dropdown.classList.toggle("hidden"); });
     document.addEventListener("click", () => dropdown.classList.add("hidden"));
-  }
-
-  // Commerce is an optional product layer. Loading it from the already-shared
-  // auth bundle avoids duplicating script tags across the large index template
-  // and every account/admin Jinja page. A load failure must never block the
-  // free trading laboratory itself.
-  if (!document.querySelector('script[data-strategy-lab-commerce="1"]')) {
-    const commerceScript = document.createElement("script");
-    commerceScript.src = "/static/commerce.js";
-    commerceScript.defer = true;
-    commerceScript.dataset.strategyLabCommerce = "1";
-    commerceScript.onerror = function () { /* commerce must not block core app */ };
-    document.head.appendChild(commerceScript);
-  }
-  if (!document.querySelector('script[data-strategy-lab-order-detail="1"]')) {
-    const detailScript = document.createElement("script");
-    detailScript.src = "/static/commerce-account-detail.js";
-    detailScript.defer = true;
-    detailScript.dataset.strategyLabOrderDetail = "1";
-    detailScript.onerror = function () { /* order details are progressive enhancement */ };
-    document.head.appendChild(detailScript);
   }
 })();
