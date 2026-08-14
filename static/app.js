@@ -402,18 +402,53 @@ function portfolioStrategyLine(p){
 }
 function formatDate(ts){return ts?new Date(ts*1000).toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric"}):"—"}
 
-async function loadPortfolios(){
-  portfolios=await fetch("/api/portfolios").then(r=>r.json());
+async function fetchStartupJson(url,timeoutMs=12000){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
   try{
-    const recent=await fetch("/api/backtests?page_size=50").then(r=>r.json());
+    const r=await fetch(url,{signal:ctrl.signal,credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
+    let d;
+    try{d=await r.json();}
+    catch(e){throw new Error(`Некорректный JSON (${r.status})`);}
+    if(!r.ok)throw new Error((d&&d.error)||`HTTP ${r.status}`);
+    return d;
+  }finally{clearTimeout(timer)}
+}
+
+async function loadPortfolioBacktestSummaries(){
+  try{
+    const recent=await fetchStartupJson("/api/backtests?page_size=50");
     const latestByPortfolio={};
     (recent.items||[]).forEach(run=>{
       if(run.status!=="completed"&&run.status!=="completed_with_errors")return;
       if(!latestByPortfolio[run.portfolio_id])latestByPortfolio[run.portfolio_id]=run;
     });
     portfolios.forEach(p=>{p.last_backtest_summary=latestByPortfolio[p.id]?latestByPortfolio[p.id].return_percent:null});
-  }catch(e){/* history unavailable - collapsed card just omits the last-result figure */}
-  renderPortfolioList();
+    renderPortfolioList();
+  }catch(e){
+    console.warn("[startup] backtests failed",e);
+    // Backtest history is optional enrichment. Portfolios remain usable.
+  }
+}
+
+async function loadPortfolios(){
+  const mount=$("portfolioList");
+  if(mount)mount.innerHTML="<div class='empty'>Загрузка сохранённых портфелей…</div>";
+  try{
+    const data=await fetchStartupJson("/api/portfolios");
+    portfolios=Array.isArray(data)?data:[];
+    renderPortfolioList();
+    // Do not make portfolio rendering wait for optional backtest history.
+    void loadPortfolioBacktestSummaries();
+    return portfolios;
+  }catch(e){
+    if(mount){
+      mount.innerHTML=`<div class="empty">Не удалось загрузить портфели.<br><button class="secondary" id="retryPortfoliosBtn" type="button" style="margin-top:10px">Повторить</button></div>`;
+      const retry=$("retryPortfoliosBtn");
+      if(retry)retry.onclick=()=>{void startupTask("portfolios",()=>loadPortfolios())};
+    }
+    throw e;
+  }
 }
 
 function confirmDiscardIfDirty(portfolioId){
@@ -1738,51 +1773,43 @@ document.addEventListener("keydown",e=>{
 
 // ------------------------------------------------------------- ticker tape
 let tickerTapeTimer=null;
+let tickerTapeRequest=null;
+let tickerTapeHasRendered=false;
 
-function fetchTickerTapeData(){
-  return new Promise((resolve,reject)=>{
-    const xhr=new XMLHttpRequest();
-    xhr.open("GET",`/api/market-ticker?_ts=${Date.now()}`,true);
-    xhr.timeout=8000;
-    xhr.setRequestHeader("Accept","application/json");
-
-    xhr.onload=()=>{
-      if(xhr.status<200||xhr.status>=300){
-        reject(new Error(`HTTP ${xhr.status}`));
-        return;
-      }
-      try{
-        resolve(JSON.parse(xhr.responseText||"{}"));
-      }catch(e){
-        reject(new Error("Некорректный ответ котировок"));
-      }
-    };
-
-    xhr.onerror=()=>reject(new Error("Ошибка сети"));
-    xhr.ontimeout=()=>reject(new Error("Таймаут котировок"));
-    xhr.send();
-  });
+async function fetchTickerTapeData(){
+  if(tickerTapeRequest)tickerTapeRequest.abort();
+  const ctrl=new AbortController();
+  tickerTapeRequest=ctrl;
+  const timer=setTimeout(()=>ctrl.abort(),8000);
+  try{
+    const r=await fetch(`/api/market-ticker?_ts=${Date.now()}`,{
+      signal:ctrl.signal,credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}
+    });
+    let d;
+    try{d=await r.json();}
+    catch(e){throw new Error("Некорректный ответ котировок");}
+    if(!r.ok)throw new Error((d&&d.error)||`HTTP ${r.status}`);
+    return d;
+  }finally{
+    clearTimeout(timer);
+    if(tickerTapeRequest===ctrl)tickerTapeRequest=null;
+  }
 }
 
 async function loadTickerTape(){
   clearTimeout(tickerTapeTimer);
-
   try{
     const d=await fetchTickerTapeData();
     renderTickerTape(d);
-
-    tickerTapeTimer=setTimeout(
-      loadTickerTape,
-      (d.quotes&&d.quotes.length)?45000:12000
-    );
+    if(!tickerTapeHasRendered){
+      tickerTapeHasRendered=true;
+      console.info(`[ticker] rendered ${(d.quotes||[]).length} quotes`);
+    }
+    tickerTapeTimer=setTimeout(loadTickerTape,(d.quotes&&d.quotes.length)?45000:12000);
   }catch(e){
-    console.warn("Ticker tape load failed:",e);
-
-    renderTickerTape({
-      quotes:[],
-      error:"Котировки временно недоступны. Повторяем…"
-    });
-
+    const reason=e&&e.name==="AbortError"?"request timeout":(e&&e.message)||String(e);
+    console.warn(`[ticker] ${reason}`);
+    renderTickerTape({quotes:[],error:"Котировки временно недоступны"});
     tickerTapeTimer=setTimeout(loadTickerTape,12000);
   }
 }
@@ -1801,18 +1828,33 @@ function renderTickerTape(d){
 }
 
 // ------------------------------------------------------------------- init
+function startupTask(name,fn){
+  return Promise.resolve().then(fn).catch(e=>{
+    console.error(`[startup] ${name} failed`,e);
+    return null;
+  });
+}
+
 async function bootstrap(){
+  // UI wiring and independent data sources must never be serialized behind
+  // an unrelated network request. In particular, ticker + portfolio rendering
+  // are allowed to complete even when MOEX, backtest history or commerce is slow.
   renderPresets();
   fillStrategies();
-  await Promise.all([loadSecurities(),loadPortfolios()]).catch(e=>{setStatus("Ошибка запуска","error");console.error(e)});
   initTabs();
   setBuildTarget(null);
   resumeBuildJob();
-  loadTickerTape();
+
+  void loadTickerTape();
+  void Promise.allSettled([
+    startupTask("securities",()=>loadSecurities()),
+    startupTask("portfolios",()=>loadPortfolios()),
+  ]);
+
   // Deep link from the personal cabinet ("Мои бэктесты" -> "Открыть") -
   // reuses the existing backtest tab + trade viewer instead of building a
   // second results view inside /account.
   const openRun=new URLSearchParams(location.search).get("openRun");
-  if(openRun){activateTab("backtest");openTradeViewer(openRun);}
+  if(openRun){activateTab("backtest");void startupTask("open backtest",()=>openTradeViewer(openRun));}
 }
-bootstrap();
+bootstrap().catch(e=>console.error("[startup] bootstrap failed",e));
