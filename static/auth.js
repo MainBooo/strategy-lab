@@ -28,6 +28,17 @@
     document.head.appendChild(script);
   }
 
+  // The premium homepage header is a presentation-only enhancement. Keep it
+  // isolated from app.js/chart logic and load it only on the application root.
+  if (window.location.pathname === "/" && !document.querySelector('script[data-strategy-lab-home-hero="1"]')) {
+    const heroScript = document.createElement("script");
+    heroScript.src = "/static/home-hero.js";
+    heroScript.async = false;
+    heroScript.dataset.strategyLabHomeHero = "1";
+    heroScript.onerror = function () { /* original header remains fully usable */ };
+    document.head.appendChild(heroScript);
+  }
+
   // Keep analytics/commerce completely outside the browser's initial page-load
   // lifecycle. This is important on Safari Private/LTE: a stalled optional
   // resource must not leave the newly authenticated page spinning forever.

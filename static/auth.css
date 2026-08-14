@@ -1,3 +1,6 @@
+@import url("/static/home-hero.css");
+@import url("/static/home-hero-polish.css");
+
 /* Auth/account UI - reuses styles.css tokens (--accent, --line, --muted,
    .card/.form-grid/.primary/.secondary/.message/.hint) so these pages read
    as part of the same app, not a bolted-on design. */
@@ -104,3 +107,10 @@
    utility in styles.css. Keep the hidden state authoritative so an empty
    validation box never leaves a red outline or vertical gap. */
 .assignment-validation.hidden { display: none; }
+
+/* The premium hero contains dropdowns (account + notifications), so unlike
+   the decorative stat card it must not clip descendants. Keep the glow
+   itself inside the rounded card and preserve the MOEX status pill on mobile. */
+.hero.hero-premium { overflow: visible; }
+.hero.hero-premium::before { right: 0; }
+.hero-premium #status { display: inline-flex; }
