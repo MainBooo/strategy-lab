@@ -6,6 +6,14 @@
 (function (global) {
   "use strict";
 
+  /* chart-analysis.js already owns the stable indicator selector: one
+   * checkbox per registry item, plus the existing settings button for active
+   * indicators. The terminal mobile enhancement temporarily replaces that
+   * renderer with a long "+" list. Preserve the base renderer before loading
+   * enhancements and restore it afterwards so indicator behaviour has one
+   * owner again. */
+  const baseIndicatorRenderer = global.ChartAnalysisPage && global.ChartAnalysisPage._renderIndicatorsInto;
+
   const files = [
     "/static/chart-editor-terminal-indicators-v2.js",
     "/static/chart-editor-terminal-mobile-v2.js",
@@ -49,6 +57,14 @@
     started = true;
     try {
       for (const src of files) await loadClassic(src);
+
+      /* Restore the original checkbox renderer only. Do not roll back any of
+       * the terminal's drawing tools, expanded indicator registry, toolbar,
+       * responsive handling or icon work. */
+      if (baseIndicatorRenderer && global.ChartAnalysisPage) {
+        global.ChartAnalysisPage._renderIndicatorsInto = baseIndicatorRenderer;
+      }
+
       finished = true;
       if (global.StrategyLabMobileChart && typeof global.StrategyLabMobileChart.refresh === "function") {
         requestAnimationFrame(() => global.StrategyLabMobileChart.refresh());
