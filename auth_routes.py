@@ -15,6 +15,7 @@ this module to register the blueprint).
 import re
 import sqlite3
 from functools import wraps
+from pathlib import Path
 
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -24,6 +25,9 @@ import auth_db
 import backtests_db as bdb
 import commerce_audit  # noqa: F401 - installs the strict audit privacy boundary
 import commerce_routes
+import notification_routes
+import notification_worker
+import notifications_db as notifications_db
 from csrf import csrf_protect, ensure_csrf_token
 from rate_limit import SlidingWindowLimiter, client_ip
 
@@ -32,6 +36,9 @@ auth_bp = Blueprint("auth", __name__)
 # blueprint keeps the large order/billing/admin surface out of app.py while
 # preserving the same session, CSRF and template infrastructure.
 auth_bp.register_blueprint(commerce_routes.commerce_bp)
+# Notifications share the same authenticated session/CSRF boundary but keep
+# their routes and delivery concerns out of this already-large auth module.
+auth_bp.register_blueprint(notification_routes.notification_bp)
 
 _PORTFOLIOS = None
 
@@ -40,6 +47,12 @@ def configure(portfolios_store) -> None:
     global _PORTFOLIOS
     _PORTFOLIOS = portfolios_store
     commerce_routes.configure(portfolios_store)
+    base_dir = Path(__file__).resolve().parent
+    notifications_db.init_db(base_dir / "storage" / "notifications.db")
+    notification_routes.configure(base_dir / "static")
+    # Gunicorn imports this module in each worker; notification_worker uses a
+    # process-level flock so exactly one worker evaluates alert rules.
+    notification_worker.start(base_dir / "storage" / "notification-worker.lock")
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
