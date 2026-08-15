@@ -8,8 +8,8 @@ controls and resize/orientation behavior without recreating ChartCore.
 Usage:
     BASE_URL=https://strategylab.generationweb.ru .venv/bin/python scripts/playwright_responsive_smoke.py
 
-The script is intentionally deployment-agnostic: point BASE_URL at a test deploy
-of the branch before merging it to main.
+Optional focused run:
+    VIEWPORT_FILTER=tablet BASE_URL=... .venv/bin/python scripts/playwright_responsive_smoke.py
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 BASE_URL = os.environ.get("BASE_URL", "https://strategylab.generationweb.ru").rstrip("/")
+VIEWPORT_FILTER = os.environ.get("VIEWPORT_FILTER", "").strip().lower()
 OUT_DIR = Path(__file__).resolve().parent.parent / "test-results" / "responsive-smoke"
 
 VIEWPORTS = [
@@ -48,7 +49,6 @@ SCREENSHOT_LABELS = {
     "desktop-1440x900",
 }
 
-PHONE_QUERY = "(max-width: 620px), (max-width: 960px) and (max-height: 520px)"
 BENIGN_CONSOLE = ("favicon.ico",)
 
 
@@ -69,17 +69,45 @@ def click_tab(page: Page, tab: str) -> None:
 
 
 def rect(page: Page, selector: str) -> dict | None:
-    return page.locator(selector).first.evaluate(
+    locator = page.locator(selector)
+    if not locator.count():
+        return None
+    return locator.first.evaluate(
         "el => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; }"
-    ) if page.locator(selector).count() else None
+    )
 
 
-def check_document_overflow(page: Page, issues: list[str]) -> None:
+def overflow_offenders(page: Page) -> list[str]:
+    return page.evaluate(
+        """() => {
+          const vw = document.documentElement.clientWidth;
+          return [...document.querySelectorAll('body *')]
+            .filter(el => {
+              const s = getComputedStyle(el);
+              if (s.display === 'none' || s.visibility === 'hidden') return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 0 && (r.right > vw + 1 || r.left < -1);
+            })
+            .sort((a,b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right)
+            .slice(0, 8)
+            .map(el => {
+              const r = el.getBoundingClientRect();
+              const id = el.id ? '#' + el.id : '';
+              const cls = [...el.classList].slice(0,3).map(x => '.' + x).join('');
+              return `${el.tagName.toLowerCase()}${id}${cls} [left=${r.left.toFixed(1)} right=${r.right.toFixed(1)} width=${r.width.toFixed(1)}]`;
+            });
+        }"""
+    )
+
+
+def check_document_overflow(page: Page, issues: list[str], phase: str) -> None:
     dims = page.evaluate(
         "() => ({sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth,bw:document.body.scrollWidth})"
     )
     if dims["sw"] > dims["cw"] + 1:
-        issues.append(f"document horizontal overflow: {dims['sw']} > {dims['cw']}")
+        offenders = overflow_offenders(page)
+        detail = "; ".join(offenders) if offenders else "no element offender found"
+        issues.append(f"{phase}: document horizontal overflow: {dims['sw']} > {dims['cw']} | {detail}")
 
 
 def check_navigation(page: Page, phone: bool, issues: list[str]) -> None:
@@ -159,34 +187,28 @@ def check_chart(page: Page, width: int, height: int, phone: bool, issues: list[s
     if not fs_same_core_after:
         issues.append("ChartCore was recreated while exiting fullscreen")
 
-    check_document_overflow(page, issues)
+    check_document_overflow(page, issues, "charts")
 
 
 def check_orientation_without_recreation(page: Page, width: int, height: int, issues: list[str]) -> None:
     if width > 430 or height < width:
         return
-    page.evaluate(
-        "() => { window.__responsiveSmokeCore = window.ChartAnalysisPage?.tiles?.[0]?.core || null; }"
-    )
+    page.evaluate("() => { window.__responsiveSmokeCore = window.ChartAnalysisPage?.tiles?.[0]?.core || null; }")
     initial = rect(page, ".ca-tile-chart-host")
     page.set_viewport_size({"width": height, "height": width})
     page.wait_for_timeout(350)
     landscape = rect(page, ".ca-tile-chart-host")
-    same_core = page.evaluate(
-        "() => !!window.__responsiveSmokeCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeCore"
-    )
+    same_core = page.evaluate("() => !!window.__responsiveSmokeCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeCore")
     if not same_core:
         issues.append("ChartCore was recreated during orientation simulation")
     if initial and landscape and abs(initial["width"] - landscape["width"]) < 20 and abs(initial["height"] - landscape["height"]) < 20:
         issues.append("chart geometry did not react to portrait -> landscape resize")
-    check_document_overflow(page, issues)
+    check_document_overflow(page, issues, "orientation-landscape")
 
     page.set_viewport_size({"width": width, "height": height})
     page.wait_for_timeout(350)
     restored = rect(page, ".ca-tile-chart-host")
-    same_core_back = page.evaluate(
-        "() => !!window.__responsiveSmokeCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeCore"
-    )
+    same_core_back = page.evaluate("() => !!window.__responsiveSmokeCore && window.ChartAnalysisPage?.tiles?.[0]?.core === window.__responsiveSmokeCore")
     if not same_core_back:
         issues.append("ChartCore was recreated during landscape -> portrait resize")
     if initial and restored and abs(initial["width"] - restored["width"]) > 30:
@@ -205,12 +227,7 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
     console_errors: list[str] = []
     page_errors: list[str] = []
     bad_responses: list[str] = []
-    page.on(
-        "console",
-        lambda msg: console_errors.append(msg.text)
-        if msg.type == "error" and not any(x in msg.text for x in BENIGN_CONSOLE)
-        else None,
-    )
+    page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" and not any(x in msg.text for x in BENIGN_CONSOLE) else None)
     page.on("pageerror", lambda exc: page_errors.append(str(exc)))
     page.on("response", lambda response: bad_responses.append(f"{response.status} {response.url}") if response.status >= 500 else None)
 
@@ -218,7 +235,7 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
     try:
         page.goto(BASE_URL, wait_until="networkidle", timeout=30_000)
         page.wait_for_timeout(250)
-        check_document_overflow(page, issues)
+        check_document_overflow(page, issues, "home")
         check_navigation(page, phone, issues)
         check_chart(page, width, height, phone, issues)
         if phone:
@@ -227,7 +244,7 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
         click_tab(page, "portfolio")
         if not visible(page, "#tab-portfolio"):
             issues.append("could not return from Charts to Portfolio")
-        check_document_overflow(page, issues)
+        check_document_overflow(page, issues, "portfolio")
 
         click_tab(page, "replay")
         page.wait_for_timeout(250)
@@ -237,13 +254,12 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
                 h = target.evaluate("el => el.getBoundingClientRect().height")
                 if phone and h < 42:
                     issues.append(f"touch target too small in Replay ({selector}): {h:.1f}px")
-        check_document_overflow(page, issues)
+        check_document_overflow(page, issues, "replay")
 
         if label in SCREENSHOT_LABELS:
             click_tab(page, "charts")
             page.wait_for_timeout(300)
-            out = OUT_DIR / f"{label}-charts.png"
-            page.screenshot(path=str(out), full_page=False)
+            page.screenshot(path=str(OUT_DIR / f"{label}-charts.png"), full_page=False)
     except Exception as exc:
         issues.append(f"scenario exception: {exc}")
 
@@ -261,6 +277,8 @@ def main() -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         for label, width, height in VIEWPORTS:
+            if VIEWPORT_FILTER and VIEWPORT_FILTER not in label.lower():
+                continue
             result = run_viewport(browser, label, width, height)
             results.append(result)
             status = "OK" if not result["issues"] else f"{len(result['issues'])} issue(s)"
