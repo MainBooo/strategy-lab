@@ -364,3 +364,38 @@
     global.visualViewport.addEventListener("resize", scheduleSync, { passive: true });
   }
 })(window);
+
+/* Dense indicator action buttons: this intentionally loads after the mobile
+ * terminal and global button rules, so generic app padding cannot inflate the
+ * + / visibility / settings / delete controls again. */
+(function () {
+  "use strict";
+  const old = document.getElementById("chart-indicator-compact-actions");
+  if (old) old.remove();
+  const style = document.createElement("style");
+  style.id = "chart-indicator-compact-actions";
+  style.textContent = `
+    #chartsRoot .ca-ind-list .ca-indicator-row { min-height:30px; gap:4px; padding:3px 2px; }
+    #chartsRoot .ca-ind-list .ca-indicator-row > label { min-width:0; margin:0; gap:5px; font-size:11px; line-height:1.2; }
+    #chartsRoot .ca-ind-list .ca-indicator-row button,
+    #chartsRoot .ca-ind-list .ca-indicator-row .icon-btn,
+    #chartsRoot .sl-ind-active-row .sl-mini-icon-btn {
+      width:28px !important; min-width:28px !important; max-width:28px !important;
+      height:28px !important; min-height:28px !important; padding:0 !important; margin:0 !important;
+      border-radius:6px !important; flex:0 0 28px !important; font-size:13px !important; line-height:1 !important;
+    }
+    #chartsRoot .ca-ind-list .ca-indicator-row button svg,
+    #chartsRoot .ca-ind-list .ca-indicator-row .icon-btn svg,
+    #chartsRoot .sl-ind-active-row .sl-mini-icon-btn svg { width:13px !important; height:13px !important; flex:0 0 13px !important; }
+    @media (max-width:620px) {
+      #chartsRoot .ca-ind-list .ca-indicator-row { min-height:28px; gap:3px; padding:2px 1px; }
+      #chartsRoot .ca-ind-list .ca-indicator-row button,
+      #chartsRoot .ca-ind-list .ca-indicator-row .icon-btn,
+      #chartsRoot .sl-ind-active-row .sl-mini-icon-btn {
+        width:26px !important; min-width:26px !important; max-width:26px !important;
+        height:26px !important; min-height:26px !important; flex-basis:26px !important; border-radius:5px !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+})();
