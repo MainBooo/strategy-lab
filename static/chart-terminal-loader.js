@@ -11,7 +11,8 @@
     "/static/chart-editor-terminal-mobile-v2.js",
     "/static/chart-editor-terminal-fixes.js",
     "/static/chart-editor-terminal-compat.js",
-    "/static/chart-editor-terminal-icons.js"
+    "/static/chart-editor-terminal-icons.js",
+    "/static/chart-responsive-coordinator.js"
   ];
 
   let started = false;
