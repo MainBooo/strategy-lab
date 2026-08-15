@@ -1,23 +1,17 @@
 /* Responsive viewport coordinator.
  *
- * Historical note: this filename used to be an editor-polish shim.  It is
- * still loaded last by index.html, which makes it the safest small place to
- * coordinate viewport-only behavior without touching DrawingManager or chart
- * state.  CSS owns layout; this file only:
- *   - enables safe-area viewport coverage,
- *   - gives short phone landscape the same compact UI class as portrait,
- *   - collapses the existing Properties/Objects panel when entering phone UI,
- *   - constrains and compacts the existing unified chart toolbar by viewport,
- *   - asks existing chart instances/toolbar overflow logic to re-measure after
- *     resize, orientation and Safari visual-viewport changes.
- *
- * No separate mobile panel/drawing state is introduced.  _bottomCollapsed,
- * DrawingManager and ChartCore remain the single sources of truth.
+ * Loaded after the chart modules. CSS owns layout; this file only coordinates
+ * viewport-dependent presentation around the existing ChartAnalysisPage,
+ * DrawingManager and ChartCore instances. No parallel mobile state is created.
  */
 (function (global) {
   "use strict";
 
   const PHONE_QUERY = "(max-width: 620px), (max-width: 960px) and (max-height: 520px)";
+  const PHONE_TOOLBAR_OVERFLOW_KEYS = [
+    "indicators", "templates", "alerts", "replay", "undo", "redo",
+    "save", "settings", "snapshot", "collapseBottom", "collapseRight",
+  ];
   let lastPhoneMode = null;
   let resizeFrame = 0;
 
@@ -28,6 +22,168 @@
     if (!/viewport-fit\s*=\s*cover/i.test(content)) {
       meta.setAttribute("content", `${content},viewport-fit=cover`);
     }
+  }
+
+  function ensureMobileUxStyles() {
+    if (document.getElementById("slChartMobileUxStyles")) return;
+    const style = document.createElement("style");
+    style.id = "slChartMobileUxStyles";
+    style.textContent = `
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-toolbar-unified {
+        padding: 3px 4px;
+        gap: 3px;
+        overflow: visible;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .gt-scroll {
+        flex: 1 1 0;
+        min-width: 0;
+        gap: 3px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot #gtPrice,
+      html.sl-phone-ui body.charts-active #chartsRoot #gtName,
+      html.sl-phone-ui body.charts-active #chartsRoot #gtChange,
+      html.sl-phone-ui body.charts-active #chartsRoot #gtLayoutMenu {
+        display: none;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .gt-ticker {
+        flex: 0 1 72px;
+        width: 72px;
+        min-width: 64px;
+        max-width: 78px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .gt-tf {
+        flex: 0 0 50px;
+        width: 50px;
+        min-width: 50px;
+        max-width: 50px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .gt-type {
+        flex: 0 1 68px;
+        width: 68px;
+        min-width: 62px;
+        max-width: 74px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .gt-select {
+        height: 44px;
+        padding: 5px 5px;
+        font-size: 12px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot #caFullscreenBtn,
+      html.sl-phone-ui body.charts-active #chartsRoot #gtMoreBtn {
+        width: 42px;
+        min-width: 42px;
+        height: 44px;
+        min-height: 44px;
+        padding: 0;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot #gtMoreBtn svg { display: none; }
+      html.sl-phone-ui body.charts-active #chartsRoot #gtMoreBtn::before {
+        content: "•••";
+        font-size: 15px;
+        letter-spacing: 1px;
+        line-height: 1;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-header {
+        min-height: 44px;
+        height: 44px;
+        padding: 4px 6px;
+        gap: 5px;
+        overflow: hidden;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-tag {
+        flex: 0 0 auto;
+        max-width: 84px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-realtime-slot {
+        flex: 1 1 0;
+        min-width: 0;
+        overflow: hidden;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .rt-indicator,
+      html.sl-phone-ui body.charts-active #chartsRoot .rt-indicator-btn,
+      html.sl-phone-ui body.charts-active #chartsRoot .rt-label {
+        min-width: 0;
+        max-width: 100%;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .rt-indicator-btn {
+        width: 100%;
+        padding: 5px 8px;
+        overflow: hidden;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .rt-label {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-spacer { display: none; }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-btn[data-role="fs"] {
+        flex: 0 0 40px;
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        min-height: 40px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-center {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-bottom:not(.collapsed) {
+        position: fixed;
+        flex: none;
+        z-index: 560;
+        left: max(8px, env(safe-area-inset-left));
+        right: max(8px, env(safe-area-inset-right));
+        bottom: calc(var(--sl-phone-nav-height, 58px) + max(8px, env(safe-area-inset-bottom)));
+        width: auto;
+        height: auto;
+        max-height: min(58dvh, 430px);
+        margin: 0;
+        transform: none;
+        overflow: hidden;
+        border-radius: 16px 16px 12px 12px;
+        box-shadow: 0 24px 70px rgba(0,0,0,.58);
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-bottom.collapsed { display: none; }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-resize-h { display: none; }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-bottom-body {
+        max-height: calc(min(58dvh, 430px) - 44px);
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .ca-tools.tv-rail {
+        width: 42px;
+        min-width: 42px;
+        max-width: 42px;
+        padding-inline: 1px;
+      }
+      html.sl-phone-ui body.charts-active #chartsRoot .tv-tool-group-btn,
+      html.sl-phone-ui body.charts-active #chartsRoot .tv-rail-action {
+        width: 40px;
+        min-width: 40px;
+      }
+      @media (max-width: 350px) {
+        html.sl-phone-ui body.charts-active #chartsRoot .gt-ticker {
+          flex-basis: 64px;
+          width: 64px;
+          min-width: 60px;
+          max-width: 68px;
+        }
+        html.sl-phone-ui body.charts-active #chartsRoot .gt-type {
+          flex-basis: 62px;
+          width: 62px;
+          min-width: 58px;
+          max-width: 66px;
+        }
+        html.sl-phone-ui body.charts-active #chartsRoot .ca-tile-tag { max-width: 72px; }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   function isPhoneUi() {
@@ -44,20 +200,31 @@
     el.style.maxWidth = maxWidth;
   }
 
-  function constrainToolbar(page) {
+  function syncTickerLabels(page, phone) {
+    if (!page || !page.root) return;
+    const select = page.root.querySelector("#gtTicker");
+    if (!select) return;
+    [...select.options].forEach((option) => {
+      if (!option.dataset.slFullLabel) option.dataset.slFullLabel = option.textContent || "";
+      option.textContent = phone ? option.value : option.dataset.slFullLabel;
+    });
+  }
+
+  function applyPhoneToolbarPriorities(page, phone) {
+    if (!page || !page.root) return;
+    PHONE_TOOLBAR_OVERFLOW_KEYS.forEach((key) => {
+      const el = page.root.querySelector(`[data-key="${key}"]`);
+      if (!el) return;
+      if (phone) el.classList.add("gt-hidden");
+    });
+  }
+
+  function constrainToolbar(page, phone) {
     if (!page || !page.root) return;
     const toolbar = page.root.querySelector("#caToolbar");
     const scroll = page.root.querySelector("#gtScroll");
     if (!toolbar || !scroll) return;
 
-    /*
-     * .gt-scroll historically used flex: 1 1 auto while its children and
-     * popovers intentionally keep overflow:visible. At tablet widths that
-     * makes the flex base equal to the toolbar's max-content width. Use a zero
-     * flex basis so the actual toolbar box is the constraint, then compact the
-     * priority-exempt identity controls at tablet widths. Low-priority actions
-     * still move into "Ещё" through the existing _recalcToolbarOverflow().
-     */
     toolbar.style.width = "100%";
     toolbar.style.maxWidth = "100%";
     toolbar.style.minWidth = "0";
@@ -68,44 +235,51 @@
     const width = global.innerWidth || document.documentElement.clientWidth || 0;
     const name = page.root.querySelector("#gtName");
     const change = page.root.querySelector("#gtChange");
+    const price = page.root.querySelector("#gtPrice");
     const ticker = page.root.querySelector("#gtTicker");
     const timeframe = page.root.querySelector("#gtTimeframe");
     const chartType = page.root.querySelector("#gtChartType");
     const layoutMenu = page.root.querySelector("#gtLayoutMenu");
 
-    if (width <= 1180) {
-      /* Name and absolute change are useful context on desktop but duplicate
-       * information already available from ticker/price/crosshair. Hiding them
-       * buys enough room to keep real touch-sized controls on tablets. */
+    if (phone) {
       setDisplay(name, "none");
       setDisplay(change, "none");
+      setDisplay(price, "none");
+      setDisplay(layoutMenu, "none");
+      setSizing(ticker, "", "");
+      setSizing(timeframe, "", "");
+      setSizing(chartType, "", "");
+    } else if (width <= 1180) {
+      setDisplay(name, "none");
+      setDisplay(change, "none");
+      setDisplay(price, "");
       setSizing(ticker, "82px", "112px");
       setSizing(timeframe, "52px", "64px");
       setSizing(chartType, "68px", "88px");
+      if (width <= 900) setDisplay(layoutMenu, "none");
+      else setDisplay(layoutMenu, "");
     } else {
       setDisplay(name, "");
       setDisplay(change, "");
+      setDisplay(price, "");
+      setDisplay(layoutMenu, "");
       setSizing(ticker, "", "");
       setSizing(timeframe, "", "");
       setSizing(chartType, "", "");
     }
 
-    /* A 768-900px tablet has room for the core editing controls but not for
-     * a six-layout picker plus fullscreen on the same row. Multi-chart layout
-     * remains available on wider tablet/desktop; narrow tablet gets a clean
-     * single-chart editing surface rather than a horizontally overflowing row. */
-    if (width <= 900) setDisplay(layoutMenu, "none");
-    else setDisplay(layoutMenu, "");
+    syncTickerLabels(page, phone);
   }
 
-  function resizeExistingCharts(page) {
+  function resizeExistingCharts(page, phone) {
     if (!page) return;
-    constrainToolbar(page);
+    constrainToolbar(page, phone);
     const tiles = Array.isArray(page.tiles) ? page.tiles : [];
     tiles.forEach((tile) => {
       if (tile && tile.core && typeof tile.core._onResize === "function") tile.core._onResize();
     });
     if (typeof page._recalcToolbarOverflow === "function") page._recalcToolbarOverflow();
+    applyPhoneToolbarPriorities(page, phone);
   }
 
   function syncViewport() {
@@ -116,11 +290,9 @@
     if (page && page.root) {
       const enteringPhone = phone && lastPhoneMode !== true;
       if (enteringPhone && typeof page._setBottomCollapsed === "function") {
-        // Presentation default only: do not overwrite the persisted desktop
-        // preference. Selection/drawings are untouched by this method.
         page._setBottomCollapsed(true, { skipSave: true });
       }
-      resizeExistingCharts(page);
+      resizeExistingCharts(page, phone);
       lastPhoneMode = phone;
     }
   }
@@ -133,23 +305,44 @@
     });
   }
 
-  function wrapChartPageInit() {
+  function wrapChartPageMethods() {
     const page = global.ChartAnalysisPage;
-    if (!page || typeof page.init !== "function" || page.__responsiveInitWrapped) return;
-    const originalInit = page.init;
-    page.init = function () {
-      const result = originalInit.apply(this, arguments);
-      // _restoreWorkspaceState() runs inside init. Reconcile the presentation
-      // after that restore so a desktop-open panel does not eat a phone chart.
-      lastPhoneMode = null;
-      scheduleSync();
-      return result;
-    };
-    page.__responsiveInitWrapped = true;
+    if (!page || page.__responsiveMethodsWrapped) return;
+
+    if (typeof page.init === "function") {
+      const originalInit = page.init;
+      page.init = function () {
+        const result = originalInit.apply(this, arguments);
+        lastPhoneMode = null;
+        scheduleSync();
+        return result;
+      };
+    }
+
+    if (typeof page._renderTickerOptions === "function") {
+      const originalRenderTickerOptions = page._renderTickerOptions;
+      page._renderTickerOptions = function () {
+        const result = originalRenderTickerOptions.apply(this, arguments);
+        scheduleSync();
+        return result;
+      };
+    }
+
+    if (typeof page._refreshGlobalHeader === "function") {
+      const originalRefresh = page._refreshGlobalHeader;
+      page._refreshGlobalHeader = function () {
+        const result = originalRefresh.apply(this, arguments);
+        if (isPhoneUi()) syncTickerLabels(this, true);
+        return result;
+      };
+    }
+
+    page.__responsiveMethodsWrapped = true;
   }
 
   ensureViewportFit();
-  wrapChartPageInit();
+  ensureMobileUxStyles();
+  wrapChartPageMethods();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", scheduleSync, { once: true });
