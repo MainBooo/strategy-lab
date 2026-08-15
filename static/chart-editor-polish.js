@@ -7,6 +7,7 @@
  *   - enables safe-area viewport coverage,
  *   - gives short phone landscape the same compact UI class as portrait,
  *   - collapses the existing Properties/Objects panel when entering phone UI,
+ *   - constrains the existing unified chart toolbar to its real container,
  *   - asks existing chart instances/toolbar overflow logic to re-measure after
  *     resize, orientation and Safari visual-viewport changes.
  *
@@ -33,8 +34,34 @@
     return !!(global.matchMedia && global.matchMedia(PHONE_QUERY).matches);
   }
 
+  function constrainToolbar(page) {
+    if (!page || !page.root) return;
+    const toolbar = page.root.querySelector("#caToolbar");
+    const scroll = page.root.querySelector("#gtScroll");
+    if (!toolbar || !scroll) return;
+
+    /*
+     * .gt-scroll historically used flex: 1 1 auto while its children and
+     * popovers intentionally keep overflow:visible. At tablet widths that
+     * makes the flex base equal to the toolbar's max-content width; the row
+     * can therefore grow ~50px beyond the viewport before the existing
+     * _recalcToolbarOverflow() sees a constrained clientWidth. Giving the
+     * flexible row a zero basis makes the real toolbar box the constraint.
+     * The existing priority algorithm then moves low-priority actions into
+     * "Ещё" exactly as designed. No controls are removed and popovers remain
+     * visible outside their button boxes.
+     */
+    toolbar.style.width = "100%";
+    toolbar.style.maxWidth = "100%";
+    toolbar.style.minWidth = "0";
+    scroll.style.flex = "1 1 0";
+    scroll.style.minWidth = "0";
+    scroll.style.maxWidth = "100%";
+  }
+
   function resizeExistingCharts(page) {
     if (!page) return;
+    constrainToolbar(page);
     const tiles = Array.isArray(page.tiles) ? page.tiles : [];
     tiles.forEach((tile) => {
       if (tile && tile.core && typeof tile.core._onResize === "function") tile.core._onResize();
