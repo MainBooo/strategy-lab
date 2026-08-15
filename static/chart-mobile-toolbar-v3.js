@@ -79,19 +79,21 @@
   style.id = "sl-mobile-chart-toolbar-v3-style";
   style.textContent = `
   @media (max-width:768px),(max-width:980px) and (max-height:520px){
-    #chartsRoot.sl-mobile-chart-toolbar-v3 .ca-toolbar-unified{display:flex!important;align-items:center!important;flex-wrap:nowrap!important;gap:4px!important;padding:6px!important;overflow:hidden!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtScroll{display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important;width:100%!important;gap:4px!important;overflow:hidden!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 .ca-toolbar-unified{display:flex!important;align-items:center!important;flex-wrap:nowrap!important;gap:4px!important;padding:6px!important;overflow:visible!important;position:relative!important;z-index:40!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtScroll{display:flex!important;align-items:center!important;flex:1 1 auto!important;min-width:0!important;width:100%!important;gap:4px!important;overflow:visible!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtScroll>:not(.gt-ticker):not(.gt-tf):not(.gt-type):not(#gtIndicatorsMenu):not(#gtMoreMenu){display:none!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 .sl-mobile-direct-hidden{display:none!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 .gt-name,#chartsRoot.sl-mobile-chart-toolbar-v3 .gt-price,#chartsRoot.sl-mobile-chart-toolbar-v3 .gt-change{display:none!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 .gt-ticker{flex:1 1 112px!important;min-width:96px!important;max-width:154px!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 .gt-tf{flex:0 0 54px!important;min-width:54px!important;max-width:54px!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 .gt-type{flex:0 0 76px!important;min-width:68px!important;max-width:76px!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtIndicatorsMenu{display:block!important;flex:0 1 auto!important;min-width:32px!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtIndicatorsBtn{height:32px!important;max-width:118px!important;padding:0 7px!important;white-space:nowrap!important;overflow:hidden!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMoreMenu{display:block!important;flex:0 0 32px!important;margin-left:auto!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMoreBtn{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:32px!important;min-width:32px!important;height:32px!important;padding:0!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtIndicatorsMenu{display:block!important;flex:0 1 auto!important;min-width:32px!important;position:relative!important;z-index:60!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtIndicatorsBtn{height:32px!important;max-width:118px!important;padding:0 7px!important;white-space:nowrap!important;overflow:hidden!important;position:relative!important;z-index:61!important;pointer-events:auto!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtIndicatorsPop{z-index:9999!important;pointer-events:auto!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMoreMenu{display:block!important;flex:0 0 32px!important;margin-left:auto!important;position:relative!important;z-index:60!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMoreBtn{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:32px!important;min-width:32px!important;height:32px!important;padding:0!important;pointer-events:auto!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMoreBtn svg{display:block!important;width:17px!important;height:17px!important;fill:currentColor!important}
-    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMorePop{right:0!important;left:auto!important;width:min(310px,calc(100vw - 24px))!important;max-height:min(70vh,560px)!important;overflow:auto!important}
+    #chartsRoot.sl-mobile-chart-toolbar-v3 #gtMorePop{right:0!important;left:auto!important;width:min(310px,calc(100vw - 24px))!important;max-height:min(70vh,560px)!important;overflow:auto!important;z-index:9999!important}
     #chartsRoot.sl-mobile-chart-toolbar-v3 #caBottom.collapsed{height:38px!important}
   }
   @media(max-width:430px){
