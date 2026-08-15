@@ -134,4 +134,103 @@
     padding: 0;
     align-self: center;
   }
+
+  /* A chart workspace must be anchored to the visual viewport, not the
+     document scroll position. Android Chrome preserves page scroll when a
+     user switches tabs; without a fixed shell the top toolbar can end up
+     above the visible viewport/status bar. This changes presentation only —
+     ChartCore and drawing state remain untouched. */
+  body.charts-active {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  body.charts-active .shell {
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    height: auto;
+    margin: 0;
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-right: 0;
+    padding-bottom: calc(var(--sl-phone-nav-height, 58px) + env(safe-area-inset-bottom));
+    padding-left: 0;
+    overflow: hidden;
+  }
+  body.charts-active #tab-charts {
+    box-sizing: border-box;
+    height: 100%;
+  }
+
+  /* Compact account menu that stays entirely inside narrow Android/iOS
+     viewports instead of occupying half the screen. */
+  .account-dropdown {
+    left: auto;
+    right: 0;
+    width: min(238px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    min-width: 0;
+    max-height: min(56dvh, 360px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 5px;
+    border-radius: 14px;
+    overscroll-behavior: contain;
+  }
+  .account-dropdown a,
+  .account-dropdown button {
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  /* Commerce/support dialogs are true mobile sheets. They must not inherit
+     a desktop four-column amount grid or extend beneath the browser chrome. */
+  .commerce-modal {
+    box-sizing: border-box;
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-right: max(10px, env(safe-area-inset-right));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding-left: max(10px, env(safe-area-inset-left));
+    align-items: flex-end;
+    overflow: hidden;
+  }
+  .commerce-modal-panel {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - max(20px, env(safe-area-inset-top)) - max(20px, env(safe-area-inset-bottom)));
+    margin: 0;
+    padding: 18px 14px max(18px, env(safe-area-inset-bottom));
+    border-radius: 18px 18px 12px 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .commerce-modal-head {
+    min-width: 0;
+    padding-right: 38px;
+  }
+  .commerce-modal-head h2,
+  .commerce-modal-head p {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .support-amounts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+    width: 100%;
+  }
+  .support-amounts button,
+  #supportForm > .primary {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .support-amounts { grid-template-columns: 1fr; }
 }
