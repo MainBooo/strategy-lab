@@ -115,3 +115,23 @@
 .hero.hero-premium { overflow: visible; }
 .hero.hero-premium::before { right: 0; }
 .hero-premium #status { display: inline-flex; }
+
+/* responsive.css gives normal form controls a 44px phone touch target. Native
+   checkboxes must be excluded from that rule: otherwise Safari stretches the
+   checkbox itself vertically to 44px inside .checkbox-label. Keep the row as
+   the large tap target and render the control at a normal square size. */
+@media (max-width: 620px), (max-width: 960px) and (max-height: 520px) {
+  input[type="checkbox"],
+  .checkbox-label input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    max-width: 22px;
+    max-height: 22px;
+    flex: 0 0 22px;
+    margin: 0;
+    padding: 0;
+    align-self: center;
+  }
+}
