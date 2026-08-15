@@ -7,7 +7,8 @@
     "/static/chart-editor-terminal-mobile-v2.js",
     "/static/chart-editor-terminal-fixes.js",
     "/static/chart-editor-terminal-compat.js",
-    "/static/chart-editor-terminal-icons.js"
+    "/static/chart-editor-terminal-icons.js",
+    "/static/chart-mobile-toolbar-v3.js"
   ];
 
   let started = false;
@@ -56,8 +57,6 @@
       if (width < 1500) forcedPriority = 5;
       if (width < 1320) forcedPriority = 8;
       if (width < 1120) forcedPriority = 10;
-      // Phone: keep only the market controls and Indicators in the main row.
-      // Everything secondary is already rendered by the native three-dot menu.
       if (width < 760) forcedPriority = 10;
 
       items.forEach((el) => {
