@@ -1,8 +1,4 @@
-/* Safari-safe loader for the restored TradingView-style chart terminal.
- * Heavy terminal modules are loaded only when the chart workspace is opened,
- * and as classic scripts in strict sequence. This keeps initial page startup
- * lightweight and avoids dynamic-import/module execution quirks on iOS Safari.
- */
+/* Safari-safe loader for the restored TradingView-style chart terminal. */
 (function (global) {
   "use strict";
 
@@ -34,39 +30,22 @@
       script.async = false;
       script.defer = false;
       script.dataset.slTerminalSrc = src;
-      script.onload = () => {
-        script.dataset.loaded = "1";
-        resolve();
-      };
+      script.onload = () => { script.dataset.loaded = "1"; resolve(); };
       script.onerror = () => reject(new Error(`Failed to load ${src}`));
       document.head.appendChild(script);
     });
   }
 
-  /* The base toolbar already has a proper "Ещё" popover, but its overflow
-   * calculation relies on scrollWidth/clientWidth. After the TradingView
-   * terminal chrome is restored, flex sizing can leave #gtScroll wider than
-   * the actually visible toolbar, so controls visually run off the right edge.
-   * Keep the important market controls visible and proactively move secondary
-   * actions into the existing three-dot menu at narrower desktop/tablet widths.
-   */
   function installAdaptiveToolbarOverflow() {
     const Page = global.ChartAnalysisPage;
     if (!Page || Page.__slAdaptiveToolbarOverflow) return;
     Page.__slAdaptiveToolbarOverflow = true;
 
-    const original = typeof Page._recalcToolbarOverflow === "function"
-      ? Page._recalcToolbarOverflow.bind(Page)
-      : null;
-
     Page._recalcToolbarOverflow = function () {
       const root = this.root;
       const toolbar = root && root.querySelector("#caToolbar");
       const scroll = root && root.querySelector("#gtScroll");
-      if (!toolbar || !scroll) {
-        if (original) original();
-        return;
-      }
+      if (!toolbar || !scroll) return;
 
       const items = [...scroll.querySelectorAll("[data-key]")]
         .sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
@@ -74,16 +53,17 @@
 
       const width = toolbar.getBoundingClientRect().width || global.innerWidth || 0;
       let forcedPriority = 0;
-      if (width < 1500) forcedPriority = 5;   // panels/save/settings/snapshot -> Ещё
-      if (width < 1320) forcedPriority = 8;   // + replay/redo/undo
-      if (width < 1120) forcedPriority = 10;  // + alerts/templates
-      if (width < 760) forcedPriority = 10;   // keep Indicators directly accessible
+      if (width < 1500) forcedPriority = 5;
+      if (width < 1320) forcedPriority = 8;
+      if (width < 1120) forcedPriority = 10;
+      // Phone: keep only the market controls and Indicators in the main row.
+      // Everything secondary is already rendered by the native three-dot menu.
+      if (width < 760) forcedPriority = 10;
 
       items.forEach((el) => {
         if (Number(el.dataset.priority) <= forcedPriority) el.classList.add("gt-hidden");
       });
 
-      // Then use the real remaining space as a second line of defence.
       let guard = 0;
       while (scroll.scrollWidth > scroll.clientWidth + 1 && guard < items.length) {
         const next = items.find((el) => !el.classList.contains("gt-hidden"));
@@ -99,8 +79,8 @@
     const style = document.createElement("style");
     style.id = "sl-adaptive-chart-toolbar";
     style.textContent = `
-      #chartsRoot .ca-toolbar-unified{min-width:0;overflow:visible}
-      #chartsRoot .gt-scroll{min-width:0;max-width:100%;overflow:visible}
+      #chartsRoot .ca-toolbar-unified{min-width:0;overflow:hidden}
+      #chartsRoot .gt-scroll{min-width:0;flex:1 1 auto;max-width:none;overflow:hidden}
       #chartsRoot .gt-more{flex:0 0 auto;margin-left:4px}
       #chartsRoot .gt-hidden{display:none!important}
       #chartsRoot #gtMoreMenu.sl-has-overflow #gtMoreBtn{border-color:rgba(124,140,255,.34)}
@@ -112,6 +92,14 @@
       @media(max-width:1120px){
         #chartsRoot .gt-name{display:none}
         #chartsRoot .gt-ticker{max-width:190px}
+      }
+      @media(max-width:760px){
+        #chartsRoot .ca-toolbar-unified{gap:4px;padding-left:6px;padding-right:6px}
+        #chartsRoot .gt-scroll{gap:4px}
+        #chartsRoot #caFullscreenBtn{display:none!important}
+        #chartsRoot #gtLayoutMenu{flex:0 0 auto}
+        #chartsRoot #gtLayoutBtn,#chartsRoot #gtMoreBtn{width:36px;min-width:36px;padding:0}
+        #chartsRoot .gt-ticker{min-width:0;max-width:180px}
       }
     `;
     document.head.appendChild(style);
@@ -156,11 +144,8 @@
     if (chartsAreVisible()) start();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", install, { once: true });
-  } else {
-    install();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", install, { once: true });
+  else install();
 
   global.StrategyLabTerminalLoader = {
     start,
