@@ -9,7 +9,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory
 import auth
 import notifications_db as ndb
 from csrf import csrf_protect
-from notification_delivery import email_configured, telegram_configured, web_push_configured
+from notification_delivery import email_configured, send_test_web_push, telegram_configured, web_push_configured
 
 notification_bp = Blueprint("notifications", __name__)
 _STATIC_DIR = None
@@ -138,6 +138,21 @@ def push_unsubscribe():
     if endpoint:
         ndb.remove_push_subscription(endpoint=endpoint, user_id=auth.current_user_id())
     return jsonify({"ok": True})
+
+
+@notification_bp.post("/api/notifications/push/test")
+@auth.login_required
+@csrf_protect
+def push_test():
+    if not web_push_configured():
+        return jsonify({"error": "Web Push не настроен на сервере."}), 503
+    subscriptions = ndb.list_push_subscriptions(auth.current_user_id())
+    if not subscriptions:
+        return jsonify({"error": "На этом аккаунте нет активной push-подписки. Сначала включите уведомления на устройстве."}), 409
+    sent = send_test_web_push(auth.current_user_id())
+    if sent <= 0:
+        return jsonify({"error": "Тестовое уведомление не удалось доставить. Переподключите уведомления на устройстве."}), 502
+    return jsonify({"ok": True, "sent": sent})
 
 
 @notification_bp.post("/api/notifications/telegram/link")
