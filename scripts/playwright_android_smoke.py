@@ -6,8 +6,6 @@ the visible viewport even when the page was scrolled before switching tabs.
 """
 from __future__ import annotations
 
-import os
-
 from playwright.sync_api import sync_playwright
 
 from playwright_responsive_smoke import BASE_URL, run_viewport
@@ -21,6 +19,16 @@ ANDROID_VIEWPORTS = [
     ("android-landscape-873x393", 873, 393),
     ("android-landscape-915x412", 915, 412),
 ]
+
+# The public smoke runs without an authenticated session. AlertService probes
+# /api/alerts once and deliberately falls back to localStorage on HTTP 401.
+# Chromium reports that handled response as a generic console error even though
+# it is the expected anonymous-path contract, so it must not turn every Android
+# viewport red. Keep the match exact so other console/network failures remain
+# visible.
+EXPECTED_ANON_ALERT_CONSOLE = (
+    "console error: Failed to load resource: the server responded with a status of 401 ()"
+)
 
 
 def check_scroll_to_charts(browser, label: str, width: int, height: int) -> list[str]:
@@ -62,7 +70,10 @@ def main() -> int:
         browser = playwright.chromium.launch()
         for label, width, height in ANDROID_VIEWPORTS:
             result = run_viewport(browser, label, width, height)
-            issues = list(result["issues"])
+            issues = [
+                issue for issue in result["issues"]
+                if issue != EXPECTED_ANON_ALERT_CONSOLE
+            ]
             issues.extend(check_scroll_to_charts(browser, label, width, height))
             total += len(issues)
             status = "OK" if not issues else f"{len(issues)} issue(s)"
