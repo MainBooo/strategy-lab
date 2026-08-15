@@ -32,21 +32,6 @@
   const title = heroTitle.querySelector("h1");
   if (title) title.innerHTML = `Strategy <span class="hero-lab">Lab</span>`;
 
-  const copy = heroTitle.querySelector("p");
-  if (copy) {
-    const ctas = document.createElement("div");
-    ctas.className = "hero-cta";
-    ctas.innerHTML = `
-      <a class="primary" href="#tab-portfolio">
-        <span>Начать бесплатно</span><span class="hero-cta-arrow" aria-hidden="true">→</span>
-      </a>
-      <a class="secondary" href="#appPrimaryTabs">
-        <span class="hero-cta-play" aria-hidden="true">▶</span>
-        <span>Как это работает?</span>
-      </a>`;
-    copy.insertAdjacentElement("afterend", ctas);
-  }
-
   const strategiesCount = Math.max(1, Object.keys(window.STRATEGIES || {}).length);
   const stats = document.createElement("aside");
   stats.className = "hero-stats";
