@@ -137,7 +137,7 @@
         position: fixed;
         flex: none;
         z-index: 560;
-        left: max(8px, env(safe-area-inset-left));
+        left: max(52px, calc(env(safe-area-inset-left) + 52px));
         right: max(8px, env(safe-area-inset-right));
         bottom: calc(var(--sl-phone-nav-height, 58px) + max(8px, env(safe-area-inset-bottom)));
         width: auto;
@@ -157,6 +157,8 @@
         -webkit-overflow-scrolling: touch;
       }
       html.sl-phone-ui body.charts-active #chartsRoot .ca-tools.tv-rail {
+        position: relative;
+        z-index: 580;
         width: 42px;
         min-width: 42px;
         max-width: 42px;
