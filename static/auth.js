@@ -156,7 +156,7 @@
     });
   }, () => {
     trackGoal("registration_completed");
-    const next = safeNext(document.getElementById("loginForm")?.dataset.next || document.getElementById("registerForm").dataset.next);
+    const next = safeNext(document.getElementById("registerForm").dataset.next);
     window.location.href = next;
   });
 
