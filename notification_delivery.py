@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Delivery adapters for Strategy Lab alert events.
 
-All channel credentials stay server-side in environment variables.  Delivery
+All channel credentials stay server-side in environment variables. Delivery
 failures are isolated per channel: a broken Telegram/SMTP/Web Push endpoint
 must never prevent the other channels from being attempted.
 """
@@ -51,7 +51,13 @@ def email_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_FROM"))
 
 
-def send_web_push(event: dict) -> int:
+def _send_push_payload(user_id: str, payload: dict) -> int:
+    """Send one visible push payload to every active subscription for a user.
+
+    Used by both real alert events and the explicit self-test button. Expired
+    endpoints are removed immediately so one stale iPhone/browser subscription
+    cannot poison later deliveries.
+    """
     if not web_push_configured():
         return 0
     try:
@@ -60,18 +66,10 @@ def send_web_push(event: dict) -> int:
         log.error("pywebpush is not installed; web push disabled")
         return 0
 
-    title, body = _message(event)
-    payload = json.dumps({
-        "title": title,
-        "body": body,
-        "tag": f"strategy-lab-alert-{event['alert_id']}",
-        "url": "/?tab=charts",
-        "symbol": event["symbol"],
-        "eventId": event["id"],
-    }, ensure_ascii=False)
+    data = json.dumps(payload, ensure_ascii=False)
     sent = 0
     subject = os.environ.get("WEB_PUSH_VAPID_SUBJECT", "mailto:admin@generationweb.ru")
-    for sub in ndb.list_push_subscriptions(event["user_id"]):
+    for sub in ndb.list_push_subscriptions(user_id):
         info = {
             "endpoint": sub["endpoint"],
             "keys": {"p256dh": sub["p256dh"], "auth": sub["auth_secret"]},
@@ -79,7 +77,7 @@ def send_web_push(event: dict) -> int:
         try:
             webpush(
                 subscription_info=info,
-                data=payload,
+                data=data,
                 vapid_private_key=os.environ["WEB_PUSH_VAPID_PRIVATE_KEY"],
                 vapid_claims={"sub": subject},
                 ttl=300,
@@ -87,12 +85,35 @@ def send_web_push(event: dict) -> int:
             sent += 1
         except WebPushException as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            # Expired/unsubscribed endpoints should not poison every future send.
             if status in (404, 410):
                 ndb.remove_push_subscription(subscription_id=sub["id"])
             log.warning("Web push failed for %s (%s): %s", sub["id"], status, exc)
         except Exception:
             log.exception("Unexpected web push failure for %s", sub["id"])
+    return sent
+
+
+def send_test_web_push(user_id: str) -> int:
+    """User-initiated delivery test; does not create or mutate a price alert."""
+    return _send_push_payload(user_id, {
+        "title": "✅ Strategy Lab · уведомления работают",
+        "body": "Тестовое push-уведомление доставлено. Ценовые алерты смогут приходить даже когда приложение закрыто.",
+        "tag": "strategy-lab-push-test",
+        "url": "/?tab=charts",
+        "kind": "push-test",
+    })
+
+
+def send_web_push(event: dict) -> int:
+    title, body = _message(event)
+    sent = _send_push_payload(event["user_id"], {
+        "title": title,
+        "body": body,
+        "tag": f"strategy-lab-alert-{event['alert_id']}",
+        "url": "/?tab=charts",
+        "symbol": event["symbol"],
+        "eventId": event["id"],
+    })
     if sent:
         ndb.mark_delivery(event["id"], channel="web_push")
     return sent
