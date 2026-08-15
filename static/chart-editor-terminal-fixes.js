@@ -1,4 +1,6 @@
-/* Small post-load compatibility layer for the mobile terminal core. */
+/* Small post-load compatibility layer for the terminal core.
+ * Mobile toolbar/overflow ownership lives in chart-mobile-toolbar-v3.js.
+ */
 (function (g) {
   "use strict";
   const Page = g.ChartAnalysisPage;
@@ -28,35 +30,6 @@
           this._renderIndicatorsInto(container);
         };
       });
-      return result;
-    };
-  }
-
-  // Fullscreen is priority-exempt in the desktop toolbar, therefore the old
-  // overflow builder is not guaranteed to place it under "..." on a phone.
-  // Add explicit secondary actions while reusing the existing controllers.
-  if (typeof Page._renderMorePopover === "function") {
-    const originalMore = Page._renderMorePopover;
-    Page._renderMorePopover = function () {
-      const result = originalMore.call(this);
-      const pop = this.root && this.root.querySelector("#gtMorePop");
-      if (!pop || pop.querySelector("[data-sl-more-actions]")) return result;
-      const block = document.createElement("div");
-      block.dataset.slMoreActions = "1";
-      block.innerHTML = `
-        <div class="ca-more-sep"></div>
-        <div class="ca-more-group">
-          <button class="ca-more-item" type="button" data-sl-more="alerts">Оповещения</button>
-          <button class="ca-more-item" type="button" data-sl-more="templates">Шаблоны</button>
-          <button class="ca-more-item" type="button" data-sl-more="settings">Настройки графика</button>
-          <button class="ca-more-item" type="button" data-sl-more="fullscreen">Полноэкранный режим</button>
-        </div>`;
-      pop.appendChild(block);
-      const close = () => pop.classList.add("hidden");
-      block.querySelector('[data-sl-more="alerts"]').onclick = () => { close(); this.root.querySelector("#gtAlertBtn")?.click(); };
-      block.querySelector('[data-sl-more="templates"]').onclick = () => { close(); this.root.querySelector("#gtTemplatesBtn")?.click(); };
-      block.querySelector('[data-sl-more="settings"]').onclick = () => { close(); this._openSettingsDialog(); };
-      block.querySelector('[data-sl-more="fullscreen"]').onclick = () => { close(); this._fsCtrl && this._fsCtrl.toggle(); };
       return result;
     };
   }
@@ -93,7 +66,6 @@
   style.id = "sl-pro-terminal-fixes";
   style.textContent = `
     @media(max-width:768px),(max-width:980px) and (max-height:520px){
-      html.sl-chart-phone body.charts-active #chartsRoot #gtIndicatorsBtn .gt-btn-label{display:inline!important}
       html.sl-chart-phone body.charts-active #chartsRoot .ca-tile-grid{display:block!important;height:100%}
       html.sl-chart-phone body.charts-active #chartsRoot .ca-tile-grid>.ca-tile{display:none!important;height:100%}
       html.sl-chart-phone body.charts-active #chartsRoot .ca-tile-grid>.ca-tile.active{display:flex!important}
