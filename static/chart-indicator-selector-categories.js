@@ -27,6 +27,8 @@
     volume: "volume",
   };
 
+  const collapsedCategories = new Set();
+
   function escapeHtml(value) {
     return String(value == null ? "" : value).replace(/[&<>\"]/g, (ch) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
@@ -73,6 +75,15 @@
       </label>`;
   }
 
+  function categoryHeader(key, count, collapsed) {
+    return `
+      <button class="sl-ind-category-toggle" type="button" data-ind-toggle="${key}" aria-expanded="${collapsed ? "false" : "true"}">
+        <span class="sl-ind-chevron" aria-hidden="true">›</span>
+        <span class="sl-ind-category-name">${escapeHtml(CATEGORY_LABELS[key])}</span>
+        <span class="sl-ind-category-count">${count}</span>
+      </button>`;
+  }
+
   function installStyles() {
     if (document.getElementById("sl-indicator-categories-style")) return;
     const style = document.createElement("style");
@@ -87,21 +98,29 @@
       #chartsRoot .sl-ind-selected { margin:0 0 10px; padding:8px; border:1px solid rgba(124,140,255,.28); border-radius:9px; background:rgba(124,140,255,.07); }
       #chartsRoot .sl-ind-section-title { display:flex; align-items:center; justify-content:space-between; margin:0 0 5px; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
       #chartsRoot .sl-ind-selected-empty { padding:5px 2px; color:var(--muted); font-size:11px; }
-      #chartsRoot .sl-ind-selected-row { display:grid; grid-template-columns:minmax(0,1fr) 30px; gap:4px; align-items:center; min-height:34px; }
+      #chartsRoot .sl-ind-selected-row { display:grid; grid-template-columns:minmax(0,1fr) 30px; gap:4px; align-items:center; min-height:36px; }
       #chartsRoot .sl-ind-selected-gear { width:28px!important; min-width:28px!important; height:28px!important; padding:0!important; }
-      #chartsRoot .sl-ind-category { margin-top:9px; }
-      #chartsRoot .sl-ind-category + .sl-ind-category { padding-top:8px; border-top:1px solid rgba(255,255,255,.055); }
-      #chartsRoot .sl-ind-check-row { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; padding:4px 3px; border-radius:6px; cursor:pointer; }
-      #chartsRoot .sl-ind-check-row:hover { background:rgba(255,255,255,.035); }
-      #chartsRoot .sl-ind-check-row input[type=checkbox] { flex:0 0 18px; width:18px; height:18px; margin:0; accent-color:var(--accent); cursor:pointer; }
-      #chartsRoot .sl-ind-label { display:flex; flex-direction:column; min-width:0; line-height:1.15; }
-      #chartsRoot .sl-ind-label b { color:var(--text); font-size:11px; font-weight:650; }
-      #chartsRoot .sl-ind-label small { color:var(--muted); font-size:9.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      #chartsRoot .sl-ind-category { margin-top:5px; }
+      #chartsRoot .sl-ind-category + .sl-ind-category { border-top:1px solid rgba(255,255,255,.055); }
+      #chartsRoot .sl-ind-category-toggle { display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:6px; width:100%; min-height:36px; padding:6px 3px; border:0; background:transparent; color:var(--muted); text-align:left; cursor:pointer; }
+      #chartsRoot .sl-ind-category-toggle:hover { background:rgba(255,255,255,.035); }
+      #chartsRoot .sl-ind-chevron { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; font-size:18px; line-height:1; transform:rotate(90deg); transition:transform .14s ease; color:var(--muted); }
+      #chartsRoot .sl-ind-category.is-collapsed .sl-ind-chevron { transform:rotate(0deg); }
+      #chartsRoot .sl-ind-category-name { font-size:10px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
       #chartsRoot .sl-ind-category-count { color:var(--muted); font-size:9px; font-weight:600; }
+      #chartsRoot .sl-ind-category-list { display:block; }
+      #chartsRoot .sl-ind-category.is-collapsed .sl-ind-category-list { display:none; }
+      #chartsRoot .sl-ind-check-row { display:flex!important; flex-direction:row!important; align-items:center!important; justify-content:flex-start!important; gap:9px!important; width:100%; min-height:36px; padding:5px 4px; margin:0; border-radius:6px; cursor:pointer; text-align:left!important; }
+      #chartsRoot .sl-ind-check-row:hover { background:rgba(255,255,255,.035); }
+      #chartsRoot .sl-ind-check-row input[type=checkbox] { position:static!important; display:block!important; flex:0 0 18px!important; width:18px!important; min-width:18px!important; height:18px!important; margin:0!important; padding:0!important; accent-color:var(--accent); cursor:pointer; }
+      #chartsRoot .sl-ind-label { display:flex!important; flex:1 1 auto; flex-direction:column!important; align-items:flex-start!important; justify-content:center!important; min-width:0; line-height:1.15; text-align:left!important; }
+      #chartsRoot .sl-ind-label b { display:block; color:var(--text); font-size:11px; font-weight:650; text-align:left; }
+      #chartsRoot .sl-ind-label small { display:block; color:var(--muted); font-size:9.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; max-width:100%; }
       #chartsRoot .sl-ind-no-results { padding:14px 4px; color:var(--muted); font-size:11px; text-align:center; }
       @media(max-width:620px){
         #chartsRoot #gtIndicatorsPop.sl-ind-categorized { width:min(330px,calc(100vw - 12px)); max-height:72dvh; padding:8px; }
-        #chartsRoot .sl-ind-check-row { min-height:38px; }
+        #chartsRoot .sl-ind-check-row { min-height:40px; }
+        #chartsRoot .sl-ind-category-toggle { min-height:40px; }
         #chartsRoot .sl-ind-label b { font-size:11px; }
         #chartsRoot .sl-ind-label small { font-size:9px; }
       }
@@ -132,9 +151,10 @@
     const categoriesHtml = CATEGORY_ORDER.map((key) => {
       const defs = grouped.get(key) || [];
       if (!defs.length) return "";
+      const collapsed = collapsedCategories.has(key);
       return `
-        <section class="sl-ind-category" data-ind-category="${key}">
-          <div class="sl-ind-section-title"><span>${CATEGORY_LABELS[key]}</span><span class="sl-ind-category-count">${defs.length}</span></div>
+        <section class="sl-ind-category ${collapsed ? "is-collapsed" : ""}" data-ind-category="${key}">
+          ${categoryHeader(key, defs.length, collapsed)}
           <div class="sl-ind-category-list">${defs.map((def) => categoryRow(def, activeByType.has(def.id))).join("")}</div>
         </section>`;
     }).join("");
@@ -153,6 +173,19 @@
       this._saveWorkspaceState();
       this._renderIndicatorsInto(container);
     };
+
+    container.querySelectorAll("[data-ind-toggle]").forEach((button) => {
+      button.onclick = () => {
+        const key = button.dataset.indToggle;
+        const section = button.closest(".sl-ind-category");
+        if (!section) return;
+        const willCollapse = !section.classList.contains("is-collapsed");
+        section.classList.toggle("is-collapsed", willCollapse);
+        button.setAttribute("aria-expanded", willCollapse ? "false" : "true");
+        if (willCollapse) collapsedCategories.add(key);
+        else collapsedCategories.delete(key);
+      };
+    });
 
     container.querySelectorAll("input[data-ind]").forEach((checkbox) => {
       checkbox.onchange = () => {
@@ -201,6 +234,8 @@
           if (visible) categoryVisible += 1;
         });
         section.hidden = categoryVisible === 0;
+        if (query && categoryVisible > 0) section.classList.remove("is-collapsed");
+        else if (!query && collapsedCategories.has(section.dataset.indCategory)) section.classList.add("is-collapsed");
         visibleCount += categoryVisible;
       });
       noResults.classList.toggle("hidden", visibleCount !== 0);
