@@ -7,7 +7,7 @@
  *   - enables safe-area viewport coverage,
  *   - gives short phone landscape the same compact UI class as portrait,
  *   - collapses the existing Properties/Objects panel when entering phone UI,
- *   - constrains the existing unified chart toolbar to its real container,
+ *   - constrains and compacts the existing unified chart toolbar by viewport,
  *   - asks existing chart instances/toolbar overflow logic to re-measure after
  *     resize, orientation and Safari visual-viewport changes.
  *
@@ -34,6 +34,16 @@
     return !!(global.matchMedia && global.matchMedia(PHONE_QUERY).matches);
   }
 
+  function setDisplay(el, value) {
+    if (el) el.style.display = value;
+  }
+
+  function setSizing(el, minWidth, maxWidth) {
+    if (!el) return;
+    el.style.minWidth = minWidth;
+    el.style.maxWidth = maxWidth;
+  }
+
   function constrainToolbar(page) {
     if (!page || !page.root) return;
     const toolbar = page.root.querySelector("#caToolbar");
@@ -43,13 +53,10 @@
     /*
      * .gt-scroll historically used flex: 1 1 auto while its children and
      * popovers intentionally keep overflow:visible. At tablet widths that
-     * makes the flex base equal to the toolbar's max-content width; the row
-     * can therefore grow ~50px beyond the viewport before the existing
-     * _recalcToolbarOverflow() sees a constrained clientWidth. Giving the
-     * flexible row a zero basis makes the real toolbar box the constraint.
-     * The existing priority algorithm then moves low-priority actions into
-     * "Ещё" exactly as designed. No controls are removed and popovers remain
-     * visible outside their button boxes.
+     * makes the flex base equal to the toolbar's max-content width. Use a zero
+     * flex basis so the actual toolbar box is the constraint, then compact the
+     * priority-exempt identity controls at tablet widths. Low-priority actions
+     * still move into "Ещё" through the existing _recalcToolbarOverflow().
      */
     toolbar.style.width = "100%";
     toolbar.style.maxWidth = "100%";
@@ -57,6 +64,38 @@
     scroll.style.flex = "1 1 0";
     scroll.style.minWidth = "0";
     scroll.style.maxWidth = "100%";
+
+    const width = global.innerWidth || document.documentElement.clientWidth || 0;
+    const name = page.root.querySelector("#gtName");
+    const change = page.root.querySelector("#gtChange");
+    const ticker = page.root.querySelector("#gtTicker");
+    const timeframe = page.root.querySelector("#gtTimeframe");
+    const chartType = page.root.querySelector("#gtChartType");
+    const layoutMenu = page.root.querySelector("#gtLayoutMenu");
+
+    if (width <= 1180) {
+      /* Name and absolute change are useful context on desktop but duplicate
+       * information already available from ticker/price/crosshair. Hiding them
+       * buys enough room to keep real touch-sized controls on tablets. */
+      setDisplay(name, "none");
+      setDisplay(change, "none");
+      setSizing(ticker, "82px", "112px");
+      setSizing(timeframe, "52px", "64px");
+      setSizing(chartType, "68px", "88px");
+    } else {
+      setDisplay(name, "");
+      setDisplay(change, "");
+      setSizing(ticker, "", "");
+      setSizing(timeframe, "", "");
+      setSizing(chartType, "", "");
+    }
+
+    /* A 768-900px tablet has room for the core editing controls but not for
+     * a six-layout picker plus fullscreen on the same row. Multi-chart layout
+     * remains available on wider tablet/desktop; narrow tablet gets a clean
+     * single-chart editing surface rather than a horizontally overflowing row. */
+    if (width <= 900) setDisplay(layoutMenu, "none");
+    else setDisplay(layoutMenu, "");
   }
 
   function resizeExistingCharts(page) {
