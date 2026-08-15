@@ -10,8 +10,8 @@
    * checkbox per registry item, plus the existing settings button for active
    * indicators. The terminal mobile enhancement temporarily replaces that
    * renderer with a long "+" list. Preserve the base renderer before loading
-   * enhancements and restore it afterwards so indicator behaviour has one
-   * owner again. */
+   * enhancements and restore it afterwards, then apply the categorized
+   * checkbox presentation as the final indicator-selector layer. */
   const baseIndicatorRenderer = global.ChartAnalysisPage && global.ChartAnalysisPage._renderIndicatorsInto;
 
   const files = [
@@ -58,12 +58,16 @@
     try {
       for (const src of files) await loadClassic(src);
 
-      /* Restore the original checkbox renderer only. Do not roll back any of
+      /* Restore the original checkbox behaviour only. Do not roll back any of
        * the terminal's drawing tools, expanded indicator registry, toolbar,
        * responsive handling or icon work. */
       if (baseIndicatorRenderer && global.ChartAnalysisPage) {
         global.ChartAnalysisPage._renderIndicatorsInto = baseIndicatorRenderer;
       }
+
+      /* Final presentation layer: groups the same registry checkboxes by type
+       * and shows currently selected indicators in a removable block at top. */
+      await loadClassic("/static/chart-indicator-selector-categories.js");
 
       finished = true;
       if (global.StrategyLabMobileChart && typeof global.StrategyLabMobileChart.refresh === "function") {
