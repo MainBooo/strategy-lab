@@ -69,6 +69,10 @@
        * and shows currently selected indicators in a removable block at top. */
       await loadClassic("/static/chart-indicator-selector-categories.js");
 
+      /* Use the existing top-toolbar chevron as the only Properties / Objects
+       * collapse control and remove the duplicate X from the panel header. */
+      await loadClassic("/static/chart-bottom-panel-toggle.js");
+
       finished = true;
       if (global.StrategyLabMobileChart && typeof global.StrategyLabMobileChart.refresh === "function") {
         requestAnimationFrame(() => global.StrategyLabMobileChart.refresh());
