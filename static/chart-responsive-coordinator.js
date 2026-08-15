@@ -1,149 +1,154 @@
-/* Responsive viewport coordinator.
+/* Chart toolbar responsive coordinator.
  *
- * This is the proven responsive coordinator from the pre-merge chart UI.
- * It constrains the existing unified toolbar and lets ChartAnalysisPage's
- * native priority overflow own button visibility. No second mobile toolbar
- * or cloned controls are created.
+ * One responsibility only: keep the existing unified chart toolbar inside its
+ * rendered box. It does not own chart, drawing, realtime or panel state and it
+ * does not create/clone controls. Existing buttons and their handlers remain
+ * the single source of truth; low-priority actions are represented in the
+ * existing "Ещё" popover through the native gt-hidden contract.
  */
 (function (global) {
   "use strict";
 
-  const PHONE_QUERY = "(max-width: 620px), (max-width: 960px) and (max-height: 520px)";
-  let lastPhoneMode = null;
-  let resizeFrame = 0;
+  const Page = global.ChartAnalysisPage;
+  if (!Page) return;
 
-  function ensureViewportFit() {
-    const meta = document.querySelector('meta[name="viewport"]');
-    if (!meta) return;
-    const content = meta.getAttribute("content") || "width=device-width,initial-scale=1";
-    if (!/viewport-fit\s*=\s*cover/i.test(content)) {
-      meta.setAttribute("content", `${content},viewport-fit=cover`);
+  const COMPACT_WIDTH = 980;
+  const TIGHT_WIDTH = 640;
+  const SECONDARY_KEYS = new Set([
+    "templates", "alerts", "replay", "undo", "redo",
+    "save", "settings", "snapshot", "collapseBottom", "collapseRight",
+  ]);
+  let frame = 0;
+
+  function toolbarGap(toolbar) {
+    const cs = global.getComputedStyle ? global.getComputedStyle(toolbar) : null;
+    const raw = cs ? (cs.columnGap || cs.gap || "0") : "0";
+    const gap = parseFloat(raw);
+    return Number.isFinite(gap) ? gap : 0;
+  }
+
+  function recalc() {
+    const root = Page.root;
+    if (!root) return;
+    const toolbar = root.querySelector("#caToolbar");
+    const scroll = root.querySelector("#gtScroll");
+    const more = root.querySelector("#gtMoreMenu");
+    if (!toolbar || !scroll || !more) return;
+
+    const width = toolbar.getBoundingClientRect().width || toolbar.clientWidth || 0;
+    if (!width) return;
+
+    const compact = width <= COMPACT_WIDTH;
+    const tight = width <= TIGHT_WIDTH;
+    root.classList.toggle("sl-toolbar-compact", compact);
+    root.classList.toggle("sl-toolbar-tight", tight);
+    root.classList.remove("sl-toolbar-indicator-icon-only");
+
+    const items = [...scroll.querySelectorAll("[data-key]")]
+      .sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
+
+    // Reset only overflow state owned by this coordinator.
+    items.forEach((el) => el.classList.remove("gt-hidden"));
+
+    // At phone/tablet-sized rendered toolbars keep the primary workflow in the
+    // row and send secondary actions to the already-existing More menu. This is
+    // based on actual toolbar width, not UA or viewport media queries, so Safari
+    // desktop-site/zoom modes cannot bypass it.
+    if (compact) {
+      items.forEach((el) => {
+        if (SECONDARY_KEYS.has(el.dataset.key)) el.classList.add("gt-hidden");
+      });
+      root.querySelector('[data-key="indicators"]')?.classList.remove("gt-hidden");
+    }
+
+    const gap = toolbarGap(toolbar);
+    const moreWidth = more.getBoundingClientRect().width || more.offsetWidth || 34;
+    const available = Math.max(0, width - moreWidth - gap - 2);
+
+    // Native implementation compared scrollWidth with scroll.clientWidth. On
+    // Safari the flex item's max-content width can become its clientWidth, so
+    // that comparison says "fits" while the row visibly runs beyond the
+    // toolbar. Compare against the toolbar's real rendered budget instead.
+    let guard = 0;
+    while (scroll.scrollWidth > available + 1 && guard < items.length) {
+      const next = items.find((el) => !el.classList.contains("gt-hidden") && el.dataset.key !== "indicators");
+      if (!next) break;
+      next.classList.add("gt-hidden");
+      guard += 1;
+    }
+
+    // Indicators is the last direct action we are willing to compact. Keep the
+    // real button/handler, only drop its text label if an exceptionally narrow
+    // rendered toolbar still cannot fit after all secondary actions moved out.
+    if (scroll.scrollWidth > available + 1) {
+      root.classList.add("sl-toolbar-indicator-icon-only");
     }
   }
 
-  function isPhoneUi() {
-    return !!(global.matchMedia && global.matchMedia(PHONE_QUERY).matches);
-  }
-
-  function setDisplay(el, value) {
-    if (el) el.style.display = value;
-  }
-
-  function setSizing(el, minWidth, maxWidth) {
-    if (!el) return;
-    el.style.minWidth = minWidth;
-    el.style.maxWidth = maxWidth;
-  }
-
-  function constrainToolbar(page) {
-    if (!page || !page.root) return;
-    const toolbar = page.root.querySelector("#caToolbar");
-    const scroll = page.root.querySelector("#gtScroll");
-    if (!toolbar || !scroll) return;
-
-    /* The original regression was caused by .gt-scroll using its max-content
-     * width as the flex base. Constrain that existing row instead of creating
-     * a second mobile representation. The native _recalcToolbarOverflow()
-     * then moves low-priority data-key actions into the existing "Ещё" menu. */
-    toolbar.style.width = "100%";
-    toolbar.style.maxWidth = "100%";
-    toolbar.style.minWidth = "0";
-    scroll.style.flex = "1 1 0";
-    scroll.style.minWidth = "0";
-    scroll.style.maxWidth = "100%";
-
-    const width = global.innerWidth || document.documentElement.clientWidth || 0;
-    const name = page.root.querySelector("#gtName");
-    const change = page.root.querySelector("#gtChange");
-    const ticker = page.root.querySelector("#gtTicker");
-    const timeframe = page.root.querySelector("#gtTimeframe");
-    const chartType = page.root.querySelector("#gtChartType");
-    const layoutMenu = page.root.querySelector("#gtLayoutMenu");
-
-    if (width <= 1180) {
-      setDisplay(name, "none");
-      setDisplay(change, "none");
-      setSizing(ticker, "82px", "112px");
-      setSizing(timeframe, "52px", "64px");
-      setSizing(chartType, "68px", "88px");
-    } else {
-      setDisplay(name, "");
-      setDisplay(change, "");
-      setSizing(ticker, "", "");
-      setSizing(timeframe, "", "");
-      setSizing(chartType, "", "");
-    }
-
-    if (width <= 900) setDisplay(layoutMenu, "none");
-    else setDisplay(layoutMenu, "");
-  }
-
-  function resizeExistingCharts(page) {
-    if (!page) return;
-    constrainToolbar(page);
-    const tiles = Array.isArray(page.tiles) ? page.tiles : [];
-    tiles.forEach((tile) => {
-      if (tile && tile.core && typeof tile.core._onResize === "function") tile.core._onResize();
-    });
-    if (typeof page._recalcToolbarOverflow === "function") page._recalcToolbarOverflow();
-  }
-
-  function syncViewport() {
-    const phone = isPhoneUi();
-    document.documentElement.classList.toggle("sl-phone-ui", phone);
-
-    const page = global.ChartAnalysisPage;
-    if (page && page.root) {
-      const enteringPhone = phone && lastPhoneMode !== true;
-      if (enteringPhone && typeof page._setBottomCollapsed === "function") {
-        page._setBottomCollapsed(true, { skipSave: true });
-      }
-      resizeExistingCharts(page);
-      lastPhoneMode = phone;
-    }
-  }
-
-  function scheduleSync() {
-    if (resizeFrame) cancelAnimationFrame(resizeFrame);
-    resizeFrame = requestAnimationFrame(() => {
-      resizeFrame = 0;
-      syncViewport();
+  function schedule() {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      recalc();
     });
   }
 
-  function wrapChartPageInit() {
-    const page = global.ChartAnalysisPage;
-    if (!page || typeof page.init !== "function" || page.__responsiveInitWrapped) return;
-    const originalInit = page.init;
-    page.init = function () {
-      const result = originalInit.apply(this, arguments);
-      lastPhoneMode = null;
-      scheduleSync();
-      return result;
-    };
-    page.__responsiveInitWrapped = true;
-  }
+  // Keep ChartAnalysisPage's existing ResizeObserver and More-menu contract,
+  // but fix the width calculation in the one method that observer already
+  // calls. No parallel observer, duplicate toolbar or duplicate actions.
+  Page._recalcToolbarOverflow = recalc;
 
-  ensureViewportFit();
-  wrapChartPageInit();
+  const style = document.createElement("style");
+  style.id = "sl-rendered-toolbar-fit";
+  style.textContent = `
+    #chartsRoot.sl-toolbar-compact .gt-name,
+    #chartsRoot.sl-toolbar-compact .gt-change,
+    #chartsRoot.sl-toolbar-compact #gtLayoutMenu,
+    #chartsRoot.sl-toolbar-compact #caFullscreenBtn { display:none !important; }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", scheduleSync, { once: true });
-  } else {
-    scheduleSync();
-  }
+    #chartsRoot.sl-toolbar-compact #gtTicker { min-width:72px; max-width:110px; }
+    #chartsRoot.sl-toolbar-compact #gtTimeframe { min-width:46px; max-width:58px; }
+    #chartsRoot.sl-toolbar-compact #gtChartType { min-width:60px; max-width:82px; }
+    #chartsRoot.sl-toolbar-compact .ca-toolbar-unified { gap:4px; padding:5px 6px; overflow:visible; }
+    #chartsRoot.sl-toolbar-compact #gtScroll { min-width:0; gap:4px; overflow:visible; }
+    #chartsRoot.sl-toolbar-compact #gtIndicatorsBtn { max-width:122px; padding-inline:8px; }
+    #chartsRoot.sl-toolbar-compact #gtMoreMenu { display:block !important; flex:0 0 auto; margin-left:auto; }
+    #chartsRoot.sl-toolbar-compact #gtMoreBtn { width:32px; min-width:32px; height:32px; padding:0; }
 
-  const media = global.matchMedia ? global.matchMedia(PHONE_QUERY) : null;
-  if (media) {
-    if (typeof media.addEventListener === "function") media.addEventListener("change", scheduleSync);
-    else if (typeof media.addListener === "function") media.addListener(scheduleSync);
-  }
+    #chartsRoot.sl-toolbar-tight #gtPrice { display:none !important; }
+    #chartsRoot.sl-toolbar-tight #gtTicker { min-width:68px; max-width:100px; }
+    #chartsRoot.sl-toolbar-tight #gtChartType { min-width:58px; max-width:76px; }
 
-  global.addEventListener("resize", scheduleSync, { passive: true });
-  global.addEventListener("orientationchange", scheduleSync, { passive: true });
-  if (global.visualViewport) {
-    global.visualViewport.addEventListener("resize", scheduleSync, { passive: true });
-  }
+    #chartsRoot.sl-toolbar-indicator-icon-only #gtIndicatorsBtn .gt-btn-label { display:none !important; }
+    #chartsRoot.sl-toolbar-indicator-icon-only #gtIndicatorsBtn { width:32px; min-width:32px; padding:0; justify-content:center; }
+
+    /* Safari/WebKit can collapse inline SVG flex children to zero width.
+       Keep the proven explicit icon basis on the toolbar itself. */
+    #chartsRoot .ca-toolbar-unified .icon-btn svg,
+    #chartsRoot .ca-toolbar-unified .gt-btn svg {
+      flex:0 0 15px !important;
+      width:15px !important;
+      height:15px !important;
+      min-width:15px !important;
+      max-width:15px !important;
+    }
+
+    #chartsRoot.sl-toolbar-compact #gtIndicatorsPop,
+    #chartsRoot.sl-toolbar-compact #gtMorePop {
+      z-index:900;
+      max-width:min(340px, calc(100vw - 16px));
+    }
+    #chartsRoot.sl-toolbar-compact #gtIndicatorsPop { left:auto; right:0; }
+  `;
+  document.head.appendChild(style);
+
+  // The terminal loader runs after ChartAnalysisPage.init on an already-open
+  // Charts tab. Recalculate once now, then reuse normal resize/orientation
+  // events. The page's own ResizeObserver will also call this same method.
+  schedule();
+  global.addEventListener("resize", schedule, { passive: true });
+  global.addEventListener("orientationchange", schedule, { passive: true });
+  if (global.visualViewport) global.visualViewport.addEventListener("resize", schedule, { passive: true });
 })(window);
 
 /* Dense indicator action buttons are unrelated to toolbar ownership and are
