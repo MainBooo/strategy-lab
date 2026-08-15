@@ -9,10 +9,6 @@
   "use strict";
 
   const PHONE_QUERY = "(max-width: 620px), (max-width: 960px) and (max-height: 520px)";
-  const PHONE_SECONDARY_KEYS = [
-    "templates", "alerts", "replay", "undo", "redo",
-    "save", "settings", "snapshot", "collapseBottom", "collapseRight",
-  ];
   let lastPhoneMode = null;
   let resizeFrame = 0;
 
@@ -39,7 +35,7 @@
     el.style.maxWidth = maxWidth;
   }
 
-  function constrainToolbar(page, phone) {
+  function constrainToolbar(page) {
     if (!page || !page.root) return;
     const toolbar = page.root.querySelector("#caToolbar");
     const scroll = page.root.querySelector("#gtScroll");
@@ -48,7 +44,7 @@
     /* The original regression was caused by .gt-scroll using its max-content
      * width as the flex base. Constrain that existing row instead of creating
      * a second mobile representation. The native _recalcToolbarOverflow()
-     * remains the only overflow implementation. */
+     * then moves low-priority data-key actions into the existing "Ещё" menu. */
     toolbar.style.width = "100%";
     toolbar.style.maxWidth = "100%";
     toolbar.style.minWidth = "0";
@@ -59,72 +55,37 @@
     const width = global.innerWidth || document.documentElement.clientWidth || 0;
     const name = page.root.querySelector("#gtName");
     const change = page.root.querySelector("#gtChange");
-    const price = page.root.querySelector("#gtPrice");
     const ticker = page.root.querySelector("#gtTicker");
     const timeframe = page.root.querySelector("#gtTimeframe");
     const chartType = page.root.querySelector("#gtChartType");
     const layoutMenu = page.root.querySelector("#gtLayoutMenu");
-    const fullscreen = page.root.querySelector("#caFullscreenBtn");
 
-    if (phone) {
-      /* Keep the exact original controls and handlers, but reserve the phone
-       * row for the four primary commands. Price/change are already visible
-       * on the chart itself; workspace fullscreen is duplicated in the tile
-       * header. Removing those exempt controls gives native overflow enough
-       * room to keep Indicators directly tappable and the real More button at
-       * the right edge. */
+    if (width <= 1180) {
       setDisplay(name, "none");
       setDisplay(change, "none");
-      setDisplay(price, "none");
-      setDisplay(layoutMenu, "none");
-      setDisplay(fullscreen, "none");
-      setSizing(ticker, "72px", "104px");
-      setSizing(timeframe, "46px", "54px");
-      setSizing(chartType, "62px", "76px");
-    } else if (width <= 1180) {
-      setDisplay(name, "none");
-      setDisplay(change, "none");
-      setDisplay(price, "");
-      setDisplay(fullscreen, "");
       setSizing(ticker, "82px", "112px");
       setSizing(timeframe, "52px", "64px");
       setSizing(chartType, "68px", "88px");
-      if (width <= 900) setDisplay(layoutMenu, "none");
-      else setDisplay(layoutMenu, "");
     } else {
       setDisplay(name, "");
       setDisplay(change, "");
-      setDisplay(price, "");
-      setDisplay(layoutMenu, "");
-      setDisplay(fullscreen, "");
       setSizing(ticker, "", "");
       setSizing(timeframe, "", "");
       setSizing(chartType, "", "");
     }
+
+    if (width <= 900) setDisplay(layoutMenu, "none");
+    else setDisplay(layoutMenu, "");
   }
 
-  function applyPhonePriorities(page, phone) {
-    if (!page || !page.root || !phone) return;
-
-    /* Native More renders from the same gt-hidden markers, so this does not
-     * duplicate any action or event handler. It only fixes the phone priority
-     * policy after native measurement: Indicators stays directly accessible;
-     * secondary data-key actions are represented by the existing More menu. */
-    PHONE_SECONDARY_KEYS.forEach((key) => {
-      page.root.querySelector(`[data-key="${key}"]`)?.classList.add("gt-hidden");
-    });
-    page.root.querySelector('[data-key="indicators"]')?.classList.remove("gt-hidden");
-  }
-
-  function resizeExistingCharts(page, phone) {
+  function resizeExistingCharts(page) {
     if (!page) return;
-    constrainToolbar(page, phone);
+    constrainToolbar(page);
     const tiles = Array.isArray(page.tiles) ? page.tiles : [];
     tiles.forEach((tile) => {
       if (tile && tile.core && typeof tile.core._onResize === "function") tile.core._onResize();
     });
     if (typeof page._recalcToolbarOverflow === "function") page._recalcToolbarOverflow();
-    applyPhonePriorities(page, phone);
   }
 
   function syncViewport() {
@@ -137,7 +98,7 @@
       if (enteringPhone && typeof page._setBottomCollapsed === "function") {
         page._setBottomCollapsed(true, { skipSave: true });
       }
-      resizeExistingCharts(page, phone);
+      resizeExistingCharts(page);
       lastPhoneMode = phone;
     }
   }
