@@ -1,5 +1,5 @@
-/* Legacy chart polish compatibility shim.
- * Runtime responsive behavior lives in chart-responsive-coordinator.js.
- * Keep this file inert so the Drawing Engine remains the sole interaction owner.
- */
-import("/static/chart-responsive-coordinator.js");
+/* Last-loaded chart terminal bundle: real indicator registry + responsive UI. */
+(function () {
+  "use strict";
+  document.write('<script src="/static/chart-editor-terminal-indicators-v2.js"><\/script><script src="/static/chart-editor-terminal-mobile-v2.js"><\/script><script src="/static/chart-editor-terminal-fixes.js"><\/script><script src="/static/chart-editor-terminal-compat.js"><\/script><script src="/static/chart-editor-terminal-icons.js"><\/script>');
+})();
