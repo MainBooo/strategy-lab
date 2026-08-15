@@ -39,6 +39,19 @@
     document.head.appendChild(heroScript);
   }
 
+  // Chart UI repair is intentionally a small, isolated layer. It restores
+  // icon-only toolbar actions, keeps the desktop tab indicator aligned after
+  // charts-active layout changes, and loads the expanded indicator registry
+  // that was present in the repository but was not wired into the page.
+  if (window.location.pathname === "/" && !document.querySelector('script[data-strategy-lab-chart-ui-repair="1"]')) {
+    const repairScript = document.createElement("script");
+    repairScript.src = "/static/chart-ui-repair.js";
+    repairScript.async = false;
+    repairScript.dataset.strategyLabChartUiRepair = "1";
+    repairScript.onerror = function () { /* core chart remains usable without the repair layer */ };
+    document.head.appendChild(repairScript);
+  }
+
   // Keep analytics/commerce completely outside the browser's initial page-load
   // lifecycle. This is important on Safari Private/LTE: a stalled optional
   // resource must not leave the newly authenticated page spinning forever.
@@ -143,7 +156,7 @@
     });
   }, () => {
     trackGoal("registration_completed");
-    const next = safeNext(document.getElementById("registerForm").dataset.next);
+    const next = safeNext(document.getElementById("loginForm")?.dataset.next || document.getElementById("registerForm").dataset.next);
     window.location.href = next;
   });
 
