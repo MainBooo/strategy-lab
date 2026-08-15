@@ -33,12 +33,14 @@
       .alert-delivery-row > div { min-width:0; display:flex; flex-direction:column; gap:2px; }
       .alert-delivery-row strong { font-size:12.5px; }
       .alert-delivery-row small { color:var(--muted); font-size:10.5px; line-height:1.3; }
+      .alert-delivery-actions { display:flex; align-items:center; gap:6px; flex:none; }
       .alert-delivery-row .secondary { width:auto; min-height:36px; padding:7px 10px; font-size:11px; flex:none; }
       .alert-delivery-row input[type="checkbox"] { width:20px; height:20px; min-height:20px; flex:none; }
       .alert-delivery-row.is-disabled { opacity:.55; }
       .alert-delivery-settings .message { min-height:0; margin-top:4px; font-size:11px; }
       @media (max-width:620px), (max-width:960px) and (max-height:520px) {
-        .alert-delivery-row { min-height:50px; }
+        .alert-delivery-row { min-height:50px; align-items:flex-start; }
+        .alert-delivery-actions { flex-wrap:wrap; justify-content:flex-end; }
         .alert-delivery-row .secondary { min-height:40px; }
       }
     `;
@@ -101,6 +103,7 @@
     if (sub) { const endpoint = sub.endpoint; await api("/api/notifications/push/subscribe", { method: "DELETE", body: JSON.stringify({ endpoint }) }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
     await api("/api/notifications/settings", { method: "PATCH", body: JSON.stringify({ web_push_enabled: false }) }).catch(() => {}); configCache = null;
   }
+  async function testPush() { return api("/api/notifications/push/test", { method: "POST", body: "{}" }); }
   async function setChannel(key, enabled) { const body = {}; body[key] = !!enabled; const data = await api("/api/notifications/settings", { method: "PATCH", body: JSON.stringify(body) }); configCache = null; return data.settings; }
   async function createTelegramLink() { return (await api("/api/notifications/telegram/link", { method: "POST", body: "{}" })).url; }
   async function unlinkTelegram() { await api("/api/notifications/telegram/link", { method: "DELETE", body: "{}" }); configCache = null; }
@@ -123,13 +126,25 @@
     const pushCap = cfg.capabilities.web_push, emailCap = cfg.capabilities.email, tgCap = cfg.capabilities.telegram;
     host.innerHTML = `
       <div class="alert-delivery-title">Каналы уведомлений</div>
-      <div class="alert-delivery-row"><div><strong>На устройство</strong><small>${pushCap ? statusText(ps.state) : "Нужно настроить Web Push на сервере"}</small></div><button class="secondary" type="button" data-notify-push>${ps.state === "enabled" ? "Отключить" : "Включить"}</button></div>
+      <div class="alert-delivery-row">
+        <div><strong>На устройство</strong><small>${pushCap ? statusText(ps.state) : "Нужно настроить Web Push на сервере"}</small></div>
+        <div class="alert-delivery-actions">
+          ${ps.state === "enabled" ? '<button class="secondary" type="button" data-notify-test>Тест</button>' : ''}
+          <button class="secondary" type="button" data-notify-push>${ps.state === "enabled" ? "Отключить" : "Включить"}</button>
+        </div>
+      </div>
       <label class="alert-delivery-row ${emailCap ? "" : "is-disabled"}"><div><strong>Email</strong><small>${cfg.email}${emailCap ? "" : " · SMTP не настроен"}</small></div><input type="checkbox" data-notify-email ${cfg.settings.email_enabled ? "checked" : ""} ${emailCap ? "" : "disabled"}></label>
       <div class="alert-delivery-row ${tgCap ? "" : "is-disabled"}"><div><strong>Telegram</strong><small>${cfg.telegram_linked ? "Бот подключён" : (tgCap ? "Подключите бота один раз" : "Бот не настроен")}</small></div><button class="secondary" type="button" data-notify-telegram ${tgCap ? "" : "disabled"}>${cfg.telegram_linked ? "Отключить" : "Подключить"}</button></div>
       <div class="message" data-notify-message></div>`;
     const message = host.querySelector("[data-notify-message]");
     const pushBtn = host.querySelector("[data-notify-push]"); pushBtn.disabled = !pushCap && ps.state !== "enabled";
     pushBtn.onclick = async () => { message.textContent = ""; try { if (ps.state === "enabled") await disablePush(); else await enablePush(); await renderSettings(host); } catch (e) { message.textContent = e.message; message.className = "message error"; } };
+    const testBtn = host.querySelector("[data-notify-test]"); if (testBtn) testBtn.onclick = async () => {
+      message.textContent = "Отправляем тест…"; message.className = "message"; testBtn.disabled = true;
+      try { const data = await testPush(); message.textContent = `Тест отправлен на ${data.sent} устройство.`; message.className = "message success"; }
+      catch (e) { message.textContent = e.message; message.className = "message error"; }
+      finally { testBtn.disabled = false; }
+    };
     const email = host.querySelector("[data-notify-email]"); if (email) email.onchange = async () => { try { await setChannel("email_enabled", email.checked); } catch (e) { email.checked = !email.checked; message.textContent = e.message; message.className = "message error"; } };
     const tg = host.querySelector("[data-notify-telegram]"); if (tg) tg.onclick = async () => { message.textContent = ""; try { if (cfg.telegram_linked) { await unlinkTelegram(); await renderSettings(host); } else { const url = await createTelegramLink(); global.open(url, "_blank", "noopener"); message.textContent = "Откройте бота и нажмите Start. После привязки закройте и снова откройте окно оповещений."; } } catch (e) { message.textContent = e.message; message.className = "message error"; } };
   }
@@ -147,5 +162,5 @@
 
   ensureManifest(); ensureStyles(); observeAlertUi();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
-  global.StrategyNotifications = { loadConfig, pushStatus, enablePush, disablePush, setChannel, createTelegramLink, unlinkTelegram, renderSettings, isStandalone };
+  global.StrategyNotifications = { loadConfig, pushStatus, enablePush, disablePush, testPush, setChannel, createTelegramLink, unlinkTelegram, renderSettings, isStandalone };
 })(window);
