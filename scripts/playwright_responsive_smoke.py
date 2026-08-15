@@ -111,16 +111,12 @@ def check_chart(page: Page, width: int, height: int, phone: bool, issues: list[s
         issues.append(f"chart toolbar escapes viewport: {toolbar}")
 
     if phone:
-        # Rail actions stay finger-sized while the rail itself stays compact.
         rail = rect(page, "#caTools")
         tool = rect(page, "#caTools .tv-tool-group-btn")
         if rail and rail["width"] > 48:
             issues.append(f"drawing rail is too wide for phone UI: {rail['width']:.1f}px")
         if tool and tool["height"] < 42:
             issues.append(f"drawing touch target is too small: {tool['height']:.1f}px")
-
-        # Phone entry should default to collapsed and a panel, once opened,
-        # must be an overlay rather than reducing the chart host in normal flow.
         state = page.evaluate(
             "() => window.ChartAnalysisPage ? ({js:window.ChartAnalysisPage._bottomCollapsed,css:document.querySelector('#caBottom')?.classList.contains('collapsed')}) : null"
         )
@@ -129,8 +125,6 @@ def check_chart(page: Page, width: int, height: int, phone: bool, issues: list[s
         if state and state["js"] is not True:
             issues.append("Properties/Objects panel is not collapsed by default in phone UI")
 
-    # Exercise the real existing toggle button from the drawing rail; do not
-    # mutate a test-only mobile state.
     panel_button = page.locator('#caTools [data-tv-action="objects"]')
     if panel_button.count() and panel_button.first.is_visible():
         before = page.evaluate("() => window.ChartAnalysisPage?._bottomCollapsed")
@@ -148,10 +142,6 @@ def check_chart(page: Page, width: int, height: int, phone: bool, issues: list[s
     else:
         issues.append("drawing rail Properties/Objects toggle is not available")
 
-    # Fullscreen uses the existing FullscreenController and must keep the
-    # same ChartCore object on both enter and exit. A raw DOM click lets the
-    # controller exercise its CSS fallback in headless browsers that reject
-    # native fullscreen without OS-level user activation.
     page.evaluate("() => { window.__responsiveSmokeFsCore = window.ChartAnalysisPage?.tiles?.[0]?.core || null; document.querySelector('#caFullscreenBtn')?.click(); }")
     page.wait_for_timeout(220)
     fs_active = page.evaluate("() => document.querySelector('#chartsRoot')?.classList.contains('is-fullscreen')")
@@ -209,6 +199,7 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
         viewport={"width": width, "height": height},
         has_touch=width <= 1024,
         is_mobile=phone,
+        ignore_https_errors=True,
     )
     page = context.new_page()
     console_errors: list[str] = []
@@ -233,14 +224,11 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
         if phone:
             check_orientation_without_recreation(page, width, height, issues)
 
-        # Return to another section with the visible navigation to verify the
-        # charts workspace never traps phone users.
         click_tab(page, "portfolio")
         if not visible(page, "#tab-portfolio"):
             issues.append("could not return from Charts to Portfolio")
         check_document_overflow(page, issues)
 
-        # Replay smoke: controls and chart stay inside the document.
         click_tab(page, "replay")
         page.wait_for_timeout(250)
         for selector in (".mr-transport button", ".mr-order-buttons button"):
@@ -256,7 +244,7 @@ def run_viewport(browser, label: str, width: int, height: int) -> dict:
             page.wait_for_timeout(300)
             out = OUT_DIR / f"{label}-charts.png"
             page.screenshot(path=str(out), full_page=False)
-    except Exception as exc:  # keep the matrix running and report the failure
+    except Exception as exc:
         issues.append(f"scenario exception: {exc}")
 
     issues.extend(f"console error: {x[:220]}" for x in console_errors)
