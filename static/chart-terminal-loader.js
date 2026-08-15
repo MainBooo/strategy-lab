@@ -11,6 +11,9 @@
     "/static/chart-mobile-toolbar-v3.js"
   ];
 
+  const PHONE = "(max-width:768px),(max-width:980px) and (max-height:520px)";
+  const isPhone = () => !!global.matchMedia && global.matchMedia(PHONE).matches;
+
   let started = false;
   let finished = false;
 
@@ -37,6 +40,9 @@
     });
   }
 
+  /* Desktop/tablet overflow only. Mobile has a dedicated owner in
+   * chart-mobile-toolbar-v3.js. Keeping both algorithms active was the root
+   * cause of controls being hidden twice and leaving blank button shells. */
   function installAdaptiveToolbarOverflow() {
     const Page = global.ChartAnalysisPage;
     if (!Page || Page.__slAdaptiveToolbarOverflow) return;
@@ -50,15 +56,20 @@
 
       const items = [...scroll.querySelectorAll("[data-key]")]
         .sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
-      items.forEach((el) => el.classList.remove("gt-hidden"));
 
+      if (isPhone()) {
+        // Clear stale decisions made before the mobile terminal bundle loaded.
+        // Visibility on phones is owned exclusively by chart-mobile-toolbar-v3.
+        items.forEach((el) => el.classList.remove("gt-hidden"));
+        return;
+      }
+
+      items.forEach((el) => el.classList.remove("gt-hidden"));
       const width = toolbar.getBoundingClientRect().width || global.innerWidth || 0;
       let forcedPriority = 0;
       if (width < 1500) forcedPriority = 5;
       if (width < 1320) forcedPriority = 8;
       if (width < 1120) forcedPriority = 10;
-      if (width < 760) forcedPriority = 10;
-
       items.forEach((el) => {
         if (Number(el.dataset.priority) <= forcedPriority) el.classList.add("gt-hidden");
       });
@@ -78,27 +89,21 @@
     const style = document.createElement("style");
     style.id = "sl-adaptive-chart-toolbar";
     style.textContent = `
-      #chartsRoot .ca-toolbar-unified{min-width:0;overflow:hidden}
-      #chartsRoot .gt-scroll{min-width:0;flex:1 1 auto;max-width:none;overflow:hidden}
-      #chartsRoot .gt-more{flex:0 0 auto;margin-left:4px}
-      #chartsRoot .gt-hidden{display:none!important}
-      #chartsRoot #gtMoreMenu.sl-has-overflow #gtMoreBtn{border-color:rgba(124,140,255,.34)}
-      @media(max-width:1320px){
+      @media (min-width:769px) {
+        #chartsRoot .ca-toolbar-unified{min-width:0;overflow:hidden}
+        #chartsRoot .gt-scroll{min-width:0;flex:1 1 auto;max-width:none;overflow:hidden}
+        #chartsRoot .gt-more{flex:0 0 auto;margin-left:4px}
+        #chartsRoot .gt-hidden{display:none!important}
+        #chartsRoot #gtMoreMenu.sl-has-overflow #gtMoreBtn{border-color:rgba(124,140,255,.34)}
+      }
+      @media (min-width:769px) and (max-width:1320px){
         #chartsRoot .ca-toolbar-unified{gap:5px}
         #chartsRoot .gt-scroll{gap:5px}
         #chartsRoot .gt-btn,#chartsRoot .icon-btn{flex:0 0 auto}
       }
-      @media(max-width:1120px){
+      @media (min-width:769px) and (max-width:1120px){
         #chartsRoot .gt-name{display:none}
         #chartsRoot .gt-ticker{max-width:190px}
-      }
-      @media(max-width:760px){
-        #chartsRoot .ca-toolbar-unified{gap:4px;padding-left:6px;padding-right:6px}
-        #chartsRoot .gt-scroll{gap:4px}
-        #chartsRoot #caFullscreenBtn{display:none!important}
-        #chartsRoot #gtLayoutMenu{flex:0 0 auto}
-        #chartsRoot #gtLayoutBtn,#chartsRoot #gtMoreBtn{width:36px;min-width:36px;padding:0}
-        #chartsRoot .gt-ticker{min-width:0;max-width:180px}
       }
     `;
     document.head.appendChild(style);
