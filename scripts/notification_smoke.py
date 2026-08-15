@@ -2,8 +2,16 @@
 """Offline smoke test for server-side alert transition semantics."""
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
+
+# When this file is executed directly, Python puts ./scripts (not the
+# repository root) on sys.path. Add the project root explicitly so the smoke
+# test works exactly as documented: `.venv/bin/python scripts/notification_smoke.py`.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import notifications_db as ndb
 
