@@ -15,7 +15,9 @@
     contract: '<svg data-sl-icon viewBox="0 0 24 24"><path d="M9 3v4a2 2 0 01-2 2H3M15 3v4a2 2 0 002 2h4M9 21v-4a2 2 0 00-2-2H3M15 21v-4a2 2 0 012-2h4"/></svg>',
     undo: '<svg data-sl-icon viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M5 12h8a6 6 0 016 6"/></svg>',
     redo: '<svg data-sl-icon viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M19 12h-8a6 6 0 00-6 6"/></svg>',
-    chevron: '<svg data-sl-icon viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>'
+    chevron: '<svg data-sl-icon viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
+    grid: '<svg data-sl-icon viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+    more: '<svg data-sl-icon viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>'
   };
 
   function put(button, name) {
@@ -40,6 +42,8 @@
     root.querySelectorAll('.ca-tile-btn[data-role="fs"]').forEach((b) => put(b, b.closest(".ca-tile")?.classList.contains("is-fullscreen") ? "contract" : "expand"));
     put(root.querySelector?.("#caUndoBtn"), "undo");
     put(root.querySelector?.("#caRedoBtn"), "redo");
+    put(root.querySelector?.("#gtLayoutBtn"), "grid");
+    put(root.querySelector?.("#gtMoreBtn"), "more");
     const fs = root.querySelector?.("#caFullscreenBtn");
     if (fs && !fs.querySelector("svg[data-sl-icon]")) put(fs, document.querySelector("#chartsRoot")?.classList.contains("is-fullscreen") ? "contract" : "expand");
     const collapse = root.querySelector?.("#gtCollapseBottomBtn");
