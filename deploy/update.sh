@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Safe update script for Strategy Lab.
-# Backs up user data, installs deps, validates code + nginx config,
-# restarts only the moex-strategy-lab service, and health-checks it.
+# Backs up user data, installs deps, validates code + notification settings +
+# nginx config, restarts only the moex-strategy-lab service, and health-checks it.
 set -euo pipefail
 
 APP_DIR="/opt/moex-strategy-lab-v3"
@@ -41,24 +41,37 @@ log "Installing dependencies"
 "$VENV_PIP" install -q -r "$APP_DIR/requirements.txt" gunicorn \
     || fail "pip install failed"
 
-# 5. Syntax-check all Python source before restarting anything.
+# 5. Provision persistent Web Push credentials when missing. This helper is
+# idempotent and refuses mismatched existing VAPID keys instead of rotating
+# them, because rotating the pair invalidates existing browser subscriptions.
+log "Ensuring notification credentials"
+"$VENV_PY" "$APP_DIR/deploy/ensure_notification_env.py" \
+    || fail "notification credential setup failed"
+
+# 6. Syntax-check all Python source before restarting anything.
 log "Checking Python syntax"
 find "$APP_DIR" -maxdepth 2 -name "*.py" -not -path "*/.venv/*" -print0 \
     | xargs -0 -n1 "$VENV_PY" -m py_compile \
     || fail "Python syntax check failed — aborting, service left untouched"
 
-# 6. Validate nginx configuration (does not reload yet).
+# 7. Exercise the persistent alert transition semantics offline before the
+# running service is touched.
+log "Checking notification alert semantics"
+"$VENV_PY" "$APP_DIR/scripts/notification_smoke.py" \
+    || fail "notification smoke test failed — aborting, service left untouched"
+
+# 8. Validate nginx configuration (does not reload yet).
 log "Checking nginx configuration"
 nginx -t 2>&1 || fail "nginx config test failed — aborting, service left untouched"
 
-# 7. Restart only this service — never touch other sites/processes.
+# 9. Restart only this service — never touch other sites/processes.
 log "Restarting $SERVICE"
 systemctl restart "$SERVICE" || fail "failed to restart $SERVICE"
 
 # Reload (not restart) nginx only after its config already validated above.
 systemctl reload nginx || fail "failed to reload nginx"
 
-# 8. Health check.
+# 10. Health check.
 log "Waiting for service to come up"
 for i in $(seq 1 15); do
     if curl -fsS -o /dev/null --max-time 5 "$HEALTH_URL"; then
@@ -69,5 +82,5 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
-# 9. Non-zero exit on failure.
+# 11. Non-zero exit on failure.
 fail "health check failed after restart — check: journalctl -u $SERVICE -n 100"

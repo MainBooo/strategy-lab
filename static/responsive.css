@@ -1,0 +1,530 @@
+/* Strategy Lab responsive system.
+ *
+ * This is the single late-loaded responsive layer for app-wide layout policy.
+ * It intentionally does not own business state: chart/drawing/panel state stays
+ * in the existing JS controllers.  The layer only changes presentation around
+ * those existing instances and lets ChartCore's ResizeObserver resize canvases.
+ *
+ * Breakpoint intent:
+ *   compact phone  <= 480px
+ *   phone          <= 620px
+ *   tablet         621-900px
+ *   compact desk   901-1180px
+ *   desktop        > 1180px
+ *
+ * A short-height landscape viewport (<=960px wide and <=520px tall) uses the
+ * phone chrome as well.  This is viewport-based, not device/user-agent based,
+ * and closes the former 621-900px "shrunken desktop" dead zone on phones.
+ */
+
+:root {
+  --sl-touch: 44px;
+  --sl-edge: clamp(9px, 2.4vw, 24px);
+  --sl-phone-nav-height: 58px;
+  --sl-sheet-gap: 8px;
+}
+
+html {
+  max-width: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Fix overflow at the source: flexible/grid children are allowed to shrink.
+ * The legacy body overflow-x:hidden remains in styles.css for now, but this
+ * layer does not rely on it to make the responsive layouts fit. */
+.shell,
+.tab-page,
+.card,
+.card-head,
+.hero,
+.hero-topbar,
+.hero-main,
+.hero-meta,
+.catalog-toolbar,
+.form-grid,
+.grid,
+.strategy-grid,
+.security-list,
+.result-actions,
+.ticker-select-head,
+.ticker-select-actions,
+.strategy-assignment-head,
+.ca-workspace,
+.ca-center,
+.ca-chart-col,
+.ca-tile-grid,
+.ca-tile,
+.ca-tile-chart-host,
+.mr-layout,
+.mr-main,
+.mr-controlbar,
+.mr-cb-left,
+.mr-cb-right {
+  min-width: 0;
+  max-width: 100%;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  min-width: 0;
+}
+
+/* Tables scroll inside their own surface instead of widening the document. */
+.table-wrap,
+.instrument-editor-table,
+.trade-table-wrap,
+.trades-table-wrap,
+.history-table-wrap,
+.portfolio-table-wrap,
+.strategy-assign-table,
+.mdm-table-wrap,
+.ca-object-table,
+.account-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---------------------------------------------------------------- tablet -- */
+@media (max-width: 1180px) {
+  .shell { width: min(100% - 32px, 1600px); }
+
+  .tabs.app-primary-tabs {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+  .tabs.app-primary-tabs::-webkit-scrollbar { display: none; }
+  .tabs.app-primary-tabs .tab { flex: 0 0 auto; min-height: var(--sl-touch); }
+
+  .card { padding: clamp(18px, 2.1vw, 24px); }
+}
+
+@media (max-width: 900px) {
+  .shell { width: min(100% - 24px, 1600px); padding-top: 14px; }
+
+  .form-grid,
+  .form-grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .result-actions,
+  .ticker-select-actions,
+  .editor-save-row,
+  .strategy-assign-footer-actions {
+    flex-wrap: wrap;
+  }
+
+  .result-actions > *,
+  .ticker-select-actions > *,
+  .editor-save-row > *,
+  .strategy-assign-footer-actions > * {
+    min-height: var(--sl-touch);
+  }
+
+  .ca-watchlist.wl-mobile-open {
+    height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .mr-setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------------------------------------------------------- phone chrome -- */
+@media (max-width: 620px), (max-width: 960px) and (max-height: 520px) {
+  .tabs.app-primary-tabs { display: none !important; }
+
+  .tabs.mobile-bottom-nav,
+  body.charts-active .tabs.mobile-bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 600;
+    margin: 0;
+    gap: 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    background: rgba(17, 23, 37, .96);
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, .34);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    padding-top: 4px;
+    padding-left: max(4px, env(safe-area-inset-left));
+    padding-right: max(4px, env(safe-area-inset-right));
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+  }
+
+  .mobile-bottom-nav .tab,
+  body.charts-active .mobile-bottom-nav .tab {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 50px;
+    padding: 4px 2px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    box-shadow: none;
+    touch-action: manipulation;
+  }
+
+  .mobile-bottom-nav .tab svg { width: 20px; height: 20px; }
+  .mobile-bottom-nav .tab span { font-size: 10px; line-height: 1.15; }
+
+  .shell {
+    width: calc(100% - 18px);
+    padding-top: 10px;
+    padding-bottom: calc(var(--sl-phone-nav-height) + env(safe-area-inset-bottom) + 14px);
+  }
+
+  .card { padding: 16px; border-radius: 14px; }
+  .card-head { margin-bottom: 17px; gap: 10px; }
+  h2 { font-size: clamp(19px, 5.2vw, 23px); }
+  .lead { font-size: 13.5px; }
+
+  .form-grid,
+  .form-grid.three,
+  .grid,
+  .metrics { grid-template-columns: 1fr; }
+
+  input,
+  select,
+  textarea,
+  .primary,
+  .secondary,
+  button:not(.tab):not(.icon-btn):not(.gt-btn):not(.ca-tile-btn):not(.tv-tool-group-btn):not(.tv-rail-action) {
+    min-height: var(--sl-touch);
+  }
+
+  .range-inline { flex-wrap: wrap; }
+  .range-inline > * { flex: 1 1 150px; }
+
+  .catalog-summary,
+  .allocation-row,
+  .ticker-select-head,
+  .strategy-assignment-head {
+    align-items: stretch;
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+
+  .catalog-summary > button,
+  .ticker-select-actions > *,
+  .strategy-assignment-head > button { flex: 1 1 150px; }
+
+  .hero.hero-premium {
+    padding: 0 13px 15px;
+    margin-bottom: 12px;
+    border-radius: 18px;
+  }
+  .hero-topbar {
+    min-height: 58px;
+    padding: 10px 0;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 9px;
+  }
+  .hero-brand { font-size: 17px; gap: 8px; }
+  .hero-brand-mark { width: 30px; height: 30px; }
+  .hero-premium .hero-meta {
+    width: auto;
+    max-width: 60%;
+    margin-left: auto;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .hero-premium .hero-meta .status,
+  .hero-premium .hero-meta .beta-badge,
+  .hero-premium .hero-meta .pb-widget,
+  .hero-premium .hero-meta #supportProjectBtn,
+  .hero-premium .hero-meta .commerce-support-header { display: none !important; }
+
+  .hero-premium .hero-meta .secondary,
+  .hero-premium .hero-meta .primary,
+  .hero-premium .account-trigger {
+    width: auto;
+    min-height: var(--sl-touch);
+    padding: 7px 10px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .hero-main { grid-template-columns: 1fr; gap: 18px; padding: 20px 0 2px; }
+  .hero-copy h1 { font-size: clamp(38px, 11vw, 48px); }
+  .hero-copy > p { margin-top: 14px; font-size: 14px; line-height: 1.5; }
+  .hero-cta { margin-top: 18px; gap: 8px; flex-wrap: wrap; }
+  .hero-cta .primary,
+  .hero-cta .secondary {
+    flex: 1 1 180px;
+    width: auto;
+    min-width: 0;
+    min-height: 48px;
+    padding-inline: 15px;
+    font-size: 12.5px;
+  }
+  .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 0; }
+  .hero-stat { min-height: 108px; padding: 12px 13px; }
+  .hero-stat:nth-of-type(3) { border-left: 0; border-top: 1px solid rgba(255,255,255,.07); }
+  .hero-stat:nth-of-type(4) { border-top: 1px solid rgba(255,255,255,.07); }
+
+  /* Charts become a dedicated phone workspace.  The fixed bottom nav stays
+   * outside the terminal; the terminal itself owns every other available px. */
+  body.charts-active .shell {
+    width: 100%;
+    max-width: none;
+    height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+    margin: 0;
+    padding-top: max(0px, env(safe-area-inset-top));
+    padding-right: 0;
+    padding-bottom: calc(var(--sl-phone-nav-height) + env(safe-area-inset-bottom));
+    padding-left: 0;
+  }
+
+  body.charts-active #tab-charts {
+    padding-top: 4px;
+    padding-right: max(4px, env(safe-area-inset-right));
+    padding-bottom: 4px;
+    padding-left: max(4px, env(safe-area-inset-left));
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  body.charts-active #chartsRoot {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    gap: 4px;
+  }
+
+  body.charts-active #chartsRoot .ca-toolbar-unified {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: var(--sl-touch);
+    padding: 3px 4px;
+    gap: 4px;
+    border-radius: 9px;
+  }
+
+  body.charts-active #chartsRoot .gt-scroll { gap: 4px; min-width: 0; }
+  body.charts-active #chartsRoot .gt-name,
+  body.charts-active #chartsRoot .gt-change { display: none; }
+
+  body.charts-active #chartsRoot .gt-ticker { min-width: 76px; max-width: 100px; }
+  body.charts-active #chartsRoot .gt-tf { min-width: 50px; max-width: 60px; }
+  body.charts-active #chartsRoot .gt-type { min-width: 62px; max-width: 78px; }
+  body.charts-active #chartsRoot .gt-select { height: var(--sl-touch); padding: 5px 6px; font-size: 12px; }
+
+  body.charts-active #chartsRoot .gt-scroll .icon-btn,
+  body.charts-active #chartsRoot .gt-scroll .gt-btn {
+    width: 42px;
+    height: var(--sl-touch);
+    min-width: 42px;
+    min-height: var(--sl-touch);
+    padding: 0;
+    touch-action: manipulation;
+  }
+
+  body.charts-active #chartsRoot #gtLayoutMenu { display: none; }
+
+  body.charts-active #chartsRoot .ca-workspace {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    gap: 4px;
+    overflow: hidden;
+  }
+
+  /* The rail keeps a true finger-sized hit target but only a 44px footprint. */
+  body.charts-active #chartsRoot .ca-tools.tv-rail {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    max-height: 100%;
+    padding: 2px;
+    gap: 0;
+    z-index: 540;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    scrollbar-width: none;
+  }
+  body.charts-active #chartsRoot .ca-tools.tv-rail::-webkit-scrollbar { display: none; }
+  body.charts-active #chartsRoot .ca-tools.tv-rail:has(.tv-tool-flyout:not(.hidden)) { overflow: visible; }
+  body.charts-active #chartsRoot .tv-tool-group-btn,
+  body.charts-active #chartsRoot .tv-rail-action {
+    width: 40px;
+    height: var(--sl-touch);
+    min-width: 40px;
+    min-height: var(--sl-touch);
+  }
+  body.charts-active #chartsRoot .tv-tool-flyout {
+    left: 42px;
+    width: min(286px, calc(100vw - 58px - env(safe-area-inset-right)));
+    max-height: calc(100dvh - var(--sl-phone-nav-height) - 72px);
+  }
+
+  /* Remove the 440/220px responsive floor from chart.css.  In a phone
+   * workspace flexbox, the remaining viewport is the correct chart height. */
+  body.charts-active #chartsRoot .ca-chart-col,
+  body.charts-active #chartsRoot .ca-tile-grid,
+  body.charts-active #chartsRoot .ca-tile {
+    min-height: 0;
+  }
+
+  /* Properties / Objects uses the existing _bottomCollapsed state, but on
+   * phone it is an overlay sheet rather than a flex row that shrinks canvas. */
+  body.charts-active #chartsRoot .ca-resize-h { display: none; }
+  body.charts-active #chartsRoot .ca-bottom.collapsed { display: none; }
+  body.charts-active #chartsRoot .ca-bottom:not(.collapsed) {
+    position: fixed;
+    z-index: 520;
+    left: max(var(--sl-sheet-gap), env(safe-area-inset-left));
+    right: max(var(--sl-sheet-gap), env(safe-area-inset-right));
+    bottom: calc(var(--sl-phone-nav-height) + max(var(--sl-sheet-gap), env(safe-area-inset-bottom)));
+    width: auto;
+    height: auto !important;
+    max-height: min(58dvh, 430px);
+    border-radius: 16px 16px 11px 11px;
+    box-shadow: 0 22px 70px rgba(0,0,0,.56);
+    overflow: hidden;
+  }
+  body.charts-active #chartsRoot .ca-bottom-head { min-height: var(--sl-touch); padding: 5px 8px; }
+  body.charts-active #chartsRoot .ca-side-tab { min-height: 36px; padding: 6px 11px; }
+  body.charts-active #chartsRoot .ca-bottom-body {
+    max-height: calc(min(58dvh, 430px) - var(--sl-touch));
+    padding: 10px;
+    overscroll-behavior: contain;
+  }
+
+  #chartsRoot.is-fullscreen .ca-bottom:not(.collapsed),
+  #chartsRoot:fullscreen .ca-bottom:not(.collapsed) {
+    bottom: max(var(--sl-sheet-gap), env(safe-area-inset-bottom));
+  }
+
+  /* Fullscreen surfaces respect dynamic viewport and notches/home indicator. */
+  #chartsRoot.is-fullscreen,
+  #chartsRoot:fullscreen,
+  .ca-tile.is-fullscreen,
+  .ca-tile:fullscreen,
+  .tc-chart-wrap.is-fullscreen,
+  .tc-chart-wrap:fullscreen {
+    box-sizing: border-box;
+    width: 100vw;
+    height: 100vh;
+    height: 100svh;
+    height: 100dvh;
+  }
+
+  #chartsRoot.is-fullscreen {
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-right: max(6px, env(safe-area-inset-right));
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    padding-left: max(6px, env(safe-area-inset-left));
+  }
+  .ca-tile.is-fullscreen {
+    padding-top: max(4px, env(safe-area-inset-top));
+    padding-right: max(4px, env(safe-area-inset-right));
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+    padding-left: max(4px, env(safe-area-inset-left));
+  }
+
+  .ca-popover,
+  .rt-popover,
+  .tc-fs-settings {
+    max-width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  }
+
+  .ca-modal-backdrop { padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  .ca-modal { width: 100%; max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); padding: 16px; }
+
+  /* Market Replay keeps its chart large and every transport action tappable. */
+  .mr-chart-host { height: clamp(300px, 52dvh, 520px); min-height: 240px; }
+  .mr-transport button,
+  .mr-order-buttons button,
+  .mr-cb-right .secondary,
+  .mr-cb-right .danger { min-height: var(--sl-touch); }
+  .mr-controlbar { align-items: stretch; }
+  .mr-cb-left,
+  .mr-cb-right { width: 100%; }
+  .mr-cb-right > * { flex: 1 1 120px; }
+}
+
+/* Short phone landscape: prioritize graph height and avoid portrait-only
+ * minimums.  Width may be 700-950px, but height is the constrained axis. */
+@media (max-width: 960px) and (max-height: 520px) {
+  :root { --sl-phone-nav-height: 54px; }
+
+  .mobile-bottom-nav .tab,
+  body.charts-active .mobile-bottom-nav .tab { min-height: 46px; }
+  .mobile-bottom-nav .tab span { display: none; }
+
+  body.charts-active #tab-charts { padding-top: 2px; padding-bottom: 2px; }
+  body.charts-active #chartsRoot .ca-toolbar-unified { min-height: 42px; }
+  body.charts-active #chartsRoot .gt-select,
+  body.charts-active #chartsRoot .gt-scroll .icon-btn,
+  body.charts-active #chartsRoot .gt-scroll .gt-btn { height: 42px; min-height: 42px; }
+
+  body.charts-active #chartsRoot .ca-bottom:not(.collapsed) { max-height: min(72dvh, 300px); }
+  body.charts-active #chartsRoot .ca-bottom-body { max-height: calc(min(72dvh, 300px) - 44px); }
+
+  .mr-chart-host { height: max(250px, 58dvh); }
+}
+
+/* --------------------------------------------------------- compact phone -- */
+@media (max-width: 480px) {
+  .shell { width: calc(100% - 14px); }
+  .card { padding: 14px; }
+
+  .hero.hero-premium { padding-inline: 11px; }
+  .hero-premium .hero-meta { max-width: 64%; }
+  .hero-copy h1 { font-size: clamp(36px, 11.5vw, 44px); }
+  .hero-stats { grid-template-columns: 1fr 1fr; }
+
+  .catalog-toolbar,
+  #tab-portfolio > .card:first-child .catalog-toolbar { grid-template-columns: 1fr !important; }
+  #tab-portfolio > .card:first-child .catalog-toolbar > * { grid-column: 1 !important; }
+
+  .mr-setup-grid { grid-template-columns: 1fr; }
+  .mr-transport button { flex: 1 1 calc(50% - 6px); }
+
+  body.charts-active #chartsRoot .gt-ticker { min-width: 70px; max-width: 88px; }
+  body.charts-active #chartsRoot .gt-tf { min-width: 48px; max-width: 54px; }
+  body.charts-active #chartsRoot .gt-type { min-width: 58px; max-width: 70px; }
+  body.charts-active #chartsRoot .gt-scroll .icon-btn,
+  body.charts-active #chartsRoot .gt-scroll .gt-btn { width: 40px; min-width: 40px; }
+
+  .trade-viewer-panel,
+  .strategy-assign-panel { max-width: 100vw; }
+}
+
+@media (max-width: 360px) {
+  .mobile-bottom-nav .tab span { font-size: 9.5px; }
+  body.charts-active #chartsRoot .gt-price { display: none; }
+  body.charts-active #chartsRoot .gt-ticker { min-width: 66px; max-width: 82px; }
+  body.charts-active #chartsRoot .gt-type { min-width: 54px; max-width: 64px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ca-watchlist.wl-mobile-open { animation: none; }
+}
