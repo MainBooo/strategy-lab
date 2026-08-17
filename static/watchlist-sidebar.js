@@ -187,6 +187,12 @@
         return;
       }
       this._render();
+      // On a cold page load, setActive(symbol) for the restored workspace's
+      // tile can fire before this async fetch resolves - the info panel
+      // would render once with this.securities still empty and never
+      // update, leaving the catalog-derived rows (name/status/stepSize)
+      // stuck on "—" forever even though the data is right here now.
+      if (this.activeTicker) this._renderInfoPanel();
     }
 
     refreshPrices() {
@@ -420,21 +426,28 @@
       }
       if (this.activeTicker !== ticker) return; // user switched away while this was loading
       if (info.error) { panel.innerHTML = `<div class="muted-note">${escapeHtml(info.error)}</div>`; return; }
+      // get_instrument_info() (market_ticker.py) only returns 24hr-ticker +
+      // history-coverage fields - it never had name/board_title/lot_size/
+      // lot_value/currency/trading_status_label (those were MOEX-era
+      // fields removed from the backend during the Binance migration, but
+      // this panel kept reading them - every one of those rows silently
+      // rendered "—" forever, and "Рынок" was hardcoded to "Акции").
+      // The catalog entry (already loaded for search/filter) has the real
+      // Binance equivalents.
+      const security = this.securities.find((s) => s.symbol === ticker);
       const rows = [
-        ["Название", info.name],
-        ["Рынок", "Акции"],
-        ["Режим торгов", info.board_title],
-        ["Цена", fmtMoney(info.price) + (info.currency ? ` ${info.currency}` : "")],
+        ["Название", security ? security.baseAsset : null],
+        ["Рынок", "Binance Spot"],
+        ["Статус", security ? (security.status === "TRADING" ? "Торгуется" : security.status) : null],
+        ["Цена", fmtMoney(info.price) + (security && security.quoteAsset ? ` ${security.quoteAsset}` : "")],
         ["Открытие", fmtMoney(info.open)],
         ["Максимум", fmtMoney(info.high)],
         ["Минимум", fmtMoney(info.low)],
         ["Объём", info.volume != null ? Number(info.volume).toLocaleString("ru-RU") : "—"],
-        ["Размер лота", info.lot_size],
-        ["Стоимость лота", fmtMoney(info.lot_value)],
+        ["Шаг объёма (stepSize)", security ? security.stepSize : null],
         ["История доступна", info.history_from && info.history_to
           ? `${new Date(info.history_from * 1000).toLocaleDateString("ru-RU")} — ${new Date(info.history_to * 1000).toLocaleDateString("ru-RU")}`
           : "нет загруженных данных"],
-        ["Состояние торгов", info.trading_status_label || "—"],
       ];
       panel.innerHTML = `
         <div class="wl-info-title">${escapeHtml(ticker)}</div>

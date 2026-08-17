@@ -209,13 +209,37 @@
       try {
         this.securities = await global.fetchSecuritiesShared();
         this.tiles.forEach((t) => t.setSecurities(this.securities));
+        this._reconcileStaleSymbols();
         this._renderTickerOptions();
       } catch (e) { /* securities catalog is optional here - manual ticker entry still works via prompt fallback */ }
     },
 
+    /** A workspace restored from localStorage (see _restoreWorkspaceState)
+     * can still carry a ticker from before the MOEX->Binance migration
+     * (e.g. "SBER") that no longer exists in the Binance catalog - such a
+     * tile would silently show "Нет данных за выбранный период" forever.
+     * Once the real catalog is in, swap any unknown symbol to BTCUSDT (the
+     * same default a brand-new tile gets) and persist the correction so it
+     * doesn't keep restoring the dead ticker on every visit. */
+    _reconcileStaleSymbols() {
+      if (!this.securities.length) return;
+      const known = new Set(this.securities.map((s) => s.symbol));
+      let changed = false;
+      this.tiles.forEach((t) => {
+        if (!known.has(t.symbol)) {
+          t.selectSymbol("BTCUSDT");
+          changed = true;
+        }
+      });
+      if (changed) {
+        this._refreshGlobalHeader();
+        this._saveWorkspaceState();
+      }
+    },
+
     _instrumentName(ticker) {
-      const s = this.securities.find((x) => x.SECID === ticker);
-      return s ? (s.SHORTNAME || "") : "";
+      const s = this.securities.find((x) => x.symbol === ticker);
+      return s ? (s.baseAsset || "") : "";
     },
 
     // ----------------------------------------------------------- build ----
@@ -407,7 +431,7 @@
       const sel = this.root.querySelector("#gtTicker");
       if (!sel || !this.securities.length) return;
       const current = this.activeTile ? this.activeTile.symbol : null;
-      sel.innerHTML = this.securities.map((s) => `<option value="${s.SECID}">${s.SECID} · ${s.SHORTNAME || ""}</option>`).join("");
+      sel.innerHTML = this.securities.map((s) => `<option value="${s.symbol}">${s.symbol}${s.baseAsset ? " · " + s.baseAsset : ""}</option>`).join("");
       if (current) sel.value = current;
     },
 
