@@ -10,8 +10,11 @@
 
   const CE = global.ChartEngine;
   const SPEED_OPTIONS = [1, 2, 5, 10, 25, 50, "max"];
-  const NATIVE_TIMEFRAMES = ["1m", "10m", "60m", "1d", "1w", "1mo"];
-  const TF_LABELS = { "1m": "1 минута", "10m": "10 минут", "60m": "1 час", "1d": "1 день", "1w": "1 неделя", "1mo": "1 месяц" };
+  const NATIVE_TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1mo"];
+  const TF_LABELS = {
+    "1m": "1 минута", "3m": "3 минуты", "5m": "5 минут", "15m": "15 минут", "30m": "30 минут",
+    "1h": "1 час", "2h": "2 часа", "4h": "4 часа", "1d": "1 день", "1w": "1 неделя", "1mo": "1 месяц",
+  };
   const SESSION_KEY = "moexlab_replay_session_id";
   const BASE_INTERVAL_MS = 700;
   const STYLE_ID = "marketReplayMobileStyles";
@@ -47,7 +50,7 @@
   }
   function fmtMoney(n) {
     if (n == null || Number.isNaN(n)) return "—";
-    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n) + " ₽";
+    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n) + " USDT";
   }
   function pnlClass(n) { return n > 0 ? "pnl-pos" : n < 0 ? "pnl-neg" : ""; }
   function fmtPercent(n) {
@@ -96,12 +99,9 @@
       this.root.innerHTML = `
         <div class="mr-setup" id="mrSetup">
           <div class="mr-setup-grid">
-            <label>Тикер
-              <input type="text" id="mrTicker" list="mrTickerList" placeholder="SBER" autocomplete="off">
+            <label>Символ
+              <input type="text" id="mrTicker" list="mrTickerList" placeholder="BTCUSDT" autocomplete="off">
               <datalist id="mrTickerList"></datalist>
-            </label>
-            <label>Площадка
-              <input type="text" id="mrBoard" value="TQBR">
             </label>
             <label>Таймфрейм
               <select id="mrTimeframe">${NATIVE_TIMEFRAMES.map((tf) => `<option value="${tf}">${TF_LABELS[tf]}</option>`).join("")}</select>
@@ -115,8 +115,8 @@
             <label>Минута
               <input type="number" id="mrStartMinute" min="0" max="59" value="0">
             </label>
-            <label>Начальный баланс, ₽
-              <input type="number" id="mrBalance" min="1000" step="1000" value="1000000">
+            <label>Начальный баланс, USDT
+              <input type="number" id="mrBalance" min="10" step="100" value="10000">
             </label>
             <label>Комиссия, % за сторону
               <input type="number" id="mrCommission" min="0" max="5" step="0.01" value="0.05">
@@ -128,7 +128,7 @@
               <select id="mrSpeed">${SPEED_OPTIONS.map((s) => `<option value="${s}">${s === "max" ? "Максимум" : s + "×"}</option>`).join("")}</select>
             </label>
           </div>
-          <p class="muted-note mr-tick-note">Режим: свечи (минимальный доступный таймфрейм — 1 минута). Исторические тиковые данные MOEX ISS в этой интеграции недоступны — воспроизведение честно идёт по свечам, без имитации тиков.</p>
+          <p class="muted-note mr-tick-note">Режим: свечи (минимальный доступный таймфрейм — 1 минута). Исторические тиковые данные (сделка за сделкой) через публичный Binance market-data API недоступны — воспроизведение честно идёт по свечам, без имитации тиков.</p>
           <div class="mr-setup-actions">
             <button class="primary" id="mrStart">Запустить воспроизведение</button>
           </div>
@@ -314,22 +314,22 @@
         this.securities = Array.isArray(data) ? data : [];
         this.root.querySelector("#mrTickerList").innerHTML = this.securities
           .slice(0, 500)
-          .map((s) => `<option value="${s.SECID}">${s.SHORTNAME || ""}</option>`).join("");
-      } catch (e) { /* datalist just stays empty - typing a ticker manually still works */ }
+          .map((s) => `<option value="${s.symbol}">${s.baseAsset || ""}/${s.quoteAsset || ""}</option>`).join("");
+      } catch (e) { /* datalist just stays empty - typing a symbol manually still works */ }
     },
 
     async _startSession() {
       const btn = this.root.querySelector("#mrStart");
       const msg = this.root.querySelector("#mrSetupMessage");
-      const ticker = this.root.querySelector("#mrTicker").value.trim().toUpperCase();
-      if (!ticker) { msg.textContent = "Укажите тикер"; return; }
+      const symbol = this.root.querySelector("#mrTicker").value.trim().toUpperCase();
+      if (!symbol) { msg.textContent = "Укажите символ"; return; }
       const payload = {
-        ticker, board: this.root.querySelector("#mrBoard").value.trim() || "TQBR",
+        symbol,
         timeframe: this.root.querySelector("#mrTimeframe").value,
         start_date: this.root.querySelector("#mrStartDate").value,
         start_hour: Number(this.root.querySelector("#mrStartHour").value || 10),
         start_minute: Number(this.root.querySelector("#mrStartMinute").value || 0),
-        starting_balance: Number(this.root.querySelector("#mrBalance").value || 1000000),
+        starting_balance: Number(this.root.querySelector("#mrBalance").value || 10000),
         commission_rate: Number(this.root.querySelector("#mrCommission").value || 0) / 100,
         slippage_bps: Number(this.root.querySelector("#mrSlippage").value || 0),
         speed: Number(this.root.querySelector("#mrSpeed").value || 1),
@@ -369,7 +369,7 @@
         if (!this.sessions.length) { box.innerHTML = ""; return; }
         box.innerHTML = `<h4>Незавершённые сессии</h4>` + this.sessions.slice(0, 8).map((s) => `
           <button class="mr-session-row" data-sid="${s.id}">
-            <strong>${s.ticker}</strong> <span class="muted">${TF_LABELS[s.timeframe] || s.timeframe}</span>
+            <strong>${s.symbol}</strong> <span class="muted">${TF_LABELS[s.timeframe] || s.timeframe}</span>
             <span class="muted">от ${fmtDateTime(s.start_ts)}</span>
             <span class="muted">${s.reveal_index} баров пройдено</span>
           </button>`).join("");
@@ -407,7 +407,7 @@
     _enterPlayer(state) {
       this.root.querySelector("#mrSetup").classList.add("hidden");
       this.root.querySelector("#mrPlayerRoot").classList.remove("hidden");
-      this.root.querySelector("#mrSymbolLabel").textContent = `${state.session.ticker} · ${TF_LABELS[state.session.timeframe] || state.session.timeframe}`;
+      this.root.querySelector("#mrSymbolLabel").textContent = `${state.session.symbol} · ${TF_LABELS[state.session.timeframe] || state.session.timeframe}`;
       this.root.querySelector("#mrSpeedLive").value = String(state.session.speed);
       if (!this.core) {
         this.core = new CE.ChartCore(this.root.querySelector("#mrChartHost"), { showVolume: true });

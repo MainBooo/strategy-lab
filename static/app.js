@@ -11,7 +11,7 @@ let securities=[];
 let catalogSelected=new Set();
 let portfolios=[];
 let manualLots={};
-let allocationMode="equal_lots";
+let allocationMode="equal_capital";
 let buildTargetPortfolioId=null;
 let buildJobId=null,buildPollTimer=null;
 
@@ -150,9 +150,9 @@ async function loadSecurities(refresh=false){
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось загрузить справочник");
     securities=d;renderCatalog();
-    setStatus(`Инструментов MOEX: ${d.length}`,"success");
+    setStatus(`Инструментов Binance: ${d.length}`,"success");
   }catch(e){
-    const msg=e.name==="AbortError"?"Справочник MOEX не ответил вовремя.":`Ошибка справочника: ${e.message}`;
+    const msg=e.name==="AbortError"?"Справочник Binance не ответил вовремя.":`Ошибка справочника: ${e.message}`;
     setStatus(msg,"error");throw e;
   }finally{clearTimeout(t)}
 }
@@ -163,11 +163,11 @@ function catalogFilters(){
 function filteredSecurities(){
   const f=catalogFilters();
   return securities.filter(s=>{
-    if(f.q&&!`${s.SECID} ${s.SHORTNAME} ${s.ISIN||""}`.toLowerCase().includes(f.q))return false;
+    if(f.q&&!`${s.symbol} ${s.baseAsset} ${s.ISIN||""}`.toLowerCase().includes(f.q))return false;
     if(f.sector&&s.SECTOR!==f.sector)return false;
     if(f.dataStatus&&s.DATA_STATUS!==f.dataStatus)return false;
     if(f.onlyLiquid&&!s.IS_LIQUID)return false;
-    if(f.onlySelected&&!catalogSelected.has(s.SECID))return false;
+    if(f.onlySelected&&!catalogSelected.has(s.symbol))return false;
     return true;
   });
 }
@@ -176,10 +176,10 @@ function renderCatalog(){
   $("catalogFoundCount").textContent=all.length;
   const shown=all.slice(0,300);
   $("securityList").innerHTML=shown.length?shown.map(s=>{
-    const checked=catalogSelected.has(s.SECID);
+    const checked=catalogSelected.has(s.symbol);
     return `<label class="security-row ${checked?'selected-row':''}">
-      <input type="checkbox" data-ticker="${s.SECID}" ${checked?"checked":""}>
-      <span class="security-main"><strong>${s.SECID}</strong><small>${s.SHORTNAME||""}</small><em>${s.SECTOR} · TQBR · лот ${s.LOTSIZE||1}</em></span>
+      <input type="checkbox" data-ticker="${s.symbol}" ${checked?"checked":""}>
+      <span class="security-main"><strong>${s.symbol}</strong><small>${s.baseAsset||""}/${s.quoteAsset||""}</small><em>${s.SECTOR}${s.stepSize?` · шаг ${s.stepSize}`:""}</em></span>
       <span class="security-data-status ${DATA_STATUS_CLASS[s.DATA_STATUS]||''}">${DATA_STATUS_LABEL[s.DATA_STATUS]||"—"}${s.DATA_UPDATED_AT?`<small>по ${s.DATA_UPDATED_AT}</small>`:""}</span>
     </label>`;
   }).join(""):"<div class='empty'>Ничего не найдено по текущим фильтрам.</div>";
@@ -205,16 +205,17 @@ function updateCatalogSelectionUI(){
 }
 function renderPresets(){
   const labels=window.PRESET_LABELS||{};
-  const buttons=Object.keys(window.SECURITY_PRESETS||{}).map(k=>`<button class="secondary preset-btn" data-preset="${k}">${labels[k]||k}</button>`).join("");
-  $("presetActions").innerHTML=buttons+`<button class="secondary preset-btn" data-preset="all">Все акции TQBR</button>`;
+  const quoteAssets=window.QUOTE_ASSET_PRESETS||["USDT"];
+  const buttons=quoteAssets.map(q=>`<button class="secondary preset-btn" data-preset="${q}">${labels[q]||q}</button>`).join("");
+  $("presetActions").innerHTML=buttons+`<button class="secondary preset-btn" data-preset="all">Все инструменты</button>`;
   document.querySelectorAll(".preset-btn").forEach(b=>b.onclick=()=>{
     const key=b.dataset.preset;
-    if(key==="all"){catalogSelected=new Set(securities.map(s=>s.SECID));}
-    else{(window.SECURITY_PRESETS[key]||[]).forEach(t=>{if(securities.some(s=>s.SECID===t))catalogSelected.add(t)});}
+    if(key==="all"){catalogSelected=new Set(securities.map(s=>s.symbol));}
+    else{securities.filter(s=>s.quoteAsset===key).forEach(s=>catalogSelected.add(s.symbol));}
     renderCatalog();
   });
 }
-$("selectAllFiltered").onclick=()=>{filteredSecurities().forEach(s=>catalogSelected.add(s.SECID));renderCatalog()};
+$("selectAllFiltered").onclick=()=>{filteredSecurities().forEach(s=>catalogSelected.add(s.symbol));renderCatalog()};
 $("clearCatalogSelection").onclick=()=>{catalogSelected.clear();renderCatalog()};
 $("catalogSearch").addEventListener("input",renderCatalog);
 $("catalogSector").addEventListener("change",renderCatalog);
@@ -232,14 +233,12 @@ function renderAllocationExtra(){
   const box=$("allocationExtra");
   if(allocationMode==="manual"){
     box.innerHTML=[...catalogSelected].sort().map(t=>{
-      const sec=securities.find(s=>s.SECID===t);
-      return `<label class="manual-lot-row"><span>${t} (лот ${sec?sec.LOTSIZE:1})</span><input type="number" min="1" value="${manualLots[t]||1}" data-manual-lot="${t}"></label>`;
+      const sec=securities.find(s=>s.symbol===t);
+      return `<label class="manual-lot-row"><span>${t}${sec&&sec.stepSize?` (шаг ${sec.stepSize})`:""}</span><input type="number" min="1" value="${manualLots[t]||1}" data-manual-lot="${t}"></label>`;
     }).join("");
     box.querySelectorAll("[data-manual-lot]").forEach(inp=>inp.oninput=()=>{manualLots[inp.dataset.manualLot]=Math.max(1,Number(inp.value||1))});
-  }else if(allocationMode==="equal_lots"){
-    box.innerHTML=`<label class="inline-label">Лотов на инструмент <input type="number" id="lotsPerInstrument" min="1" value="1" style="width:90px"></label>`;
   }else{
-    box.innerHTML=`<p class="hint">Капитал делится поровну между выбранными инструментами; количество лотов рассчитывается по последней известной цене закрытия и официальному размеру лота, без дробных лотов.</p>`;
+    box.innerHTML=`<p class="hint">Капитал делится поровну между выбранными инструментами; количество (в шагах минимального объёма биржи, stepSize) рассчитывается по последней известной цене закрытия, без дробления ниже stepSize.</p>`;
   }
 }
 
@@ -262,7 +261,6 @@ function setBuildTarget(portfolioId){
 function collectBuildPayload(){
   const tickers=[...catalogSelected];
   const allocation={mode:allocationMode};
-  if(allocationMode==="equal_lots")allocation.lots_per_instrument=Math.max(1,Number($("lotsPerInstrument")?.value||1));
   if(allocationMode==="manual")allocation.lots=manualLots;
   const payload={tickers,starting_capital:Number($("buildCapital").value||1000000),allocation,interval:10,
                  from_date:$("buildFrom").value,till_date:$("buildTill").value};
@@ -513,7 +511,7 @@ function renderPortfolioCard(p){
       <span class="accordion-arrow">${expanded?"▾":"▸"}</span>
       <div class="portfolio-card-main">
         <strong>${p.name}${dirty?' <span class="dirty-dot" title="Есть несохранённые изменения">●</span>':''}</strong>
-        <small>${instrumentCount} инструмент${pluralSuffix(instrumentCount)} · ${money(p.starting_capital)} ₽</small>
+        <small>${instrumentCount} инструмент${pluralSuffix(instrumentCount)} · ${money(p.starting_capital)} USDT</small>
         <small>${portfolioStrategyLine(p)}</small>
         <small class="portfolio-dates">Последний бэктест: ${p.last_backtest_at?formatDate(p.last_backtest_at)+(lastResultText?` (${lastResultText})`:''):"не запускался"}</small>
       </div>
@@ -552,7 +550,7 @@ function renderEditorHtml(portfolioId){
   return `
     <div class="form-grid three">
       <label>Название портфеля <input data-ed-field="name" value="${draft.name}"></label>
-      <label>Стартовый капитал, ₽ <input data-ed-field="starting_capital" type="number" step="1000" value="${draft.starting_capital}"></label>
+      <label>Стартовый капитал, USDT <input data-ed-field="starting_capital" type="number" step="1000" value="${draft.starting_capital}"></label>
       <label>Стратегия по умолчанию <select data-ed-field="default_strategy_id">${Object.entries(window.STRATEGIES).map(([k,v])=>`<option value="${k}" ${draft.default_strategy_id===k?'selected':''}>${v.name}</option>`).join("")}</select></label>
     </div>
     <div class="allocation-row">
@@ -595,18 +593,18 @@ function computeEditorTotals(draft){
 function renderEditorSummary(totals,draft){
   const over=totals.free<0;
   return `<div class="summary-grid">
-      <div><span>Стартовый капитал</span><strong>${money(totals.starting)} ₽</strong></div>
-      <div><span>Предварительная стоимость позиций</span><strong>${money(totals.positions)} ₽</strong></div>
-      <div><span>${over?"Превышение":"Свободный капитал"}</span><strong class="${over?'over-budget':''}">${money(Math.abs(totals.free))} ₽</strong></div>
+      <div><span>Стартовый капитал</span><strong>${money(totals.starting)} USDT</strong></div>
+      <div><span>Предварительная стоимость позиций</span><strong>${money(totals.positions)} USDT</strong></div>
+      <div><span>${over?"Превышение":"Свободный капитал"}</span><strong class="${over?'over-budget':''}">${money(Math.abs(totals.free))} USDT</strong></div>
       <div><span>Использовано</span><strong>${totals.usedPct.toFixed(2)}%</strong></div>
     </div>
-    ${over?`<div class="budget-warning">Стоимость выбранных позиций превышает стартовый капитал на ${money(Math.abs(totals.free))} ₽.</div>`:""}`;
+    ${over?`<div class="budget-warning">Стоимость выбранных позиций превышает стартовый капитал на ${money(Math.abs(totals.free))} USDT.</div>`:""}`;
 }
 
 function renderInstrumentRow(portfolioId,inst){
-  const sec=securities.find(s=>s.SECID===inst.ticker);
+  const sec=securities.find(s=>s.symbol===inst.ticker);
   const q=priceCache[inst.ticker];
-  const priceText=q&&q.last!=null?`${money(q.last)} ₽${q.is_live?"":" <small>(закрытие)</small>"}`:"Цена недоступна";
+  const priceText=q&&q.last!=null?`${money(q.last)} USDT`:"Цена недоступна";
   const value=instrumentPositionValue(inst);
   const shares=(inst.lot_size||1)*(inst.lot_count||1);
   const draft=draftOf(portfolioId);
@@ -614,7 +612,7 @@ function renderInstrumentRow(portfolioId,inst){
   const share=totals.positions>0&&value!=null?(value/totals.positions*100).toFixed(1)+"%":"—";
   return `<tr data-ed-row="${inst.ticker}">
     <td><input type="checkbox" data-ed-select="${inst.ticker}"></td>
-    <td><strong>${inst.ticker}</strong><br><small>${sec?sec.SHORTNAME:""}</small></td>
+    <td><strong>${inst.ticker}</strong><br><small>${sec?sec.baseAsset:""}</small></td>
     <td>${priceText}</td>
     <td>${inst.lot_size||1}</td>
     <td class="lot-cell">
@@ -623,7 +621,7 @@ function renderInstrumentRow(portfolioId,inst){
       <button type="button" class="lot-btn" data-ed-lot-plus="${inst.ticker}">+</button>
     </td>
     <td>${shares}</td>
-    <td>${value!=null?money(value)+" ₽":"—"}</td>
+    <td>${value!=null?money(value)+" USDT":"—"}</td>
     <td>${share}</td>
   </tr>`;
 }
@@ -727,7 +725,7 @@ async function saveEditor(portfolioId){
   const msg=document.getElementById(`ed-message-${portfolioId}`);
   const saveBtn=document.querySelector(`#editor-${portfolioId} [data-ed-save]`);
   const totals=computeEditorTotals(draft);
-  if(totals.free<0&&!confirm(`Стоимость позиций превышает капитал на ${money(Math.abs(totals.free))} ₽. Сохранить всё равно?`))return;
+  if(totals.free<0&&!confirm(`Стоимость позиций превышает капитал на ${money(Math.abs(totals.free))} USDT. Сохранить всё равно?`))return;
   if(saveBtn){saveBtn.disabled=true;saveBtn.textContent="Сохраняем…"}
   try{
     const r=await fetch(`/api/portfolios/${portfolioId}`,{method:"PUT",headers:{"Content-Type":"application/json"},
@@ -1138,7 +1136,7 @@ function renderAssignTickerCard(ticker){
   const list=assignModalDraft[ticker]||[];
   const enabledCount=list.filter(a=>a.enabled!==false).length;
   const open=assignExpandedTickers.has(ticker);
-  const sec=securities.find(s=>s.SECID===ticker);
+  const sec=securities.find(s=>s.symbol===ticker);
   const excluded=!btIncluded.has(ticker);
   return `<div class="assign-ticker-card ${open?"open":""}" data-assign-ticker-card="${ticker}">
     <div class="assign-ticker-head" data-assign-ticker-toggle="${ticker}" role="button" tabindex="0" aria-expanded="${open}">
@@ -1147,7 +1145,7 @@ function renderAssignTickerCard(ticker){
           <strong>${escapeHtml(ticker)}</strong>
           ${excluded?`<span class="assign-ticker-excluded" title="Не выбран для текущего запуска бэктеста">не в тесте</span>`:""}
         </div>
-        <div class="assign-ticker-name">${escapeHtml(sec?.SHORTNAME||"")}</div>
+        <div class="assign-ticker-name">${escapeHtml(sec?.baseAsset||"")}</div>
       </div>
       <span class="assign-ticker-count ${enabledCount?"":"zero"}">${enabledCount?`${enabledCount} выбрано`:"не выбрано"}</span>
       <span class="assign-ticker-chevron" aria-hidden="true">⌄</span>
@@ -1425,18 +1423,18 @@ async function loadGapData(ticker){
   }
 }
 function renderBacktestSectorFilter(){
-  const sectors=[...new Set((btPortfolio.instruments||[]).map(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return sec?sec.SECTOR:"Прочее"}))];
+  const sectors=[...new Set((btPortfolio.instruments||[]).map(i=>{const sec=securities.find(s=>s.symbol===i.ticker);return sec?sec.SECTOR:"Прочее"}))];
   $("selectBySector").innerHTML=`<option value="">По отрасли…</option>`+sectors.map(s=>`<option value="${s}">${s}</option>`).join("");
 }
 $("selectAllTickers").onclick=()=>{btIncluded=new Set((btPortfolio.instruments||[]).map(i=>i.ticker));renderBacktestChips()};
 $("clearAllTickers").onclick=()=>{btIncluded.clear();renderBacktestChips()};
 $("selectDataReadyTickers").onclick=()=>{
-  btIncluded=new Set((btPortfolio.instruments||[]).filter(i=>{const sec=securities.find(s=>s.SECID===i.ticker);return !sec||sec.DATA_STATUS==="fresh"}).map(i=>i.ticker));
+  btIncluded=new Set((btPortfolio.instruments||[]).filter(i=>{const sec=securities.find(s=>s.symbol===i.ticker);return !sec||sec.DATA_STATUS==="fresh"}).map(i=>i.ticker));
   renderBacktestChips();
 };
 $("selectBySector").onchange=e=>{
   const sector=e.target.value;if(!sector)return;
-  (btPortfolio.instruments||[]).forEach(i=>{const sec=securities.find(s=>s.SECID===i.ticker);if((sec?sec.SECTOR:"Прочее")===sector)btIncluded.add(i.ticker)});
+  (btPortfolio.instruments||[]).forEach(i=>{const sec=securities.find(s=>s.symbol===i.ticker);if((sec?sec.SECTOR:"Прочее")===sector)btIncluded.add(i.ticker)});
   renderBacktestChips();
   e.target.value="";
 };
@@ -1537,10 +1535,10 @@ function renderMetrics(s,target){
   const pnl=(s.final_capital_rub||0)-(s.starting_capital_rub||0);
   const signClass=(n)=>n>0?"pos":n<0?"neg":"";
   const fields=[
-    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} ₽`,signClass(pnl)],
+    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} USDT`,signClass(pnl)],
     ["Просадка",`${s.max_drawdown_pct??0}%`,""],["Сделок",s.trades??0,""],["Win Rate",`${s.win_rate??0}%`,""],
     ["Profit Factor",s.profit_factor??"—",""],["Sharpe (оценка)",s.sharpe_ratio??"—",""],
-    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} ₽`,""],
+    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} USDT`,""],
   ];
   $(target).innerHTML=fields.map(([a,b,c])=>`<div class="metric"><span>${a}</span><strong class="${c}">${b}</strong></div>`).join("");
 }
@@ -1553,7 +1551,7 @@ function renderBacktestResult(result){
   renderByTickerTable();
   renderByStrategyTable(result.by_strategy||[]);
 }
-const BY_TICKER_COLUMNS=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub","Прибыль ₽"],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
+const BY_TICKER_COLUMNS=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub","Прибыль USDT"],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
 const BY_TICKER_NUM_KEYS=new Set(["trades","pnl_rub","win_rate","max_drawdown_pct"]);
 function renderByTickerTable(){
   if(!lastBacktestResult)return;
@@ -1574,7 +1572,7 @@ function renderByTickerTable(){
 }
 function renderByStrategyTable(rows){
   if(!rows.length){$("byStrategyTable").innerHTML="";return}
-  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль ₽</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
+  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль USDT</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
     rows.map(r=>`<tr><td>${r.strategy_name}</td><td class="num">${r.tickers}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.avg_win_rate}%</td></tr>`).join("")
   }</tbody></table></div>`;
 }
@@ -1710,9 +1708,9 @@ function renderTradesTable(items,total){
     <th class="num">#</th><th>Тикер</th><th>Стратегия</th><th>Направление</th><th>Вход</th><th>Выход</th><th class="num">Лоты</th><th class="num">Прибыль</th><th class="num">Доходность</th><th>Причина</th><th></th>
   </tr></thead><tbody>${items.map((t,i)=>`<tr data-row-id="${t.id}">
       <td class="num">${(tvPage-1)*tvPageSize+i+1}</td><td>${t.ticker}</td><td>${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id}</td>
-      <td>${t.direction}</td><td>${t.entry_datetime}<br><small>${money(t.entry_price)} ₽</small></td>
-      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} ₽</small></td><td class="num">${t.quantity_lots}</td>
-      <td class="num ${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} ₽</td><td class="num ${t.return_percent>0?'pnl-pos':t.return_percent<0?'pnl-neg':''}">${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
+      <td>${t.direction}</td><td>${t.entry_datetime}<br><small>${money(t.entry_price)} USDT</small></td>
+      <td>${t.exit_datetime}<br><small>${money(t.exit_price)} USDT</small></td><td class="num">${t.quantity_lots}</td>
+      <td class="num ${t.net_profit>0?'pnl-pos':'pnl-neg'}">${money(t.net_profit)} USDT</td><td class="num ${t.return_percent>0?'pnl-pos':t.return_percent<0?'pnl-neg':''}">${t.return_percent}%</td><td>${t.exit_reason||"—"}</td>
       <td><button class="link-btn" data-trade-detail="${t.id}">Подробнее</button> <button class="link-btn" data-trade-chart="${t.id}">На графике</button></td>
     </tr>`).join("")}</tbody></table></div>`;
   document.querySelectorAll("[data-trade-detail]").forEach(b=>b.onclick=()=>openTradeDetail(b.dataset.tradeDetail));
@@ -1738,15 +1736,15 @@ async function openTradeDetail(tradeId){
     <h3>Сделка #${t.id} — ${t.ticker} (${(window.STRATEGIES[t.strategy_id]||{}).name||t.strategy_id})</h3>
     <div class="summary-grid">
       <div><span>Направление</span><strong>${t.direction}</strong></div>
-      <div><span>Вход</span><strong>${money(t.entry_price)} ₽ · ${t.entry_datetime}</strong></div>
-      <div><span>Выход</span><strong>${money(t.exit_price)} ₽ · ${t.exit_datetime}</strong></div>
+      <div><span>Вход</span><strong>${money(t.entry_price)} USDT · ${t.entry_datetime}</strong></div>
+      <div><span>Выход</span><strong>${money(t.exit_price)} USDT · ${t.exit_datetime}</strong></div>
       <div><span>Причина выхода</span><strong>${t.exit_reason||"—"}</strong></div>
       <div><span>Лоты/акции</span><strong>${t.quantity_lots} / ${t.quantity_shares}</strong></div>
-      <div><span>Риск, ₽ / %</span><strong>${riskRub!=null?money(riskRub)+" ₽ / "+riskPct.toFixed(2)+"%":"—"}</strong></div>
+      <div><span>Риск, USDT / %</span><strong>${riskRub!=null?money(riskRub)+" USDT / "+riskPct.toFixed(2)+"%":"—"}</strong></div>
       <div><span>Плановый R/R</span><strong>${rr!=null?rr.toFixed(2):"—"}</strong></div>
-      <div><span>Валовая прибыль</span><strong>${money(t.gross_profit)} ₽</strong></div>
-      <div><span>Комиссия</span><strong>${money(t.commission)} ₽</strong></div>
-      <div><span>Чистая прибыль</span><strong>${money(t.net_profit)} ₽ (${t.return_percent}%)</strong></div>
+      <div><span>Валовая прибыль</span><strong>${money(t.gross_profit)} USDT</strong></div>
+      <div><span>Комиссия</span><strong>${money(t.commission)} USDT</strong></div>
+      <div><span>Чистая прибыль</span><strong>${money(t.net_profit)} USDT (${t.return_percent}%)</strong></div>
       <div><span>MAE</span><strong>${meta.mae_pct!=null?meta.mae_pct+"%":"—"}</strong></div>
       <div><span>MFE</span><strong>${meta.mfe_pct!=null?meta.mfe_pct+"%":"—"}</strong></div>
       <div><span>Stop / Take</span><strong>${t.stop_loss?money(t.stop_loss):"—"} / ${t.take_profit?money(t.take_profit):"—"}</strong></div>
@@ -1821,8 +1819,7 @@ function renderTickerTape(d){
     const up=q.change_pct>0,down=q.change_pct<0;
     const arrow=up?"▲":down?"▼":"•";
     const cls=up?"up":down?"down":"flat";
-    const stale=q.is_live?"":` <span class="tape-stale">Последние торги</span>`;
-    return `<span class="ticker-tape-item ${cls}"><strong>${q.ticker}</strong> ${Number(q.last).toLocaleString('ru-RU')} ${arrow} ${q.change_pct>0?'+':''}${q.change_pct??0}%${stale}</span>`;
+    return `<span class="ticker-tape-item ${cls}"><strong>${q.symbol}</strong> ${Number(q.last).toLocaleString('ru-RU')} ${arrow} ${q.change_pct>0?'+':''}${q.change_pct??0}%</span>`;
   }).join(`<span class="ticker-tape-sep">·</span>`);
   track.innerHTML=`<div class="ticker-tape-seq">${itemsHtml}</div><div class="ticker-tape-seq" aria-hidden="true">${itemsHtml}</div>`;
 }
@@ -1838,7 +1835,7 @@ function startupTask(name,fn){
 async function bootstrap(){
   // UI wiring and independent data sources must never be serialized behind
   // an unrelated network request. In particular, ticker + portfolio rendering
-  // are allowed to complete even when MOEX, backtest history or commerce is slow.
+  // are allowed to complete even when Binance, backtest history or commerce is slow.
   renderPresets();
   fillStrategies();
   initTabs();

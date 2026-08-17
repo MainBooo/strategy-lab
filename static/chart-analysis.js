@@ -138,9 +138,8 @@
     return n == null ? "—" : n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   /** Coordinate-panel time display for a drawing's anchor point - same
-   * naive-MSK-as-UTC convention as the rest of the app (see theme.js's
-   * formatTime docstring), so this shows the same wall-clock hour as the
-   * chart's own axis. */
+   * UTC formatting as the chart's own axis (see theme.js's formatTime),
+   * so this shows the same wall-clock hour as the chart. */
   function fmtCoordTime(t) {
     if (t == null) return "—";
     return CE.formatTime(t);
@@ -793,11 +792,6 @@
         </div>
         <div class="ca-more-sep"></div>
         <div class="ca-more-group">
-          <div class="ca-more-heading">Рынок</div>
-          <select class="gt-select" id="moreBoardSelect"><option value="TQBR" ${tile.board === "TQBR" ? "selected" : ""}>TQBR</option></select>
-        </div>
-        <div class="ca-more-sep"></div>
-        <div class="ca-more-group">
           <div class="ca-more-heading">Синхронизация графиков</div>
           ${Object.keys(SYNC_LABELS).map((k) => `<label class="ca-more-toggle"><input type="checkbox" data-sync="${k}" ${this.syncFlags[k] ? "checked" : ""}><span>${SYNC_LABELS[k]}</span></label>`).join("")}
         </div>
@@ -825,8 +819,6 @@
         if (this.syncFlags.range) this.tiles.forEach((t) => { if (t !== tile) t.resetRange(); });
         pop.classList.add("hidden");
       };
-      const boardSel = pop.querySelector("#moreBoardSelect");
-      if (boardSel) boardSel.onchange = (e) => tile.setBoard(e.target.value);
       pop.querySelectorAll("[data-sync]").forEach((cb) => (cb.onchange = () => {
         this.syncFlags[cb.dataset.sync] = cb.checked;
         this._saveWorkspaceState();
@@ -1208,8 +1200,8 @@
             <label>Точность цены <input type="number" id="csPrecision" min="0" max="6" value="${o.priceFormatPrecision != null ? o.priceFormatPrecision : 2}"></label>
             <label>Часовой пояс
               <select id="csTz">
-                <option value="0" ${(tile.core._tzOffsetHours || 0) === 0 ? "selected" : ""}>МСК (UTC+3)</option>
-                <option value="-3" ${(tile.core._tzOffsetHours || 0) === -3 ? "selected" : ""}>UTC</option>
+                <option value="0" ${(tile.core._tzOffsetHours || 0) === 0 ? "selected" : ""}>UTC</option>
+                <option value="3" ${(tile.core._tzOffsetHours || 0) === 3 ? "selected" : ""}>МСК (UTC+3)</option>
               </select>
             </label>
           </div>

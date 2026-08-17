@@ -20,14 +20,11 @@
     crosshair: "#c8cfe0",
   };
 
-  /* Candle/trade timestamps are naive MOEX exchange-local (MSK) datetimes
-   * encoded as if they were UTC (see candle_api.py / backtests_db.py: no
-   * tz-aware datetime exists anywhere in this app, entry_datetime is a
-   * naive string straight from MOEX). If lightweight-charts formatted
-   * labels in the *browser's* local timezone, a viewer outside MSK would
-   * see the wrong wall-clock hour. Forcing UTC formatting here makes the
-   * displayed time equal the naive MSK string everywhere, regardless of
-   * the viewer's browser timezone. */
+  /* Candle/trade timestamps are genuinely UTC (Binance kline open time,
+   * see binance_market_data.py) - forcing UTC formatting here means every
+   * viewer sees the same wall-clock time regardless of their own browser
+   * timezone, which is the simplest honest choice for a market that trades
+   * 24/7 with no single "local session" to anchor a local-time display to. */
   function formatTime(unixSeconds, withDate) {
     const d = new Date(unixSeconds * 1000);
     const date = d.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });

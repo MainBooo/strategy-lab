@@ -1,10 +1,8 @@
-/* Compact realtime/latency indicator shown above a chart tile (see
- * chart-analysis.js). Polls GET /api/market/realtime?ticker=... on a single
- * timer per instance and renders the normalized {source, market_timestamp,
- * delay_ms, status, market_status} block from market_ticker.get_realtime() -
- * the frontend never computes "is this live" itself, it only renders what
- * the backend decided (see docs/DYNAMIC_MARKET_DATA.md, "why backend
- * decides status").
+/* Compact realtime indicator shown above a chart tile (see chart-analysis.js).
+ * Polls GET /api/market/realtime?symbol=... on a single timer per instance
+ * and renders the normalized {symbol, last, status, age_ms} block from
+ * market_ticker.get_realtime() - the frontend never computes "is this live"
+ * itself, it only renders what the backend decided.
  *
  * One instance = one polled symbol. chart-analysis.js owns exactly one
  * instance per tile and calls setSymbol()/stop() as the active symbol
@@ -16,18 +14,15 @@
 (function (global) {
   "use strict";
 
-  /* Two genuinely different numbers, never merged into one "delay":
-   * - source_delay_ms: constant, the feed's own advertised lag (~15 min on
-   *   MOEX's free tier) - a property of the SOURCE.
-   * - last_trade_age_ms: how long ago THIS ticker's own last trade was - a
-   *   property of the INSTRUMENT (can be huge for an illiquid name even
-   *   when the source itself is perfectly healthy).
-   * See market_ticker.py's _classify_status docstring for the full mapping. */
+  /* Binance Spot trades 24/7 - unlike the old MOEX free-tier feed there is
+   * no fixed source-delay baseline and no "market_closed" state. status is
+   * purely how old the last successful REST snapshot is (see
+   * market_ticker._classify_status): "live" (fresh), "stale" (aged, still
+   * shown), "disconnected" (too old or no quote at all). */
   const STATUS_META = {
-    delayed: { dot: "●", cls: "rti-delayed", label: (d) => `Данные MOEX · задержка ${fmtDelay(d.source_delay_ms)}` },
-    no_trades: { dot: "○", cls: "rti-nottrades", label: (d) => d.last_trade_age_ms != null ? `Нет сделок · ${fmtDelay(d.last_trade_age_ms)} назад` : "Нет сделок по инструменту" },
+    live: { dot: "●", cls: "rti-live", label: () => "Live" },
+    stale: { dot: "○", cls: "rti-stale", label: (d) => `Данные устарели · ${fmtDelay(d.age_ms)}` },
     disconnected: { dot: "●", cls: "rti-disconnected", label: () => "Источник временно недоступен" },
-    market_closed: { dot: "○", cls: "rti-closed", label: (d) => d && d.market_time ? `Рынок закрыт · последняя сделка ${d.market_time}` : "Рынок закрыт" },
     connecting: { dot: "●", cls: "rti-connecting", label: () => "Подключение…" },
     replay: { dot: "◐", cls: "rti-replay", label: () => "Историческое воспроизведение" },
   };
@@ -42,33 +37,21 @@
   }
 
   /* Cross-instance dedup: a multi-tile layout can have several
-   * RealtimeIndicator instances (one per tile) polling the *same* ticker
-   * (two tiles both showing SBER) on independent timers that drift apart
+   * RealtimeIndicator instances (one per tile) polling the *same* symbol
+   * (two tiles both showing BTCUSDT) on independent timers that drift apart
    * slightly. Without this, that's N redundant /api/market/realtime
-   * requests per ticker instead of one - see the spec's "дедуплицировать
-   * одинаковые подписки". Any poll for a ticker within DEDUP_WINDOW_MS of
-   * another poll for the same ticker reuses the in-flight/just-finished
-   * fetch instead of starting a new one. */
-  const _sharedFetches = new Map(); // ticker -> {promise, ts}
+   * requests per symbol instead of one. Any poll for a symbol within
+   * DEDUP_WINDOW_MS of another poll for the same symbol reuses the
+   * in-flight/just-finished fetch instead of starting a new one. */
+  const _sharedFetches = new Map(); // symbol -> {promise, ts}
   const DEDUP_WINDOW_MS = 3000;
-  function fetchRealtimeShared(ticker) {
+  function fetchRealtimeShared(symbol) {
     const now = Date.now();
-    const cached = _sharedFetches.get(ticker);
+    const cached = _sharedFetches.get(symbol);
     if (cached && now - cached.ts < DEDUP_WINDOW_MS) return cached.promise;
-    const promise = fetch(`/api/market/realtime?ticker=${encodeURIComponent(ticker)}`).then((r) => r.json());
-    _sharedFetches.set(ticker, { promise, ts: now });
+    const promise = fetch(`/api/market/realtime?symbol=${encodeURIComponent(symbol)}`).then((r) => r.json());
+    _sharedFetches.set(symbol, { promise, ts: now });
     return promise;
-  }
-
-  function fmtClock(iso) {
-    if (!iso) return "—";
-    try {
-      // Backend timestamps are naive-UTC-as-MSK-wall-time (see market_ticker.py) -
-      // display as-is rather than letting the browser reinterpret the offset.
-      const s = iso.replace("Z", "");
-      const t = s.split("T")[1] || s.split(" ")[1] || s;
-      return t.slice(0, 8);
-    } catch (e) { return iso; }
   }
 
   class RealtimeIndicator {
@@ -128,7 +111,7 @@
       this._scheduleNext();
     }
 
-    /** Market Replay path: no polling, no MOEX calls - just the static
+    /** Market Replay path: no polling, no Binance calls - just the static
      * "Историческое воспроизведение" label so the indicator never implies
      * live data during a replay session. */
     showReplayMode() {
@@ -152,7 +135,7 @@
     _scheduleNext() {
       clearTimeout(this._timer);
       const cfg = (global.REALTIME_CONFIG || {});
-      const interval = Math.max(5000, cfg.poll_interval_ms || 45000);
+      const interval = Math.max(3000, cfg.poll_interval_ms || 5000);
       this._timer = setTimeout(() => { this._poll(); this._scheduleNext(); }, interval);
     }
 
@@ -178,14 +161,8 @@
       const compact = this.opts.compact ? this.opts.compact() : false;
       this.container.className = `${this._baseClass} rt-indicator ${meta.cls}`.trim();
       this._dot.textContent = meta.dot;
-      // Compact mode still shows a short duration where one is meaningful
-      // (source delay when "delayed", last-trade age when "no_trades") -
-      // never the same number for both statuses, that's the exact
-      // conflation this rewrite removes.
       this._label.textContent = compact
-        ? (status === "delayed" ? fmtDelay(data.source_delay_ms)
-          : status === "no_trades" && data.last_trade_age_ms != null ? fmtDelay(data.last_trade_age_ms)
-          : meta.label(data))
+        ? (status === "stale" ? fmtDelay(data.age_ms) : meta.label(data))
         : meta.label(data);
       this._popover.innerHTML = this._popoverHtml(data, status);
     }
@@ -195,23 +172,19 @@
         return `<div class="rt-pop-row"><strong>Историческое воспроизведение</strong></div>
                 <div class="rt-pop-row muted">Market Replay использует только историю выбранной сессии, без текущих рыночных данных.</div>`;
       }
-      const fmtPrice = (n) => (n == null ? null : Number(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      const fmtPrice = (n) => (n == null ? null : Number(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 8 }));
       const rows = [
-        ["Источник", data.source || "MOEX"],
-        ["Тикер", data.ticker || this.symbol || "—"],
-        ["Последняя рыночная запись", data.market_time ? `${data.market_time} (МСК)` : "—"],
+        ["Источник", "Binance Spot"],
+        ["Символ", data.symbol || this.symbol || "—"],
+        ["Цена", data.last != null ? fmtPrice(data.last) : "н/д"],
       ];
-      // bid/ask only exist for names with a live order book at the moment of
-      // the snapshot - omit the rows entirely rather than show "н/д" for
-      // every illiquid ticker, per the source-availability rule in the spec.
+      // bid/ask only exist once a snapshot has actually loaded - omit the
+      // rows entirely rather than show "н/д" before the first successful poll.
       if (data.bid != null) rows.push(["Bid", fmtPrice(data.bid)]);
       if (data.offer != null) rows.push(["Ask", fmtPrice(data.offer)]);
       rows.push(
-        ["Получено сервером", fmtClock(data.server_received_at)],
-        ["Отображено сейчас", fmtClock(data.response_generated_at)],
-        ["Задержка источника (MOEX)", data.source_delay_ms != null ? fmtDelay(data.source_delay_ms) : "н/д"],
-        ["Последняя сделка (возраст)", data.last_trade_age_ms != null ? `${fmtDelay(data.last_trade_age_ms)} назад` : "н/д"],
-        ["Статус рынка", data.market_status === "open" ? "Открыт" : "Закрыт"],
+        ["Возраст снимка", data.age_ms != null ? fmtDelay(data.age_ms) : "н/д"],
+        ["Статус", status === "live" ? "Live" : status === "stale" ? "Устарело" : "Недоступно"],
       );
       if (data.error) rows.push(["Ошибка", data.error]);
       return rows.map(([k, v]) => `<div class="rt-pop-row"><span class="muted">${k}</span><span>${v}</span></div>`).join("");

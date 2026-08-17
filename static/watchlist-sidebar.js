@@ -237,16 +237,16 @@
 
     _visibleSecurities() {
       let list = this.securities;
-      if (this.tab === "favorites") list = list.filter((s) => this.favorites.has(s.SECID));
+      if (this.tab === "favorites") list = list.filter((s) => this.favorites.has(s.symbol));
       else if (this.tab === "portfolio") {
         const set = new Set(this.portfolioTickers || []);
-        list = list.filter((s) => set.has(s.SECID));
+        list = list.filter((s) => set.has(s.symbol));
       } else if (this.tab !== "all" && this.customLists[this.tab]) {
         const set = this.customLists[this.tab];
-        list = list.filter((s) => set.has(s.SECID));
+        list = list.filter((s) => set.has(s.symbol));
       }
       if (this.query) {
-        list = list.filter((s) => s.SECID.includes(this.query) || String(s.SHORTNAME || "").toUpperCase().includes(this.query));
+        list = list.filter((s) => s.symbol.includes(this.query) || String(s.baseAsset || "").toUpperCase().includes(this.query));
       }
       return list;
     }
@@ -256,8 +256,8 @@
       const { key, dir } = this.sort;
       if (!key) return list;
       const valueOf = (s) => {
-        const q = this.prices[s.SECID];
-        if (key === "ticker") return s.SECID;
+        const q = this.prices[s.symbol];
+        if (key === "ticker") return s.symbol;
         if (key === "last") return q ? q.last : null;
         if (key === "abs") return q ? q.change_abs : null;
         if (key === "pct") return q ? q.change_pct : null;
@@ -317,16 +317,16 @@
     }
 
     _rowHtml(s) {
-      const q = this.prices[s.SECID];
+      const q = this.prices[s.symbol];
       const last = q ? fmtMoney(q.last) : "—";
       const abs = q && q.change_abs != null ? `${q.change_abs >= 0 ? "+" : ""}${fmtMoney(q.change_abs)}` : "—";
       const pct = q && q.change_pct != null ? `${q.change_pct >= 0 ? "+" : ""}${q.change_pct.toFixed(2)}%` : "—";
       const chgClass = q && q.change_pct != null ? (q.change_pct >= 0 ? "pnl-pos" : "pnl-neg") : "";
-      const fav = this.favorites.has(s.SECID);
+      const fav = this.favorites.has(s.symbol);
       return `
-        <div class="wl-row ${s.SECID === this.activeTicker ? "active" : ""}" data-ticker="${s.SECID}" style="height:${ROW_HEIGHT}px">
-          <button class="wl-star ${fav ? "active" : ""}" data-fav="${s.SECID}" title="В избранное" aria-label="В избранное">${fav ? "★" : "☆"}</button>
-          <span class="wl-ticker" title="${escapeHtml(s.SHORTNAME || "")}">${s.SECID}</span>
+        <div class="wl-row ${s.symbol === this.activeTicker ? "active" : ""}" data-ticker="${s.symbol}" style="height:${ROW_HEIGHT}px">
+          <button class="wl-star ${fav ? "active" : ""}" data-fav="${s.symbol}" title="В избранное" aria-label="В избранное">${fav ? "★" : "☆"}</button>
+          <span class="wl-ticker" title="${escapeHtml(s.baseAsset || "")}">${s.symbol}</span>
           <span class="wl-num">${last}</span>
           <span class="wl-num ${chgClass}">${abs}</span>
           <span class="wl-num ${chgClass}">${pct}</span>

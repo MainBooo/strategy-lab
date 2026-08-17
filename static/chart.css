@@ -183,17 +183,15 @@
 .rt-indicator-btn:hover { border-color: var(--accent); }
 .rt-dot { font-size: 9px; line-height: 1; flex: 0 0 auto; }
 .rt-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Nominal state for this integration: MOEX's free feed is always ~15min
- * behind (measured, see docs/DYNAMIC_MARKET_DATA.md) - that's expected and
- * fully working, so it gets a calm/neutral color, not green ("actually
- * live") or red ("broken"). Only a delay *worse* than the measured baseline
- * (rti-warning) or a dead feed (rti-stale/rti-disconnected) escalate color. */
-.rti-delayed .rt-dot { color: var(--accent); }
+/* Binance Spot realtime states: a fresh REST snapshot is genuinely live, so
+ * unlike the old MOEX-delay baseline this gets an honest green dot. Only an
+ * aged snapshot (rti-stale) or a dead feed (rti-disconnected) escalate color. */
+.rti-live .rt-dot { color: var(--accent-2); }
 .rti-warning .rt-dot { color: #ffb454; }
 .rti-warning .rt-indicator-btn { border-color: rgba(255,180,84,.4); }
 .rti-stale .rt-dot, .rti-disconnected .rt-dot { color: var(--danger); }
 .rti-stale .rt-indicator-btn, .rti-disconnected .rt-indicator-btn { border-color: rgba(255,112,129,.4); }
-.rti-closed .rt-dot, .rti-connecting .rt-dot { color: var(--muted); }
+.rti-connecting .rt-dot { color: var(--muted); }
 .rti-replay .rt-dot { color: var(--accent-2); }
 .rti-replay .rt-indicator-btn { border-color: rgba(77,212,172,.4); }
 .rt-popover {

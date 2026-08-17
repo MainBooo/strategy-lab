@@ -14,8 +14,8 @@
 
   /* Cross-tile dedup for the main candle load (Stage 4: "единый кэш по
    * ключу ticker+interval+range" - the URL's querystring already IS that
-   * key, symbol+board+timeframe+from/to+limit). Two tiles opening the same
-   * ticker/timeframe (independently, or via the ticker/interval sync
+   * key, symbol+timeframe+from/to+limit). Two tiles opening the same
+   * symbol/timeframe (independently, or via the ticker/interval sync
    * toggles in chart-analysis.js) share the in-flight request instead of
    * both hitting /api/candles. Mirrors the exact pattern already used for
    * realtime quotes (see fetchRealtimeShared in realtime-indicator.js) -
@@ -47,7 +47,7 @@
       this.volumeSeries = null;
       this._seriesChangeCbs = [];
       this.displayOptions = {}; // last applied setDisplayOptions() payload - see toConfig()/restore
-      this._tzOffsetHours = 0; // 0 = MSK (data is already naive-MSK-as-UTC, see theme.js formatTime)
+      this._tzOffsetHours = 0; // 0 = UTC (candle timestamps are genuinely UTC, see theme.js formatTime)
       this._haPrev = null; // {open,close} of the last *finalized* Heikin-Ashi bar
       this._haLast = null; // last computed HA point (finalized or still-live)
       if (this.opts.showVolume !== false) this._addVolumeSeries();
@@ -113,12 +113,10 @@
      * plot the close. (Heikin-Ashi bypasses this - see _computeHeikinAshi/
      * _haPoint, which derive their own synthetic OHLC.)
      *
-     * A synthetic no-trade bucket (candle.isSynthetic - see
-     * candle_api._fill_synthetic_gaps) gets a muted neutral color instead
-     * of the normal up/down palette on candles/bars, so the timeline still
-     * visibly advances every interval without implying a real up or down
-     * move happened - per spec, "не выделять слишком ярко", just distinct
-     * enough to read as "no trade here" on hover/inspection. */
+     * candle.isSynthetic is never set by the backend anymore (no fabricated
+     * OHLCV - see market_data_store.py) but the muted-color branch below is
+     * left in place as a harmless no-op rather than removed, in case a
+     * future honest "gap marker" concept reuses the same flag name. */
     _seriesPoint(candle, type) {
       if (type === "line" || type === "area" || type === "baseline") {
         return { time: candle.time, value: candle.close };
@@ -238,16 +236,13 @@
       if (o.autoScale != null) this.chart.priceScale("right").applyOptions({ autoScale: !!o.autoScale });
     }
 
-    /** Fixed-offset timezone display (Stage 5's "часовой пояс"): every
-     * timestamp in this app is a naive MOEX exchange-local (MSK) datetime
-     * encoded as if it were UTC (see theme.js's formatTime docstring/
-     * parseNaiveDatetime) - there is no per-viewer IANA timezone to convert
-     * *from*, only a single fixed exchange timezone. So "timezone" here
-     * genuinely means "displayed as MSK wall-clock (offset 0, the default -
-     * UTC-formatting already shows the naive MSK digits as-is) or shifted to
-     * true UTC (offset -3h, since MSK is UTC+3 with no DST)" - a real,
-     * working, correctly-scoped feature, not a stand-in for full tz support
-     * this data model has no room for. */
+    /** Fixed-offset timezone display ("часовой пояс" picker in chart
+     * settings): candle timestamps are genuinely UTC (Binance kline open
+     * time), so offset 0 (the default) shows real UTC as-is; offset +3
+     * shifts the display to Moscow time (UTC+3, no DST) for viewers who
+     * prefer it. Binance trades 24/7 with no single "exchange timezone" to
+     * anchor to, so this is a plain, honest add-an-offset display
+     * convenience, not a stand-in for full per-viewer IANA tz support. */
     setTimezoneOffset(hours) {
       this._tzOffsetHours = hours;
       const offsetSec = hours * 3600;
@@ -299,8 +294,8 @@
      * Rather than making the user scroll left to trigger lazy paging for a
      * range they explicitly asked for, keep pulling older pages here until
      * the requested `from` is covered or real history runs out. */
-    async load({ symbol, board, timeframe, from, to, limit, onState }) {
-      this._fetchParams = { symbol, board, timeframe };
+    async load({ symbol, timeframe, from, to, limit, onState }) {
+      this._fetchParams = { symbol, timeframe };
       this._reachedHistoryStart = false;
       // A fresh load (new symbol/timeframe/range) always starts followed -
       // fitContent() is about to show the freshly loaded range's right edge.
@@ -313,7 +308,6 @@
       try {
         const params = new URLSearchParams({
           symbol,
-          board: board || "TQBR",
           timeframe: timeframe || "1d",
           limit: String(limit || 5000),
         });
@@ -358,7 +352,7 @@
 
     /** For adapters that fetch candles from a different endpoint than /api/candles
      * (e.g. the backtest trade chart, which must show exactly the local file the
-     * engine ran against, not a fresh MOEX fetch). */
+     * engine ran against, not a fresh Binance fetch). */
     setCandlesDirect(candles) {
       this._reachedHistoryStart = true; // no lazy-left-scroll pagination for this source
       this._following = true;
@@ -417,14 +411,14 @@
      * tiles polling the same symbol/timeframe at nearly the same moment
      * collapse onto one request instead of firing two. Always asks for the
      * tail of the full history (no from/to), so it naturally reflects
-     * whatever the backend's freshness/gap-fill pass just did - see
-     * candle_api._ensure_coverage / _fill_synthetic_gaps. Throws on a
-     * failed fetch so the caller can distinguish and surface a genuine
-     * refresh error, rather than silently doing nothing. */
+     * whatever the backend's freshness pass just did - see
+     * candle_api._ensure_coverage. Throws on a failed fetch so the caller
+     * can distinguish and surface a genuine refresh error, rather than
+     * silently doing nothing. */
     async refreshTail(limit) {
       if (!this._fetchParams) return null;
-      const { symbol, board, timeframe } = this._fetchParams;
-      const params = new URLSearchParams({ symbol, board: board || "TQBR", timeframe: timeframe || "1d", limit: String(limit || 10) });
+      const { symbol, timeframe } = this._fetchParams;
+      const params = new URLSearchParams({ symbol, timeframe: timeframe || "1d", limit: String(limit || 10) });
       const data = await fetchCandlesShared(`/api/candles?${params}`);
       this.mergeTailCandles(data.candles || []);
       return data;
@@ -435,9 +429,9 @@
      * into the already-loaded series without a full reload/redraw and
      * without touching zoom/scroll position. This is what lets a periodic
      * background refresh (see ChartTile's tail-refresh timer) pick up a
-     * newly-closed real candle, an updated still-forming candle, or a
-     * newly-inserted synthetic no-trade bar - each via one targeted
-     * series.update() through appendCandle(), never setData(). Silently
+     * newly-closed real candle or an updated still-forming candle - each
+     * via one targeted series.update() through appendCandle(), never
+     * setData(). Silently
      * no-ops if the batch doesn't connect to what's already loaded (a
      * range/symbol change invalidated it mid-flight) - the next full
      * load() resyncs properly instead of splicing on a disconnected tail. */
@@ -533,9 +527,8 @@
         const earliest = this._candles[0].time;
         const params = new URLSearchParams({
           symbol: this._fetchParams.symbol,
-          board: this._fetchParams.board || "TQBR",
           timeframe: this._fetchParams.timeframe || "1d",
-          from: "2000-01-01",
+          from: "2017-01-01", // Binance Spot launch - see market_data_sync.EARLIEST_PLAUSIBLE_DATE
           to: new Date(earliest * 1000).toISOString().slice(0, 10),
           before: String(earliest),
           limit: "2000",

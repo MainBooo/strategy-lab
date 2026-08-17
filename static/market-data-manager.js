@@ -1,16 +1,19 @@
 /* Historical candle storage management modal ("Хранилище данных").
  * Talks to the centralized SQLite candle store added in market_data_store.py
- * via /api/market-data/instruments (per-ticker/timeframe coverage) and
+ * via /api/market-data/instruments (per-symbol/timeframe coverage) and
  * /api/market-data/sync (job-based bulk download, reusing the same
  * JobStore/poll pattern as portfolio build/backtest jobs elsewhere in this
  * app - see resumeBuildJob()/pollBuildJob() in app.js for the sibling
  * implementation this one mirrors). Not a stub: every button here drives a
- * real MOEX download job with real progress. */
+ * real Binance download job with real progress. */
 (function (global) {
   "use strict";
 
   const JOB_KEY = "moexlab_market_data_job";
-  const NATIVE_TF_LABELS = { "1m": "1м", "10m": "10м", "60m": "1ч", "1d": "1д", "1w": "1н", "1mo": "1мес" };
+  const NATIVE_TF_LABELS = {
+    "1m": "1м", "3m": "3м", "5m": "5м", "15m": "15м", "30m": "30м",
+    "1h": "1ч", "2h": "2ч", "4h": "4ч", "1d": "1д", "1w": "1н", "1mo": "1мес",
+  };
 
   function fmtTime(unixSeconds) {
     if (!unixSeconds) return "—";
@@ -27,10 +30,10 @@
     constructor(container) {
       this.container = container;
       this.items = [];
-      this.nativeTimeframes = ["1m", "10m", "60m", "1d", "1w", "1mo"];
+      this.nativeTimeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"];
       this.query = "";
       this.selected = new Set();
-      this.selectedTimeframes = new Set(["10m", "1d"]);
+      this.selectedTimeframes = new Set(["5m", "1d"]);
       this.mode = "initial";
       this.jobId = null;
       this._pollTimer = null;
@@ -95,7 +98,7 @@
         r.onchange = () => { if (r.checked) this.mode = r.value; };
       });
       this.container.querySelector("#mdmSelectAll").onclick = () => {
-        this.items.forEach((it) => this.selected.add(it.ticker));
+        this.items.forEach((it) => this.selected.add(it.symbol));
         this._renderList(); this._updateActions();
       };
       this.container.querySelector("#mdmSelectNone").onclick = () => {
@@ -142,10 +145,10 @@
         return `
           <div class="mdm-row">
             <label class="mdm-row-check">
-              <input type="checkbox" data-ticker="${it.ticker}" ${this.selected.has(it.ticker) ? "checked" : ""}>
+              <input type="checkbox" data-ticker="${it.symbol}" ${this.selected.has(it.symbol) ? "checked" : ""}>
             </label>
             <div class="mdm-row-main">
-              <div class="mdm-row-title"><strong>${it.ticker}</strong><span class="muted">${it.shortname || ""}</span></div>
+              <div class="mdm-row-title"><strong>${it.symbol}</strong><span class="muted">${it.base || ""}</span></div>
               <div class="mdm-row-badges">${tfBadges}</div>
             </div>
             <div class="mdm-row-updated">${it.last_synced_at ? fmtTime(it.last_synced_at) : "не загружено"}</div>

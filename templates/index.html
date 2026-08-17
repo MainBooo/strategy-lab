@@ -110,8 +110,7 @@
       <div class="allocation-row">
         <strong>Распределение капитала</strong>
         <div class="mode-tabs" id="allocationModes">
-          <button class="mode-tab active" data-mode="equal_lots">Одинаковое количество лотов</button>
-          <button class="mode-tab" data-mode="equal_capital">Поровну по капиталу</button>
+          <button class="mode-tab active" data-mode="equal_capital">Поровну по капиталу</button>
           <button class="mode-tab" data-mode="manual">Вручную</button>
         </div>
         <div id="allocationExtra"></div>
@@ -299,8 +298,8 @@
 </main>
 <script>
 window.STRATEGIES={{ strategies|tojson }};
-window.SECURITY_PRESETS={{ security_presets|tojson }};
 window.PRESET_LABELS={{ preset_labels|tojson }};
+window.QUOTE_ASSET_PRESETS={{ quote_asset_presets|tojson }};
 window.REALTIME_CONFIG={{ realtime_config|tojson }};
 </script>
 <script src="{{ url_for('static',filename='vendor/lightweight-charts.standalone.production.js') }}"></script>
