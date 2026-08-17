@@ -139,7 +139,7 @@ class PortfolioStore:
         portfolio = {
             "id": uuid.uuid4().hex[:12],
             "name": str(payload.get("name") or "Новый портфель"),
-            "starting_capital": float(payload.get("starting_capital") or 1_000_000),
+            "starting_capital": float(payload.get("starting_capital") or 10_000),
             "strategy": default_strategy,
             "default_strategy_id": default_strategy,
             "ticker_strategies": payload.get("ticker_strategies") or {},

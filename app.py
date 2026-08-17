@@ -233,7 +233,7 @@ def step_size_for(symbol:str)->float:
     return float(step) if step and step>0 else 1.0
 
 def run_strategy(strategy:str,source:Path,params:dict):
-    ticker=ticker_from_file(source.name); params=dict(params or {}); params.setdefault("lot_size",step_size_for(ticker)); params.setdefault("lot_count",1); params.setdefault("starting_capital",1_000_000)
+    ticker=ticker_from_file(source.name); params=dict(params or {}); params.setdefault("lot_size",step_size_for(ticker)); params.setdefault("lot_count",1); params.setdefault("starting_capital",10_000)
     if strategy=="false_breakout": return run_false_breakout(source,params,RESULTS_DIR)
     if strategy=="head_shoulders": return run_head_shoulders(source,params,RESULTS_DIR)
     if strategy in RUNNERS: return RUNNERS[strategy](source,params,RESULTS_DIR)
@@ -541,6 +541,27 @@ def _validate_and_clean_ticker_strategies(ts)->tuple[dict|None,str|None]:
             a["parameters"]=cleaned
     return ts,None
 
+def _quote_asset_conflict(tickers:list[str])->str|None:
+    """Rejects a mixed-quote-asset set of symbols (spec §21). There is no FX
+    conversion layer, so a portfolio mixing e.g. BTCUSDT (quote USDT) with
+    ETHEUR (quote EUR) would silently sum/compare P&L across two currencies
+    as if they were one. Unknown/unrecognized tickers are skipped here (they
+    get their own "unknown instrument" error elsewhere) rather than treated
+    as a conflict. Returns an error message, or None if every resolvable
+    ticker shares one quote asset."""
+    items=catalog()
+    quote_by_ticker={}
+    for t in tickers:
+        info=binance_catalog.instrument_by_symbol(items,t)
+        if info and info.get("quoteAsset"):quote_by_ticker[t]=info["quoteAsset"]
+    quotes=sorted(set(quote_by_ticker.values()))
+    if len(quotes)>1:
+        detail=", ".join(f"{t} ({q})" for t,q in sorted(quote_by_ticker.items()))
+        return (f"Инструменты портфеля торгуются в разных валютах котировки "
+                f"({', '.join(quotes)}) - в этой версии нет конвертации курса, "
+                f"поэтому смешивать их в одном портфеле нельзя: {detail}")
+    return None
+
 def _validate_portfolio_payload(payload:dict)->str|None:
     """Returns an error message, or None if the payload is acceptable."""
     instruments=payload.get("instruments")
@@ -550,6 +571,8 @@ def _validate_portfolio_payload(payload:dict)->str|None:
             if not isinstance(inst,dict) or not inst.get("ticker") or not inst.get("file"):
                 return "У каждого инструмента должны быть тикер и файл данных"
             if int(inst.get("lot_count") or 0)<0:return f"Количество лотов {inst['ticker']} не может быть отрицательным"
+        conflict=_quote_asset_conflict([str(i["ticker"]) for i in instruments])
+        if conflict:return conflict
     if "ticker_strategies" in payload:
         cleaned,err=_validate_and_clean_ticker_strategies(payload.get("ticker_strategies"))
         if err:return err
@@ -745,7 +768,13 @@ def _execute_build_job(job_id:str,payload:dict)->None:
     from_date=str(payload.get("from_date") or (date.today()-timedelta(days=365)).isoformat())
     till_date=str(payload.get("till_date") or date.today().isoformat())
     allocation=payload.get("allocation") or {"mode":"equal_capital"}
-    starting_capital=float(payload.get("starting_capital") or 1_000_000)
+    starting_capital=float(payload.get("starting_capital") or 10_000)
+
+    conflict=_quote_asset_conflict(tickers)
+    if conflict:
+        JOBS.update(job_id,status="failed",stage="Разные валюты котировки",
+                     error={"message":conflict,"ticker":None,"stage":"validate","code":"mixed_quote_asset"})
+        return
 
     JOBS.update(job_id,status="running",stage="Проверяем локальные данные")
     prepared=[]; errors=[]
@@ -827,6 +856,13 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                          errors=errors)
             return
         if existing_portfolio:
+            existing_tickers=[str(i.get("ticker")) for i in existing_portfolio.get("instruments",[]) if i.get("ticker")]
+            conflict=_quote_asset_conflict(existing_tickers+[item["ticker"] for item in prepared])
+            if conflict:
+                JOBS.update(job_id,status="failed",stage="Разные валюты котировки",
+                             error={"message":conflict,"ticker":None,"stage":"validate","code":"mixed_quote_asset"},
+                             errors=errors)
+                return
             portfolio=PORTFOLIOS.add_instruments(portfolio_id,prepared)
         else:
             portfolio=PORTFOLIOS.create({
@@ -1218,7 +1254,7 @@ def portfolio_backtest(portfolio_id):
     date_from=p.get("date_from"); date_to=p.get("date_to")
     run_id=bdb.new_run_id()
     bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
-                    float(portfolio.get("starting_capital") or 1_000_000),len(combos),
+                    float(portfolio.get("starting_capital") or 10_000),len(combos),
                     {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to,"timeframe":timeframe},
                     user_id=auth.current_user_id(),timeframe=timeframe)
 
@@ -1382,7 +1418,7 @@ def repeat_backtest(run_id):
     timeframe=config.get("timeframe") or "10m"
     new_run_id=bdb.new_run_id()
     bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
-                    float(portfolio.get("starting_capital") or 1_000_000),len(assignments),config,
+                    float(portfolio.get("starting_capital") or 10_000),len(assignments),config,
                     user_id=auth.current_user_id(),timeframe=timeframe)
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
@@ -1576,7 +1612,7 @@ def replay_create():
             symbol=symbol,timeframe=str(p.get("timeframe","1m")),
             start_date=str(p.get("start_date")),start_hour=int(p.get("start_hour",10)),
             start_minute=int(p.get("start_minute",0)),
-            starting_balance=float(p.get("starting_balance",1_000_000)),
+            starting_balance=float(p.get("starting_balance",10_000)),
             commission_rate=float(p.get("commission_rate",0.0005)),
             slippage_bps=float(p.get("slippage_bps",0)),speed=float(p.get("speed",1)),
             lot_size=float(p.get("lot_size") or step_size_for(symbol)))
