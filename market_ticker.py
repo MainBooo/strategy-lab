@@ -156,6 +156,31 @@ def get_prices(symbols: list[str] | None = None) -> dict:
     return {"prices": {s: _normalize_quote(q) for s, q in by_symbol.items()}, "stale": snap["stale"], "error": snap["error"]}
 
 
+def _classify_status(*, fetch_error: str | None, has_quote: bool, age_ms: int | None, cfg: dict) -> str:
+    """Three honestly-distinct REST-snapshot states (spec section 27) - the
+    frontend's own WebSocket lifecycle (connecting/live/stale/disconnected)
+    takes precedence whenever a live WS connection is open; this is only the
+    REST-fallback/initial-load classification:
+
+    - "disconnected": the Binance fetch itself is failing right now with no
+      usable quote to fall back on, OR the cached snapshot is old enough
+      that treating it as live would be dishonest, OR there's simply no
+      quote for this symbol at all.
+    - "stale": the feed has a quote, but it's aged past stale_after_ms -
+      still shown, but flagged as possibly outdated.
+    - "live": a healthy, recent quote. Binance Spot is 24/7, so unlike the
+      old MOEX integration there is no separate "market_closed" state."""
+    if fetch_error and not has_quote:
+        return "disconnected"
+    if age_ms is not None and age_ms > cfg["disconnected_after_ms"]:
+        return "disconnected"
+    if age_ms is not None and age_ms > cfg["stale_after_ms"]:
+        return "stale"
+    if not has_quote:
+        return "disconnected"
+    return "live"
+
+
 def get_realtime(symbol: str) -> dict:
     """Normalized realtime block for one symbol - the shape the frontend
     indicator (static/realtime-indicator.js) renders directly. status is a
@@ -171,16 +196,7 @@ def get_realtime(symbol: str) -> dict:
     if _cache["fetched_at"] is not None:
         age_ms = max(0, round((now - _cache["fetched_at"]).total_seconds() * 1000))
 
-    if snap["error"] and not quote:
-        status = "disconnected"
-    elif age_ms is not None and age_ms > cfg["disconnected_after_ms"]:
-        status = "disconnected"
-    elif age_ms is not None and age_ms > cfg["stale_after_ms"]:
-        status = "stale"
-    elif quote is None:
-        status = "disconnected"
-    else:
-        status = "live"
+    status = _classify_status(fetch_error=snap["error"], has_quote=quote is not None, age_ms=age_ms, cfg=cfg)
 
     normalized = _normalize_quote(quote) if quote else None
     return {

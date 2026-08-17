@@ -19,7 +19,7 @@ def _stub_native_store(monkeypatch):
     })
     monkeypatch.setattr(store, "get_sync_state", lambda *args, **kwargs: {"backfilled_complete": 1})
 
-    def fake_get_candles(ticker, board, timeframe, *, ts_from=None, ts_to=None, before=None, limit=5000):
+    def fake_get_candles(symbol, timeframe, *, ts_from=None, ts_to=None, before=None, limit=5000):
         seen["limit"] = limit
         seen["before"] = before
         # Two rows are enough to exercise the response path; the contract we
@@ -38,15 +38,14 @@ def test_all_history_daily_initial_request_is_page_sized(monkeypatch):
 
     candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
+        symbol="BTCUSDT",
         timeframe="1d",
         from_date=sync.EARLIEST_PLAUSIBLE_DATE,
         till_date="2026-08-13",
         limit=5000,
     )
 
-    assert seen["limit"] == 500
+    assert seen["limit"] == candle_api._INITIAL_PAGE_LIMIT["1d"]
     assert seen["before"] is None
 
 
@@ -55,8 +54,7 @@ def test_explicit_custom_range_keeps_requested_limit(monkeypatch):
 
     candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
+        symbol="BTCUSDT",
         timeframe="1d",
         from_date="2020-01-01",
         till_date="2026-08-13",
@@ -71,8 +69,7 @@ def test_before_cursor_keeps_pagination_page_size(monkeypatch):
 
     candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
+        symbol="BTCUSDT",
         timeframe="1d",
         from_date=sync.EARLIEST_PLAUSIBLE_DATE,
         till_date="2026-08-13",
@@ -103,17 +100,16 @@ def test_bounded_all_history_page_keeps_cursor_until_backfill_is_complete(monkey
 
     result = candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
+        symbol="BTCUSDT",
         timeframe="1d",
         from_date=sync.EARLIEST_PLAUSIBLE_DATE,
         till_date="2026-08-13",
         limit=5000,
     )
 
-    # Only two rows were returned (far below the 500-row initial page cap),
-    # but the bounded cache is not fully backfilled yet, so scrolling left
-    # must still be offered and trigger the next older window.
+    # Only two rows were returned (far below the initial page cap), but the
+    # bounded cache is not fully backfilled yet, so scrolling left must
+    # still be offered and trigger the next older window.
     assert result["nextCursor"] == first
     assert result["hasOlder"] is True
 
@@ -137,8 +133,7 @@ def test_history_cursor_stops_at_real_start_after_backfill_complete(monkeypatch)
 
     result = candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
+        symbol="BTCUSDT",
         timeframe="1d",
         from_date=sync.EARLIEST_PLAUSIBLE_DATE,
         till_date="2026-08-13",
@@ -150,6 +145,9 @@ def test_history_cursor_stops_at_real_start_after_backfill_complete(monkeypatch)
 
 
 def test_aggregated_initial_request_uses_its_own_page_limit(monkeypatch):
+    """10m is the one remaining aggregated timeframe (backward-compat,
+    built from native 5m) - 4h/30m etc. are native now, no longer routed
+    through _get_aggregated_candles."""
     seen = {}
 
     def fake_aggregated(**kwargs):
@@ -161,15 +159,14 @@ def test_aggregated_initial_request_uses_its_own_page_limit(monkeypatch):
 
     candle_api.get_candles(
         None,
-        ticker="SBER",
-        board="TQBR",
-        timeframe="4h",
+        symbol="BTCUSDT",
+        timeframe="10m",
         from_date=sync.EARLIEST_PLAUSIBLE_DATE,
         till_date="2026-08-13",
         limit=5000,
     )
 
-    assert seen["limit"] == 600
+    assert seen["limit"] == candle_api._INITIAL_PAGE_LIMIT["10m"]
 
 
 def test_cold_daily_history_sync_starts_from_recent_window(monkeypatch):
@@ -188,12 +185,13 @@ def test_cold_daily_history_sync_starts_from_recent_window(monkeypatch):
 
     monkeypatch.setattr(sync, "sync_native_timeframe", fake_sync)
 
-    candle_api._ensure_coverage(
-        "SBER", "TQBR", "1d", sync.EARLIEST_PLAUSIBLE_DATE, "2026-08-13", "shares", "stock"
-    )
+    candle_api._ensure_coverage("BTCUSDT", "1d", sync.EARLIEST_PLAUSIBLE_DATE, "2026-08-13")
 
     assert len(calls) == 1
     _args, kwargs = calls[0]
-    assert kwargs["from_date"] == "2024-08-13"
+    window_days = candle_api._BACKFILL_WINDOW_DAYS["1d"]
+    from datetime import date, timedelta
+    expected_from = (date(2026, 8, 13) - timedelta(days=window_days)).isoformat()
+    assert kwargs["from_date"] == expected_from
     assert kwargs["till_date"] == "2026-08-13"
-    assert kwargs["max_pages"] == 40
+    assert kwargs["max_pages"] == candle_api._BACKFILL_MAX_PAGES["1d"]

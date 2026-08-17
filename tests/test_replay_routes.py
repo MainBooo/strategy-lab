@@ -6,7 +6,7 @@ import app as app_module
 import market_data_store as store
 import replay_db as db
 
-TICKER, BOARD, TF = "SBER", "TQBR", "10m"
+SYMBOL, TF = "BTCUSDT", "1m"
 BASE_TS = 1780308000  # 2026-06-01 10:00 UTC-as-naive
 
 
@@ -15,16 +15,16 @@ def client(tmp_path):
     store.init_db(tmp_path / "market_data.db")
     db.init_db(tmp_path / "replay.db")
     app_module.app.testing = True
-    rows = [{"ts": BASE_TS + i * 600, "open": 100, "high": 101, "low": 99, "close": 100 + i * 0.1, "volume": 10}
+    rows = [{"ts": BASE_TS + i * 60, "open": 100, "high": 101, "low": 99, "close": 100 + i * 0.1, "volume": 10}
             for i in range(20)]
-    store.upsert_candles(TICKER, BOARD, TF, rows)
+    store.upsert_candles(SYMBOL, TF, rows)
     with app_module.app.test_client() as c:
         yield c
 
 
 def _create_session(client, **overrides):
     payload = {
-        "ticker": TICKER, "board": BOARD, "timeframe": TF,
+        "symbol": SYMBOL, "timeframe": TF,
         "start_date": "2026-06-01", "start_hour": 10, "start_minute": 0,
         "starting_balance": 100000, "commission_rate": 0, "slippage_bps": 0, "speed": 1,
     }
@@ -32,13 +32,16 @@ def _create_session(client, **overrides):
     return client.post("/api/replay/sessions", json=payload)
 
 
-def test_create_session_requires_ticker(client):
-    resp = _create_session(client, ticker="")
+def test_create_session_requires_symbol(client):
+    resp = _create_session(client, symbol="")
     assert resp.status_code == 400
 
 
 def test_create_session_rejects_aggregate_timeframe(client):
-    resp = _create_session(client, timeframe="4h")
+    # 10m is the one aggregated timeframe replay sessions can't use (no
+    # native Binance 10m interval) - the same reason it's excluded from
+    # NATIVE_TIMEFRAMES in timeframes.py.
+    resp = _create_session(client, timeframe="10m")
     assert resp.status_code == 400
 
 

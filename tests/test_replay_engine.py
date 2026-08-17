@@ -6,7 +6,7 @@ import market_data_store as store
 import replay_db as db
 import replay_engine as engine
 
-TICKER, BOARD, TF = "TEST", "TQBR", "1m"
+SYMBOL, TF = "BTCUSDT", "1m"
 BASE_TS = engine.date_to_ts("2025-06-02", 10, 0)  # a Monday, 10:00
 
 
@@ -14,7 +14,7 @@ def _seed(bars: list[dict]):
     """bars: list of {open,high,low,close,volume} - ts auto-assigned one
     minute apart starting at BASE_TS."""
     rows = [{"ts": BASE_TS + i * 60, **b} for i, b in enumerate(bars)]
-    store.upsert_candles(TICKER, BOARD, TF, rows)
+    store.upsert_candles(SYMBOL, TF, rows)
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ def _isolated_db(tmp_path):
 
 
 def _new_session(**overrides):
-    params = dict(ticker=TICKER, board=BOARD, timeframe=TF, start_date="2025-06-02", start_hour=10,
+    params = dict(symbol=SYMBOL, timeframe=TF, start_date="2025-06-02", start_hour=10,
                   start_minute=0, starting_balance=100_000, commission_rate=0.0, slippage_bps=0,
                   speed=1, lot_size=1)
     params.update(overrides)

@@ -1,96 +1,93 @@
 from __future__ import annotations
 
-"""Tests for market_ticker's split between source_delay_ms (constant, the
-feed's own advertised lag) and last_trade_age_ms (per-ticker, illiquidity)
-- the fix for SCFT/AKMC-style instruments showing a misleading multi-hour
-"задержка" that was actually just "no trades in a while", not a source or
-connectivity problem."""
+"""Tests for market_ticker's honest realtime-status classification
+(live/stale/disconnected - spec section 27). Binance Spot is 24/7, so
+unlike the old MOEX integration there is no "market_closed" state and no
+fixed source-delay baseline - status is purely a function of how old the
+last successful REST snapshot is, and whether the requested symbol actually
+has a quote in it."""
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+import pytest
 
 import market_ticker
 
 
-def test_fetch_error_is_always_disconnected():
+def test_fetch_error_with_no_quote_is_disconnected():
     cfg = market_ticker.realtime_config()
-    status = market_ticker._classify_status(fetch_error="boom", market_open=True, last_trade_age_ms=1000, cfg=cfg)
+    status = market_ticker._classify_status(fetch_error="boom", has_quote=False, age_ms=1000, cfg=cfg)
     assert status == "disconnected"
 
 
-def test_closed_market_wins_over_trade_age():
+def test_fetch_error_with_cached_quote_falls_through_to_age(monkeypatch):
+    """A transient fetch error doesn't itself force 'disconnected' if a
+    quote is still available (served from cache) and that snapshot isn't
+    old enough yet to be considered stale."""
     cfg = market_ticker.realtime_config()
-    status = market_ticker._classify_status(fetch_error=None, market_open=False, last_trade_age_ms=50_000, cfg=cfg)
-    assert status == "market_closed"
+    status = market_ticker._classify_status(fetch_error="boom", has_quote=True, age_ms=1000, cfg=cfg)
+    assert status == "live"
 
 
-def test_healthy_baseline_delay_is_delayed_not_no_trades():
+def test_missing_quote_is_disconnected():
     cfg = market_ticker.realtime_config()
-    status = market_ticker._classify_status(fetch_error=None, market_open=True,
-                                             last_trade_age_ms=market_ticker.SOURCE_DELAY_MS, cfg=cfg)
-    assert status == "delayed"
+    status = market_ticker._classify_status(fetch_error=None, has_quote=False, age_ms=1000, cfg=cfg)
+    assert status == "disconnected"
 
 
-def test_illiquid_ticker_is_no_trades_not_delayed():
-    """The exact SCFT/AKMC symptom: a ticker whose last trade is ~1.7h old
-    while the market is open and the feed itself is healthy must be
-    reported as "no trades", never as a growing "delay"."""
+def test_fresh_quote_is_live():
     cfg = market_ticker.realtime_config()
-    age_1h42m = (1 * 3600 + 42 * 60) * 1000
-    status = market_ticker._classify_status(fetch_error=None, market_open=True,
-                                             last_trade_age_ms=age_1h42m, cfg=cfg)
-    assert status == "no_trades"
+    status = market_ticker._classify_status(fetch_error=None, has_quote=True, age_ms=1000, cfg=cfg)
+    assert status == "live"
 
 
-def test_missing_quote_during_open_market_is_no_trades():
+def test_aged_past_stale_threshold_is_stale():
     cfg = market_ticker.realtime_config()
-    status = market_ticker._classify_status(fetch_error=None, market_open=True, last_trade_age_ms=None, cfg=cfg)
-    assert status == "no_trades"
+    status = market_ticker._classify_status(fetch_error=None, has_quote=True,
+                                             age_ms=cfg["stale_after_ms"] + 1, cfg=cfg)
+    assert status == "stale"
 
 
-def test_get_realtime_exposes_both_metrics_separately(monkeypatch):
-    fixed_now = datetime(2025, 1, 6, 7, 30, 0)  # Monday, in session
+def test_aged_past_disconnected_threshold_is_disconnected():
+    cfg = market_ticker.realtime_config()
+    status = market_ticker._classify_status(fetch_error=None, has_quote=True,
+                                             age_ms=cfg["disconnected_after_ms"] + 1, cfg=cfg)
+    assert status == "disconnected"
+
+
+def test_get_realtime_exposes_symbol_and_config(monkeypatch):
+    fixed_now = datetime(2025, 1, 6, 7, 30, 0, tzinfo=timezone.utc)
 
     class _Fixed(datetime):
         @classmethod
-        def utcnow(cls):
+        def now(cls, tz=None):
             return fixed_now
 
     monkeypatch.setattr(market_ticker, "datetime", _Fixed)
-    monkeypatch.setattr(market_ticker, "is_trading_session", lambda now_utc=None: True)
     monkeypatch.setattr(market_ticker, "_refresh_if_stale", lambda: {
-        "by_ticker": {"SCFT": {
-            "ticker": "SCFT", "last": 55.5, "change_pct": 0.1, "bid": None, "offer": None,
-            "market_timestamp": "2025-01-06T04:00:00", "market_time": "07:00:00",
-            "delay_ms": 6_120_000,  # 1h42m - illiquid, no recent trade
+        "by_symbol": {"BTCUSDT": {
+            "symbol": "BTCUSDT", "lastPrice": "63950.81", "priceChangePercent": "1.33",
+            "priceChange": "840.55", "bidPrice": "63950.80", "askPrice": "63950.82",
+            "highPrice": "63990.0", "lowPrice": "62716.0", "volume": "10818.33",
+            "quoteVolume": "685796751.71", "count": 1680226, "openTime": 0, "closeTime": 0,
         }},
-        "cached": True, "stale": False, "error": None, "server_received_at": fixed_now,
+        "cached": True, "stale": False, "error": None,
     })
+    market_ticker._cache["fetched_at"] = fixed_now
 
-    data = market_ticker.get_realtime("SCFT")
-    assert data["status"] == "no_trades"
-    assert data["source_delay_ms"] == market_ticker.SOURCE_DELAY_MS
-    assert data["last_trade_age_ms"] == 6_120_000
-    assert data["delay_ms"] == data["last_trade_age_ms"], "back-compat alias must match the renamed field"
+    data = market_ticker.get_realtime("btcusdt")
+    assert data["symbol"] == "BTCUSDT"
+    assert data["venue"] == "binance"
+    assert data["market_type"] == "spot"
+    assert data["last"] == pytest.approx(63950.81)
+    assert data["status"] == "live"
+    assert data["error"] is None
 
 
-def test_get_realtime_healthy_liquid_ticker_is_delayed(monkeypatch):
-    fixed_now = datetime(2025, 1, 6, 7, 30, 0)
-
-    class _Fixed(datetime):
-        @classmethod
-        def utcnow(cls):
-            return fixed_now
-
-    monkeypatch.setattr(market_ticker, "datetime", _Fixed)
-    monkeypatch.setattr(market_ticker, "is_trading_session", lambda now_utc=None: True)
+def test_get_realtime_unknown_symbol_is_disconnected(monkeypatch):
     monkeypatch.setattr(market_ticker, "_refresh_if_stale", lambda: {
-        "by_ticker": {"SBER": {
-            "ticker": "SBER", "last": 300.0, "change_pct": 0.5, "bid": None, "offer": None,
-            "market_timestamp": "2025-01-06T07:15:00", "market_time": "10:15:00",
-            "delay_ms": market_ticker.SOURCE_DELAY_MS,
-        }},
-        "cached": True, "stale": False, "error": None, "server_received_at": fixed_now,
+        "by_symbol": {}, "cached": False, "stale": False, "error": None,
     })
-
-    data = market_ticker.get_realtime("SBER")
-    assert data["status"] == "delayed"
+    data = market_ticker.get_realtime("NOPEUSDT")
+    assert data["status"] == "disconnected"
+    assert data["last"] is None
