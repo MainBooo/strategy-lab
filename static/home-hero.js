@@ -48,8 +48,8 @@
       <span class="hero-stat-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 20V10"/><path d="M12 20V4"/><path d="M19 20v-7"/><path d="M3 15l5-5 4 3 7-8"/></svg>
       </span>
-      <strong id="heroInstrumentCount">502</strong>
-      <span>Инструментов MOEX</span>
+      <strong id="heroInstrumentCount">500</strong>
+      <span>Инструментов Binance</span>
     </div>
     <div class="hero-stat">
       <span class="hero-stat-icon" aria-hidden="true">
@@ -69,7 +69,7 @@
       <span class="hero-stat-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
       </span>
-      <strong>MOEX</strong>
+      <strong>Binance</strong>
       <span>Источник рыночных данных</span>
     </div>`;
 
@@ -88,7 +88,7 @@
   const syncInstrumentCount = function () {
     if (!status || !heroCount) return;
     const text = status.textContent || "";
-    const match = text.match(/(?:MOEX:\s*|Инструментов\s+MOEX:\s*)(\d+)/i) || text.match(/\b(\d{2,4})\b/);
+    const match = text.match(/(?:Binance:\s*|Инструментов\s+Binance:\s*)(\d+)/i) || text.match(/\b(\d{2,4})\b/);
     if (match) heroCount.textContent = match[1];
   };
   if (status && heroCount) {

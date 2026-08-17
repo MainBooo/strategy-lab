@@ -262,7 +262,7 @@ function collectBuildPayload(){
   const tickers=[...catalogSelected];
   const allocation={mode:allocationMode};
   if(allocationMode==="manual")allocation.lots=manualLots;
-  const payload={tickers,starting_capital:Number($("buildCapital").value||1000000),allocation,interval:10,
+  const payload={tickers,starting_capital:Number($("buildCapital").value||10000),allocation,interval:10,
                  from_date:$("buildFrom").value,till_date:$("buildTill").value};
   if(buildTargetPortfolioId)payload.portfolio_id=buildTargetPortfolioId;
   else payload.name=$("portfolioNameInput").value||"Новый портфель";

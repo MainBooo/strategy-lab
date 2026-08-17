@@ -72,7 +72,7 @@
       const grid = document.getElementById("strategyCards");
       if (grid && !grid.querySelector("[data-custom-strategy-cta-card]")) {
         const card = document.createElement("article"); card.className = "strategy-card custom-strategy-cta-card"; card.dataset.customStrategyCtaCard = "1";
-        card.innerHTML = `<div><span class="strategy-category">Индивидуальная разработка</span><h3>Есть собственная торговая стратегия?</h3><p class="strategy-summary">Опишите правила входа и выхода — реализуем её в Strategy Lab, чтобы вы могли тестировать идею на исторических данных MOEX.</p><button type="button" class="primary" data-open-custom-strategy data-source="strategy_card">Добавить свою стратегию</button><small>Платная индивидуальная разработка · существующие функции остаются бесплатными</small></div>`;
+        card.innerHTML = `<div><span class="strategy-category">Индивидуальная разработка</span><h3>Есть собственная торговая стратегия?</h3><p class="strategy-summary">Опишите правила входа и выхода — реализуем её в Strategy Lab, чтобы вы могли тестировать идею на исторических данных Binance.</p><button type="button" class="primary" data-open-custom-strategy data-source="strategy_card">Добавить свою стратегию</button><small>Платная индивидуальная разработка · существующие функции остаются бесплатными</small></div>`;
         grid.appendChild(card);
       }
     }
@@ -110,8 +110,8 @@
   function ensureOrderModal() {
     const body = `<div class="commerce-modal-head"><span class="step">Индивидуальная разработка</span><h2>Добавить свою стратегию</h2><p>Опишите торговые правила своими словами. Не обязательно использовать технические термины — мы уточним детали перед разработкой.</p></div>
       <form id="customStrategyOrderForm" class="commerce-order-form">
-        <div class="form-grid two"><label>Название стратегии <input name="title" maxlength="160" placeholder="Например, Пробой утреннего диапазона"></label><label>Рынок / инструменты <input name="market" maxlength="500" value="Акции MOEX" placeholder="Любые акции MOEX"></label></div>
-        <label>Конкретные тикеры <input name="symbols" maxlength="1000" placeholder="Например: SBER, LKOH — можно оставить пустым"></label>
+        <div class="form-grid two"><label>Название стратегии <input name="title" maxlength="160" placeholder="Например, Пробой утреннего диапазона"></label><label>Рынок / инструменты <input name="market" maxlength="500" value="Binance Spot" placeholder="Любые пары Binance Spot"</label></div>
+        <label>Конкретные тикеры <input name="symbols" maxlength="1000" placeholder="Например: BTCUSDT, ETHUSDT — можно оставить пустым"></label>
         <fieldset><legend>Таймфрейм</legend><div class="commerce-checks">${["1m","10m","15m","30m","1h","4h","1d","other"].map((x) => `<label><input type="checkbox" name="timeframes" value="${x}" ${x === "10m" ? "checked" : ""}> ${x === "other" ? "Другое" : x}</label>`).join("")}</div></fieldset>
         <fieldset><legend>Направление торговли</legend><div class="commerce-checks"><label><input type="checkbox" name="directions" value="long" checked> Long</label><label><input type="checkbox" name="directions" value="short"> Short</label></div></fieldset>
         <div class="form-grid two"><label>Условия входа <textarea name="entry_rules" rows="4" maxlength="8000"></textarea></label><label>Условия выхода <textarea name="exit_rules" rows="4" maxlength="8000"></textarea></label></div>

@@ -1075,7 +1075,7 @@
         tile.destroy();
       }
       while (this.tiles.length < targetCount) {
-        const cfg = this._archivedTiles.pop() || (active ? { symbol: active.symbol, board: active.board, timeframe: active.timeframe } : {});
+        const cfg = this._archivedTiles.pop() || (active ? { symbol: active.symbol, timeframe: active.timeframe } : {});
         const tile = new CE.ChartTile(cfg);
         this.tiles.push(tile);
         tile.startRealtime();

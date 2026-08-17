@@ -10,7 +10,7 @@
 </head>
 <body>
 <main class="shell">
-<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>Strategy Lab</h1><p>Соберите портфель российских акций, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника MOEX…</div>
+<header class="hero"><div class="hero-title"><span class="eyebrow">Исследование торговых систем</span><h1>Strategy Lab</h1><p>Соберите портфель криптовалютных пар Binance Spot, подберите стратегию и проверьте её на истории.</p></div><div class="hero-meta"><div id="portfolioBalanceWidget" class="pb-widget hidden"></div><div class="status" id="status">Загрузка справочника Binance…</div>
   <span class="beta-badge">Public Beta · бесплатно</span>
   {% if current_user %}
     <div class="account-menu" id="accountMenu">
@@ -33,7 +33,7 @@
   {% endif %}
 </div></header>
 
-<section class="ticker-tape" id="tickerTape" aria-label="Котировки российских акций">
+<section class="ticker-tape" id="tickerTape" aria-label="Котировки Binance Spot">
   <div class="ticker-tape-track" id="tickerTapeTrack"><div class="ticker-tape-empty">Загрузка котировок…</div></div>
 </section>
 
@@ -72,10 +72,10 @@
 
   <article class="card">
     <div class="card-head"><div><span class="step">Шаг 1</span><h2>Сформируйте портфель</h2></div></div>
-    <p class="lead">Выберите российские акции. Мы автоматически загрузим недостающие данные и подготовим портфель для бэктеста.</p>
+    <p class="lead">Выберите пары Binance Spot. Мы автоматически загрузим недостающие данные и подготовим портфель для бэктеста.</p>
 
     <div class="catalog-toolbar">
-      <input id="catalogSearch" class="catalog-search" placeholder="Поиск по тикеру или названию, например Сбер или SBER">
+      <input id="catalogSearch" class="catalog-search" placeholder="Поиск по символу или активу, например BTC или BTCUSDT">
       <select id="catalogSector"><option value="">Все отрасли</option><option value="Финансы">Финансы</option><option value="Нефть и газ">Нефть и газ</option><option value="Металлургия">Металлургия</option><option value="IT">IT</option><option value="Прочее">Прочее</option></select>
       <select id="catalogDataStatus"><option value="">Любой статус данных</option><option value="fresh">Данные есть</option><option value="stale">Требуют обновления</option><option value="none">Данных нет</option></select>
       <label class="toggle"><input type="checkbox" id="catalogOnlyLiquid"><span>Только ликвидные</span></label>
@@ -102,7 +102,7 @@
       <div id="buildTargetBanner" class="build-target-banner hidden"></div>
       <div class="form-grid three">
         <label>Название портфеля <input id="portfolioNameInput" value="Мой портфель"></label>
-        <label>Стартовый капитал, ₽ <input id="buildCapital" type="number" value="1000000" step="10000"></label>
+        <label>Стартовый капитал, USDT <input id="buildCapital" type="number" value="10000" step="100"></label>
         <label>Период данных <span class="tip" data-tip="Диапазон исторических свечей, которые будут загружены для новых инструментов. Для уже загруженных данных используется существующий диапазон, если он не устарел.">?</span>
           <span class="range-inline"><input id="buildFrom" type="date" value="{{ defaults.from_date }}"><input id="buildTill" type="date" value="{{ defaults.till_date }}"></span>
         </label>
@@ -164,7 +164,7 @@
       <div class="form-grid">
         <label>Портфель <select id="backtestPortfolioSelect"></select></label>
         <label>Период (необязательно) <span class="tip" data-tip="Ограничивает диапазон свечей внутри уже загруженных данных. Оставьте пустым, чтобы использовать весь доступный период.">?</span><span class="range-inline"><input id="backtestFrom" type="date"><input id="backtestTill" type="date"></span></label>
-        <label>Таймфрейм <span class="tip" data-tip="На каких свечах считать стратегию. 10 минут — данные уже загружены для портфеля. Другие таймфреймы честно докачиваются или строятся агрегацией из более мелких свечей MOEX; если для тикера их нет, об этом будет предупреждение перед запуском.">?</span><select id="backtestTimeframe"></select></label>
+        <label>Таймфрейм <span class="tip" data-tip="На каких свечах считать стратегию. 10 минут — данные уже загружены для портфеля. Другие таймфреймы честно докачиваются с Binance (10 минут дополнительно агрегируется из 5-минутных свечей); если для символа их нет, об этом будет предупреждение перед запуском.">?</span><select id="backtestTimeframe"></select></label>
       </div>
 
       <div class="ticker-select-head">

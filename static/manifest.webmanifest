@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Strategy Lab",
   "short_name": "Strategy Lab",
-  "description": "Исследование и бэктест торговых стратегий на MOEX",
+  "description": "Исследование и бэктест торговых стратегий на Binance Spot",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

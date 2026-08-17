@@ -183,7 +183,7 @@
         this.securities = Array.isArray(securities) ? securities : [];
         this.prices = (priceData && priceData.prices) || {};
       } catch (e) {
-        this.container.querySelector("#wlRows").innerHTML = `<div class="muted-note">Не удалось загрузить список инструментов MOEX.</div>`;
+        this.container.querySelector("#wlRows").innerHTML = `<div class="muted-note">Не удалось загрузить список инструментов Binance.</div>`;
         return;
       }
       this._render();

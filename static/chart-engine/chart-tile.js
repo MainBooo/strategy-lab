@@ -1,17 +1,17 @@
 /* One independent chart pane ("tile") for the multi-chart grid in
  * "Анализ графиков". Each tile owns its own ChartCore, IndicatorPaneManager,
  * DrawingManager, RealtimeIndicator, per-tile FullscreenController, and its
- * own full state (ticker/board/timeframe/chartType/rangeMode/fromDate/
+ * own full state (ticker/timeframe/chartType/rangeMode/fromDate/
  * toDate/indicators/drawings/zoom/displayOptions/live subscription) -
  * nothing here reads or writes another tile.
  *
  * As of the Stage-2 toolbar unification, a tile's own header is
  * deliberately minimal (identity tag + per-tile fullscreen + close) - every
  * *command* (ticker/timeframe/chart type/indicators/templates/save/
- * settings/range/board/snapshot/order-strategy) now lives in the single
+ * settings/range/snapshot/order-strategy) now lives in the single
  * workspace toolbar (chart-analysis.js) and is applied to whichever tile is
  * "active" via the public methods below (setTimeframe/setChartType/
- * selectSymbol/applyQuickRange/setBoard/saveAsTemplate/...). This file still
+ * selectSymbol/applyQuickRange/saveAsTemplate/...). This file still
  * owns all of that state and logic - only the *chrome that triggers it*
  * moved up a level, so multiple disconnected control rows don't exist. */
 (function (global) {
@@ -20,9 +20,10 @@
   const CE = global.ChartEngine;
 
   const TIMEFRAMES = [
-    { id: "1m", label: "1м" }, { id: "10m", label: "10м" }, { id: "30m", label: "30м" },
-    { id: "60m", label: "1ч" }, { id: "4h", label: "4ч" }, { id: "1d", label: "1д" },
-    { id: "1w", label: "1н" }, { id: "1mo", label: "1мес" },
+    { id: "1m", label: "1м" }, { id: "3m", label: "3м" }, { id: "5m", label: "5м" },
+    { id: "10m", label: "10м" }, { id: "15m", label: "15м" }, { id: "30m", label: "30м" },
+    { id: "1h", label: "1ч" }, { id: "2h", label: "2ч" }, { id: "4h", label: "4ч" },
+    { id: "1d", label: "1д" }, { id: "1w", label: "1н" }, { id: "1mo", label: "1мес" },
   ];
   const TF_LABEL = TIMEFRAMES.reduce((m, t) => (m[t.id] = t.label, m), {});
   const CHART_TYPES = [
@@ -32,26 +33,30 @@
   ];
   /* Live-ticking the current candle (see _onRealtimeUpdate below) only
    * covers timeframes with a fixed bucket width in seconds. A calendar day
-   * IS a fixed 86400s width (MSK has no DST - see market_data_sync.py's
-   * "naive MSK wall-clock treated as UTC" convention, which this bucketing
-   * relies on), so "1d" fits the same math as the intraday buckets and the
-   * daily bar ticks live during the session too. 1w/1mo don't: the
-   * exchange's trading week/month isn't a fixed multiple of a day (holidays
-   * shift boundaries), so their "current bucket" can't be derived this way. */
-  const LIVE_TICK_BUCKET_SECONDS = { "1m": 60, "10m": 600, "30m": 1800, "60m": 3600, "4h": 4 * 3600, "1d": 86400 };
+   * IS a fixed 86400s width (UTC has no DST), so "1d" fits the same math as
+   * the intraday buckets and the daily bar ticks live too. 1w/1mo don't: a
+   * calendar week/month isn't a fixed multiple of a day (months vary in
+   * length), so their "current bucket" can't be derived this way. */
+  const LIVE_TICK_BUCKET_SECONDS = {
+    "1m": 60, "3m": 180, "5m": 300, "10m": 600, "15m": 900, "30m": 1800,
+    "1h": 3600, "60m": 3600, "2h": 7200, "4h": 4 * 3600, "1d": 86400,
+  };
   // How often an active tile re-fetches the tail of /api/candles to pick up
-  // whatever the backend's freshness/gap-fill pass has done (a genuinely
-  // new real candle, an updated still-forming one, or a synthetic no-trade
-  // bar) - separate from _onRealtimeUpdate's in-memory live tick, which only
-  // ever reacts to the last-trade price and can't see a gap-filled bucket.
-  // 25s keeps well within MOEX's own ~15min publish cadence while staying
-  // inside a sane request budget for a 4-6 tile layout.
+  // whatever the backend's freshness pass has done (a genuinely new real
+  // candle or an updated still-forming one) - separate from
+  // _onRealtimeUpdate's in-memory live tick, which only ever reacts to the
+  // last-trade price. Binance Spot is 24/7 with no fixed publish cadence to
+  // stay within (unlike the old MOEX free-tier feed) - 25s is just a sane
+  // request budget for a 4-6 tile layout.
   const TAIL_REFRESH_MS = 25000;
-  // Rough MOEX trading-session bars/day per timeframe (~10:00-23:50 MSK,
-  // ~830 minutes) - only used to translate a "days" quick-range preset into
-  // a bar count for setVisibleBarCount(); doesn't need to be exact, just in
-  // the right ballpark so "1Г" roughly shows a year, not a week or a decade.
-  const BARS_PER_DAY = { "1m": 830, "10m": 83, "30m": 28, "60m": 14, "4h": 3.5, "1d": 1, "1w": 0.2, "1mo": 0.05 };
+  // Binance Spot trades 24/7 (1440 minutes/day) - only used to translate a
+  // "days" quick-range preset into a bar count for setVisibleBarCount();
+  // doesn't need to be exact, just in the right ballpark so "1Г" roughly
+  // shows a year, not a week or a decade.
+  const BARS_PER_DAY = {
+    "1m": 1440, "3m": 480, "5m": 288, "10m": 144, "15m": 96, "30m": 48,
+    "1h": 24, "60m": 24, "2h": 12, "4h": 6, "1d": 1, "1w": 1 / 7, "1mo": 1 / 30,
+  };
   const RANGE_PRESETS = [
     { label: "1Д", days: 1 }, { label: "5Д", days: 5 }, { label: "1М", days: 30 }, { label: "3М", days: 90 },
     { label: "6М", days: 182 }, { label: "1Г", days: 365 }, { label: "5Л", days: 365 * 5 },
@@ -70,10 +75,9 @@
   function todayISO() { return new Date().toISOString().slice(0, 10); }
 
   class ChartTile {
-    constructor({ symbol = "SBER", board = "TQBR", timeframe = "1d", chartType = "candles", displayOptions = null, indicators = null } = {}) {
+    constructor({ symbol = "BTCUSDT", timeframe = "1d", chartType = "candles", displayOptions = null, indicators = null } = {}) {
       this.id = "tile" + ++_seq;
       this.symbol = symbol;
-      this.board = board;
       this.timeframe = timeframe;
       this._initialChartType = chartType;
       this._initialDisplayOptions = displayOptions || null;
@@ -265,7 +269,7 @@
      * preference, not a transient viewport range. */
     toConfig() {
       return {
-        symbol: this.symbol, board: this.board, timeframe: this.timeframe,
+        symbol: this.symbol, timeframe: this.timeframe,
         chartType: this.core ? this.core.seriesType : this._initialChartType,
         displayOptions: this.core ? this.core.displayOptions : this._initialDisplayOptions,
         indicators: this.indicatorMgr
@@ -303,13 +307,6 @@
 
     setChartType(type) {
       if (this.core) this.core.setSeriesType(type);
-      this._notifyStateChanged();
-    }
-
-    setBoard(board) {
-      if (board === this.board) return;
-      this.board = board;
-      this._reload();
       this._notifyStateChanged();
     }
 
@@ -397,7 +394,7 @@
       status.classList.remove("hidden");
       try {
         await this.core.load({
-          symbol: this.symbol, board: this.board, timeframe: this.timeframe,
+          symbol: this.symbol, timeframe: this.timeframe,
           from: this.rangeMode === "custom" ? this.fromDate : null,
           to: this.rangeMode === "custom" ? this.toDate : null,
           limit: 5000,
@@ -470,7 +467,7 @@
       name = name || prompt("Название шаблона", this.layout ? this.layout.name : `${this.symbol} · ${new Date().toLocaleDateString("ru-RU")}`);
       if (!name) return null;
       const payload = {
-        context: "analysis", name, symbol: this.symbol, board: this.board, timeframe: this.timeframe,
+        context: "analysis", name, symbol: this.symbol, timeframe: this.timeframe,
         visibleFrom: this.rangeMode === "custom" ? this.fromDate : null,
         visibleTo: this.rangeMode === "custom" ? this.toDate : null,
         chartType: this.core ? this.core.seriesType : "candles",
@@ -502,7 +499,7 @@
     async _ensureLayout() {
       if (this.layout) return this.layout;
       this.layout = await CE.api.createLayout({
-        context: "analysis", name: `${this.symbol} · автосохранение`, symbol: this.symbol, board: this.board,
+        context: "analysis", name: `${this.symbol} · автосохранение`, symbol: this.symbol,
         timeframe: this.timeframe, visibleFrom: null, visibleTo: null,
         chartType: this.core ? this.core.seriesType : "candles", settings: {}, indicators: [],
       });
@@ -565,7 +562,7 @@
     }
     showReplayMode() {
       if (this.indicator) this.indicator.showReplayMode();
-      this._stopTailRefresh(); // Market Replay reads its own history - never poll live MOEX data over it
+      this._stopTailRefresh(); // Market Replay reads its own history - never poll live Binance data over it
     }
 
     _startTailRefresh() {
@@ -698,7 +695,7 @@
       const layout = await this._ensureLayout();
       try {
         await CE.api.createStrategyRequest({
-          layoutId: layout.id, symbol: this.symbol, board: this.board, timeframe: this.timeframe,
+          layoutId: layout.id, symbol: this.symbol, timeframe: this.timeframe,
           visibleFrom: this.fromDate, visibleTo: this.toDate,
           drawingsSnapshot: this.drawingMgr.drawings, indicators: this.indicatorMgr.list(),
           ideaDescription: val("#ordIdea"), entryConditions: val("#ordEntry"), exitConditions: val("#ordExit"),

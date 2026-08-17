@@ -132,7 +132,7 @@ def _order_payload(raw: dict) -> tuple[dict | None, str | None]:
         return None, "Опишите торговую идею, условия входа или выхода."
     return {
         "title": text("title", 160) or None,
-        "market": text("market", 500) or "Акции MOEX",
+        "market": text("market", 500) or "Binance Spot",
         "symbols": text("symbols", 1000) or None,
         "timeframes": timeframes,
         "directions": directions,

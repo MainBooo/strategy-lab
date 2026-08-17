@@ -452,7 +452,7 @@
       const money = window.money || ((n) => n);
       const meta = (() => { try { return JSON.parse(t.signal_metadata_json || "{}"); } catch (e) { return {}; } })();
       const EXIT = global.ChartEngine.Trades.EXIT_LABEL;
-      const riskRub = t.stop_loss != null ? Math.abs(t.entry_price - t.stop_loss) * t.quantity_shares : null;
+      const riskQuote = t.stop_loss != null ? Math.abs(t.entry_price - t.stop_loss) * t.quantity_shares : null;
       const rr = t.take_profit != null && t.stop_loss != null ? Math.abs(t.take_profit - t.entry_price) / Math.abs(t.entry_price - t.stop_loss) : null;
       const row = (label, value) => `<div><span>${label}</span><strong>${value}</strong></div>`;
       return `
@@ -467,16 +467,16 @@
         <div class="summary-grid">
           ${row("Направление", t.direction === "long" ? "Long" : "Short")}
           ${row("Стратегия", (window.STRATEGIES[t.strategy_id] || {}).name || t.strategy_id)}
-          ${row("Вход", `${money(t.entry_price)} ₽ · ${t.entry_datetime}`)}
-          ${row("Выход", t.exit_datetime ? `${money(t.exit_price)} ₽ · ${t.exit_datetime}` : "—")}
+          ${row("Вход", `${money(t.entry_price)} USDT · ${t.entry_datetime}`)}
+          ${row("Выход", t.exit_datetime ? `${money(t.exit_price)} USDT · ${t.exit_datetime}` : "—")}
           ${row("Причина выхода", EXIT[t.exit_reason] || t.exit_reason || "—")}
-          ${row("Лоты / акции", `${t.quantity_lots} / ${t.quantity_shares}`)}
+          ${row("Шаги / количество", `${t.quantity_lots} / ${t.quantity_shares}`)}
           ${row("Стоп / Тейк", `${t.stop_loss != null ? money(t.stop_loss) : "—"} / ${t.take_profit != null ? money(t.take_profit) : "—"}`)}
-          ${row("Риск, ₽", riskRub != null ? money(riskRub) + " ₽" : "—")}
+          ${row("Риск, USDT", riskQuote != null ? money(riskQuote) + " USDT" : "—")}
           ${row("Плановый R/R", rr != null ? rr.toFixed(2) : "—")}
-          ${row("Комиссия", money(t.commission) + " ₽")}
-          ${row("Чистая прибыль", `${money(t.net_profit)} ₽ (${t.return_percent}%)`)}
-          ${row("R-мультипликатор", riskRub && t.net_profit != null ? (t.net_profit / (riskRub || 1)).toFixed(2) : "—")}
+          ${row("Комиссия", money(t.commission) + " USDT")}
+          ${row("Чистая прибыль", `${money(t.net_profit)} USDT (${t.return_percent}%)`)}
+          ${row("R-мультипликатор", riskQuote && t.net_profit != null ? (t.net_profit / (riskQuote || 1)).toFixed(2) : "—")}
           ${row("MAE / MFE", meta.mae_pct != null || meta.mfe_pct != null ? `${meta.mae_pct ?? "—"}% / ${meta.mfe_pct ?? "—"}%` : "—")}
           ${row("Продолжительность", meta.bars_held != null ? `${meta.bars_held} баров` : "—")}
         </div>`;

@@ -193,7 +193,7 @@
         if (!nextInstruments.has(ticker)) trackGoal("portfolio_instrument_removed", { ticker: ticker });
       });
       nextInstruments.forEach((ticker) => {
-        if (!cached.instruments.has(ticker)) trackGoal("portfolio_instrument_added", { ticker: ticker, board: "TQBR", source: "portfolio_editor" });
+        if (!cached.instruments.has(ticker)) trackGoal("portfolio_instrument_added", { ticker: ticker, source: "portfolio_editor" });
       });
     }
     trackGoal("portfolio_updated", { update_type: "saved_edit" });
@@ -252,7 +252,7 @@
         const tickers = Array.isArray(ctx.body && ctx.body.tickers) ? ctx.body.tickers : [];
         if (ctx.body && ctx.body.portfolio_id) {
           if (tickers.length <= 12) {
-            tickers.forEach((ticker) => trackGoal("portfolio_instrument_added", { ticker: ticker, board: "TQBR", source: "portfolio_build" }));
+            tickers.forEach((ticker) => trackGoal("portfolio_instrument_added", { ticker: ticker, source: "portfolio_build" }));
           }
           trackGoal("portfolio_updated", {
             instruments_count: tickers.length,
@@ -309,7 +309,7 @@
     return {
       ticker: pathTicker || (body && body.ticker) || url.searchParams.get("ticker") || url.searchParams.get("symbol") || undefined,
       timeframe: (body && body.timeframe) || url.searchParams.get("timeframe") || url.searchParams.get("interval") || undefined,
-      source: "moex",
+      source: "binance",
       error_type: status ? classifyError(status) : "network_error",
       http_status: status || undefined
     };
