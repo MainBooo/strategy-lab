@@ -1,48 +1,42 @@
 from __future__ import annotations
 
-# Single source of truth for the "ready-made sets" filter buttons and the
-# per-ticker industry tag shown in the catalog. Kept as curated lists (not
-# derived from a MOEX classification endpoint - TQBR board-securities data
-# doesn't carry a sector field) so it stays in sync between the preset
-# buttons and the "отрасль" filter instead of drifting as two copies.
-SECURITY_PRESETS: dict[str, list[str]] = {
-    "top10": ["SBER","GAZP","LKOH","ROSN","NVTK","T","YDEX","MOEX","GMKN","VTBR"],
-    "top20": ["SBER","GAZP","LKOH","ROSN","NVTK","T","YDEX","MOEX","GMKN","VTBR","MAGN","CHMF","NLMK","ALRS","PHOR","SIBN","MTSS","IRAO","HYDR","AFLT"],
-    "banks": ["SBER","SBERP","VTBR","CBOM","BSPB"],
-    "oilgas": ["GAZP","LKOH","ROSN","NVTK","SIBN","TATN","TATNP","SNGS","SNGSP","BANE","BANEP","RNFT"],
-    "metals": ["GMKN","MAGN","CHMF","NLMK","ALRS","RUAL","ENPG","PHOR","AKRN","MTLR","MTLRP","UGLD","SELG"],
-    "it": ["YDEX","T","POSI","ASTR","DIAS","HEAD"],
-}
+"""Crypto-neutral catalog preset filters (spec section 47).
+
+Replaces the old curated Russian-sector ticker lists (banks/oilgas/metals/
+it, keyed to specific MOEX tickers) - Binance Spot symbols have no
+comparable sector-classification data source available from public market
+data alone, so presets here are limited to what can be verified
+structurally (quote asset) instead of invented industry categories
+(DeFi/L1/Meme) without a reliable metadata source.
+"""
+
+# Quote-asset filter chips shown in the instrument catalog/picker - USDT is
+# the default/primary choice for an ordinary user (spec section 4).
+QUOTE_ASSET_PRESETS = ("USDT", "USDC", "BTC", "FDUSD", "EUR")
+DEFAULT_QUOTE_ASSET = "USDT"
 
 PRESET_LABELS: dict[str, str] = {
-    "top10": "ТОП-10 ликвидных",
-    "top20": "ТОП-20",
-    "banks": "Банки",
-    "oilgas": "Нефть и газ",
-    "metals": "Металлургия",
-    "it": "IT",
+    "USDT": "USDT-пары",
+    "USDC": "USDC-пары",
+    "BTC": "BTC-пары",
+    "FDUSD": "FDUSD-пары",
+    "EUR": "EUR-пары",
+    "top_volume": "ТОП по объёму",
+    "favorites": "Избранное",
 }
 
-SECTOR_LABELS: dict[str, str] = {
-    "banks": "Финансы",
-    "oilgas": "Нефть и газ",
-    "metals": "Металлургия",
-    "it": "IT",
-}
 
-# A ticker can appear in multiple curated lists (e.g. top10 & oilgas); pick
-# the first matching *sector* list (banks/oilgas/metals/it) for its industry
-# tag, falling back to a neutral label instead of leaving it blank.
-_SECTOR_ORDER = ["banks", "oilgas", "metals", "it"]
+def sector_for(quote_asset: str | None) -> str:
+    """A symbol's "sector" tag in the crypto-neutral catalog is just its
+    quote asset (BTCUSDT -> "USDT") - the only structurally-verifiable
+    grouping available without inventing industry metadata."""
+    quote_asset = str(quote_asset or "").upper()
+    return quote_asset or "Прочее"
 
 
-def sector_for(ticker: str) -> str:
-    ticker = str(ticker).upper()
-    for key in _SECTOR_ORDER:
-        if ticker in SECURITY_PRESETS[key]:
-            return SECTOR_LABELS[key]
-    return "Прочее"
-
-
-def is_liquid(ticker: str) -> bool:
-    return str(ticker).upper() in SECURITY_PRESETS["top20"]
+def is_liquid(status: str | None) -> bool:
+    """"Liquid" here means "Binance itself reports this symbol as actively
+    tradable" (status == TRADING) - true 24h-volume-based liquidity ranking
+    is a live metric (see market_ticker.get_top_by_volume), not a static
+    catalog property."""
+    return str(status or "").upper() == "TRADING"
