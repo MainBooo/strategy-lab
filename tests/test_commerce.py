@@ -63,8 +63,8 @@ def _promote(email: str, value: int = 1):
 def _valid_order_payload(**overrides):
     payload = {
         "title": "Пробой утреннего диапазона",
-        "market": "Акции MOEX",
-        "symbols": "SBER",
+        "market": "Binance Spot",
+        "symbols": "BTCUSDT",
         "timeframes": ["10m"],
         "directions": ["long"],
         "entry_rules": "Вход после подтверждённого пробоя диапазона.",

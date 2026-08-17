@@ -1,7 +1,7 @@
 """Stage 8 performance check: does a long Market Replay session (thousands of
 bars stepped at high speed) leak memory or degrade in the browser?
 
-Drives a real session on SBER/TQBR/10m (252k+ candles available) far enough
+Drives a real session on BTCUSDT/10m (thousands of candles available) far enough
 back in history that there are several thousand bars ahead, then calls the
 page's internal _step() directly in a tight loop (bypassing the setInterval
 UI delay - this is what "max speed" play effectively does bar-for-bar, just
@@ -52,12 +52,12 @@ def main() -> int:
         page.click("[data-tab='replay']")
         page.wait_for_selector("#replayRoot #mrTicker", state="visible", timeout=15000)
 
-        page.fill("#mrTicker", "SBER")
+        page.fill("#mrTicker", "BTCUSDT")
         page.select_option("#mrTimeframe", "10m")
         page.fill("#mrStartDate", "2020-01-10")
         page.fill("#mrStartHour", "10")
         page.fill("#mrStartMinute", "0")
-        page.fill("#mrBalance", "1000000")
+        page.fill("#mrBalance", "10000")
 
         page.evaluate("document.querySelector('#mrStart').click()")
         page.wait_for_selector("#mrPlayerRoot:not(.hidden)", timeout=20000)

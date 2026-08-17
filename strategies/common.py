@@ -213,7 +213,7 @@ def simulate_exit(df: pd.DataFrame, entry_i: int, side: str, stop: float, take: 
 
 def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
     params=params or {}
-    starting_capital=float(params.get("starting_capital",1_000_000))
+    starting_capital=float(params.get("starting_capital",10_000))
     # lot_size is a Binance stepSize (e.g. 0.00001 for BTCUSDT), not a MOEX
     # LOTSIZE - int()-casting it truncates any stepSize below 1 to 0, then
     # max(1, 0) silently forces every position to a whole-unit increment.

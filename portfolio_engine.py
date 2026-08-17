@@ -38,7 +38,7 @@ def simulate_portfolio(portfolio: dict, run_results: list[dict], results_dir: Pa
     ``portfolio["instruments"]`` when omitted, for the older single-strategy
     callers that don't pass them explicitly."""
     events=[]
-    starting=float(portfolio.get("starting_capital",1_000_000))
+    starting=float(portfolio.get("starting_capital",10_000))
     lot_map={str(x["ticker"]):int(x.get("lot_count",1)) for x in portfolio.get("instruments",[])}
     # lot_size is a Binance stepSize (e.g. 0.00001 for BTCUSDT), not a MOEX
     # LOTSIZE - must stay float; int()-casting would truncate any stepSize
