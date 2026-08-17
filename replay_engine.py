@@ -54,26 +54,25 @@ def date_to_ts(date_str: str, hour: int = 0, minute: int = 0) -> int:
     return calendar.timegm((y, m, d, int(hour), int(minute), 0, 0, 0, 0))
 
 
-def create_session(*, ticker: str, board: str, timeframe: str, start_date: str, start_hour: int,
+def create_session(*, symbol: str, timeframe: str, start_date: str, start_hour: int,
                     start_minute: int, starting_balance: float, commission_rate: float, slippage_bps: float,
-                    speed: float, lot_size: int, market: str = "shares", engine: str = "stock") -> dict:
+                    speed: float, lot_size: float) -> dict:
     if timeframe not in NATIVE_TIMEFRAMES:
         raise ReplayError(f"Для Market Replay нужен базовый таймфрейм из: {', '.join(NATIVE_TIMEFRAMES)}")
     start_ts = date_to_ts(start_date, start_hour, start_minute)
-    session = db.create_session(ticker=ticker.upper(), board=board, timeframe=timeframe, lot_size=lot_size,
+    session = db.create_session(symbol=symbol.upper(), timeframe=timeframe, lot_size=lot_size,
                                  start_ts=start_ts, starting_balance=starting_balance,
-                                 commission_rate=commission_rate, slippage_bps=slippage_bps, speed=speed,
-                                 market=market, engine=engine)
+                                 commission_rate=commission_rate, slippage_bps=slippage_bps, speed=speed)
     return visible_state(session)
 
 
 def visible_state(session: dict, *, context_bars: int = DEFAULT_HISTORY_CONTEXT) -> dict:
-    history = store.get_candles(session["ticker"], session["board"], session["timeframe"],
+    history = store.get_candles(session["symbol"], session["timeframe"],
                                  before=session["start_ts"], limit=context_bars)
-    revealed = store.get_candles_ascending(session["ticker"], session["board"], session["timeframe"],
+    revealed = store.get_candles_ascending(session["symbol"], session["timeframe"],
                                             ts_from=session["start_ts"], limit=session["reveal_index"]) \
         if session["reveal_index"] > 0 else []
-    total_available = store.count_candles_from(session["ticker"], session["board"], session["timeframe"],
+    total_available = store.count_candles_from(session["symbol"], session["timeframe"],
                                                  ts_from=session["start_ts"])
     current_bar = revealed[-1] if revealed else None
     equity = _equity(session, current_bar["close"] if current_bar else None)
@@ -131,13 +130,13 @@ def step(session_id: str, bars: int = 1) -> dict:
     session = _require_session(session_id)
     for _ in range(max(1, min(bars, 500))):
         session = db.get_session(session_id)
-        total = store.count_candles_from(session["ticker"], session["board"], session["timeframe"],
+        total = store.count_candles_from(session["symbol"], session["timeframe"],
                                            ts_from=session["start_ts"])
         if session["reveal_index"] >= total:
             break
         _push_undo(session)
         new_index = session["reveal_index"] + 1
-        new_bar = store.get_candles_ascending(session["ticker"], session["board"], session["timeframe"],
+        new_bar = store.get_candles_ascending(session["symbol"], session["timeframe"],
                                                ts_from=session["start_ts"], limit=new_index)[-1]
         session = db.update_session(session_id, reveal_index=new_index)
         _check_stop_take(session, new_bar)
@@ -161,9 +160,9 @@ def goto(session_id: str, target_date: str, target_hour: int = 0, target_minute:
     target_ts = date_to_ts(target_date, target_hour, target_minute)
     if target_ts < session["start_ts"]:
         raise ReplayError("Дата раньше начала сессии")
-    total = store.count_candles_from(session["ticker"], session["board"], session["timeframe"],
+    total = store.count_candles_from(session["symbol"], session["timeframe"],
                                       ts_from=session["start_ts"])
-    all_bars = store.get_candles_ascending(session["ticker"], session["board"], session["timeframe"],
+    all_bars = store.get_candles_ascending(session["symbol"], session["timeframe"],
                                             ts_from=session["start_ts"], limit=total) if total else []
     count = 0
     for c in all_bars:
@@ -176,7 +175,7 @@ def goto(session_id: str, target_date: str, target_hour: int = 0, target_minute:
     # Re-evaluate stop/take across every bar we just jumped over, in order,
     # so a level crossed mid-jump is still honoured instead of silently skipped.
     if count > 0:
-        crossed = store.get_candles_ascending(session["ticker"], session["board"], session["timeframe"],
+        crossed = store.get_candles_ascending(session["symbol"], session["timeframe"],
                                                ts_from=session["start_ts"], limit=count)
         for c in crossed:
             session = db.get_session(session_id)

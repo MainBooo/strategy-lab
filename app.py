@@ -9,7 +9,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from datetime import date,timedelta
+from datetime import date,timedelta,timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -18,18 +18,17 @@ from flask import Flask,jsonify,render_template,request,send_file,Response
 
 import backtest_candles
 import backtests_db as bdb
+import binance_catalog
 import charts_db as cdb
-import legacy_candle_migration
 import market_data_store as mds
 import market_data_sync as mds_sync
 import replay_db as rdb
 import replay_engine
 from candle_api import get_candles,tick_availability
 from feature_flags import has_feature
-from downloader import download_moex_candles
+from downloader import download_binance_candles
 from jobs import JobStore
 from market_ticker import get_instrument_info,get_market_ticker,get_prices,get_realtime,realtime_config
-from moex_catalog import load_catalog,security_by_ticker
 from optimizer import run_batch,run_optimizer
 from portfolio_engine import simulate_portfolio
 from portfolio_store import PortfolioStore
@@ -37,7 +36,7 @@ from rate_limit import BoundedConcurrency,SlidingWindowLimiter,client_ip
 import auth
 import auth_db
 import auth_routes
-from sectors import PRESET_LABELS,SECURITY_PRESETS,is_liquid,sector_for
+from sectors import PRESET_LABELS,QUOTE_ASSET_PRESETS,is_liquid,sector_for
 from strategies.common import load_candles
 from strategies.false_breakout import run_false_breakout
 from strategies.head_shoulders import run_head_shoulders
@@ -47,11 +46,14 @@ import strategy_presets_db as spdb
 from timeframes import ALL_TIMEFRAMES,NATIVE_TIMEFRAMES,BACKTEST_TIMEFRAMES,canonical,backtest_timeframe_label
 
 BASE_DIR=Path(__file__).resolve().parent; DATA_DIR=BASE_DIR/"data"; RESULTS_DIR=BASE_DIR/"results"; STORAGE=BASE_DIR/"storage"
-LOGS_DIR=Path(os.environ.get("MOEX_LAB_LOGS_DIR") or BASE_DIR/"logs")
+# STRATEGY_LAB_LOGS_DIR is the current name; MOEX_LAB_LOGS_DIR is read as a
+# fallback so an existing production deployment's env var keeps working
+# across this migration without an immediate manual rename.
+LOGS_DIR=Path(os.environ.get("STRATEGY_LAB_LOGS_DIR") or os.environ.get("MOEX_LAB_LOGS_DIR") or BASE_DIR/"logs")
 BACKTEST_CACHE_DIR=DATA_DIR/"backtest_cache"
 DATA_DIR.mkdir(exist_ok=True);RESULTS_DIR.mkdir(exist_ok=True);STORAGE.mkdir(exist_ok=True);LOGS_DIR.mkdir(parents=True,exist_ok=True)
 BACKTEST_CACHE_DIR.mkdir(exist_ok=True)
-CATALOG_FILE=STORAGE/"securities_TQBR.json"; PORTFOLIOS=PortfolioStore(STORAGE/"portfolios.json")
+CATALOG_FILE=STORAGE/"binance_instruments.json"; PORTFOLIOS=PortfolioStore(STORAGE/"portfolios.json")
 JOBS=JobStore(STORAGE/"jobs")
 bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
@@ -59,26 +61,24 @@ spdb.init_db(STORAGE/"strategy_presets.db")
 auth_db.init_db(STORAGE/"users.db")
 auth_routes.configure(PORTFOLIOS)
 
-# The candle cache (re-fetchable from MOEX, unlike backtests/charts/replay
+# The candle cache (re-fetchable from Binance, unlike backtests/charts/replay
 # data above) lives in its own directory, outside both the frontend source
 # tree and STORAGE's "real user data" files, so a size-bounded cache can be
 # cleared/relocated without touching anything a user would consider "their
 # data". MARKET_CACHE_PATH can point this at any directory (e.g. a larger
-# disk); the one-time move below preserves an already-downloaded cache from
-# this app's previous location instead of re-downloading everything.
+# disk). Deliberately a NEW filename (binance_candles.db, not the old
+# market_data.db) - the old file holds MOEX-schema rows that must never be
+# reinterpreted as Binance data; it is left untouched on disk as a legacy
+# backup, never read or moved by this process.
 MARKET_CACHE_DIR=Path(os.environ.get("MARKET_CACHE_PATH") or (BASE_DIR/"cache"/"market-data"))
 MARKET_CACHE_DIR.mkdir(parents=True,exist_ok=True)
-_market_data_db=MARKET_CACHE_DIR/"market_data.db"
-_legacy_market_data_db=STORAGE/"market_data.db"
-if not _market_data_db.exists() and _legacy_market_data_db.exists():
-    import shutil as _shutil
-    for _suffix in ("","-wal","-shm"):
-        _src=_legacy_market_data_db.with_name(_legacy_market_data_db.name+_suffix)
-        if _src.exists():
-            _shutil.move(str(_src),str(_market_data_db.with_name(_market_data_db.name+_suffix)))
-    logging.getLogger(__name__).info("Moved existing market data cache from %s to %s",_legacy_market_data_db,_market_data_db)
-mds.init_db(_market_data_db)
-rdb.init_db(STORAGE/"replay.db")
+mds.init_db(MARKET_CACHE_DIR/"binance_candles.db")
+# Same reasoning as the candle cache above: replay_sessions' old schema
+# (ticker/board/market/engine columns) is MOEX-specific and incompatible
+# with the new symbol-only schema - a fresh file avoids either crashing on
+# the old columns or silently misreading old MOEX replay sessions as if
+# they were Binance ones. Old storage/replay.db is left untouched.
+rdb.init_db(STORAGE/"replay_binance.db")
 
 _CACHE_EVICTION_INTERVAL_SECONDS=6*3600
 def _market_cache_eviction_loop():
@@ -91,12 +91,12 @@ def _market_cache_eviction_loop():
 threading.Thread(target=_market_cache_eviction_loop,daemon=True).start()
 
 CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
-try:
-    _migration_summary=legacy_candle_migration.migrate_if_empty(DATA_DIR)
-    if _migration_summary:
-        logging.getLogger(__name__).info("Imported legacy candle CSVs into market_data.db: %s",_migration_summary)
-except Exception:
-    logging.getLogger(__name__).exception("Legacy candle CSV migration failed (non-fatal, chart data will re-download as needed)")
+# Legacy MOEX CSV -> market_data.db auto-import (legacy_candle_migration.py)
+# is deliberately NOT run against the new Binance-schema store - those CSVs
+# are old Russian-equity candles, never Binance data, and importing them
+# here would corrupt the new schema with rows that only look superficially
+# similar. The old CSVs and the old market_data.db stay on disk untouched,
+# reachable only by that now-legacy, no-longer-invoked module.
 # Every chart-layout/drawing/request row carries a user id - the "switched
 # on later without another migration" this comment used to promise before
 # accounts existed. A logged-in user now gets their own private namespace;
@@ -212,14 +212,28 @@ def _handle_unexpected_error(exc):
     return message, 500
 
 
-def catalog(refresh=False): return load_catalog(CATALOG_FILE,"TQBR",refresh)
+def catalog(refresh=False): return binance_catalog.load_catalog(CATALOG_FILE,refresh)
 
 def ticker_from_file(name:str)->str: return Path(name).name.split("_")[0].upper()
 
-def lot_size_for(ticker:str)->int: return int(security_by_ticker(catalog(),ticker).get("LOTSIZE") or 1)
+def instrument_for(symbol:str)->dict|None: return binance_catalog.instrument_by_symbol(catalog(),symbol)
+
+# lot_size/lot_count keep their historical names (and the `shares = lot_count
+# * lot_size` formula throughout portfolio_engine.py/strategies/common.py is
+# UNCHANGED) but now mean something different: lot_size is the symbol's
+# Binance stepSize (the exchange's minimum quantity increment) instead of a
+# MOEX LOTSIZE, and lot_count is how many of that increment to hold instead
+# of how many round lots. `shares = lot_count * lot_size` is therefore still
+# exactly the position's base-asset quantity, already floored to stepSize by
+# construction (lot_count is always an integer) - this is spec's required
+# "floor to stepSize, never round(2)" without touching the money-math code.
+def step_size_for(symbol:str)->float:
+    inst=instrument_for(symbol)
+    step=inst.get("stepSize") if inst else None
+    return float(step) if step and step>0 else 1.0
 
 def run_strategy(strategy:str,source:Path,params:dict):
-    ticker=ticker_from_file(source.name); params=dict(params or {}); params.setdefault("lot_size",lot_size_for(ticker)); params.setdefault("lot_count",1); params.setdefault("starting_capital",1_000_000)
+    ticker=ticker_from_file(source.name); params=dict(params or {}); params.setdefault("lot_size",step_size_for(ticker)); params.setdefault("lot_count",1); params.setdefault("starting_capital",1_000_000)
     if strategy=="false_breakout": return run_false_breakout(source,params,RESULTS_DIR)
     if strategy=="head_shoulders": return run_head_shoulders(source,params,RESULTS_DIR)
     if strategy in RUNNERS: return RUNNERS[strategy](source,params,RESULTS_DIR)
@@ -248,14 +262,14 @@ def _data_status(till:str|None)->str:
     except ValueError:return "fresh"
     return "fresh" if (date.today()-till_date).days<=DATA_FRESHNESS_DAYS else "stale"
 
-def enriched_catalog(refresh=False)->list[dict]:
-    items=catalog(refresh); idx=_local_data_index(); out=[]
+def enriched_catalog(refresh=False,quote_asset:str|None=None)->list[dict]:
+    items=binance_catalog.search(catalog(refresh),quote_asset=quote_asset); idx=_local_data_index(); out=[]
     for item in items:
-        ticker=str(item.get("SECID",""))
-        local=idx.get(ticker)
+        symbol=str(item.get("symbol",""))
+        local=idx.get(symbol)
         out.append({**item,
-                     "SECTOR":sector_for(ticker),
-                     "IS_LIQUID":is_liquid(ticker),
+                     "SECTOR":sector_for(item.get("quoteAsset")),
+                     "IS_LIQUID":is_liquid(item.get("status")),
                      "DATA_STATUS":_data_status(local["till"] if local else None),
                      "DATA_UPDATED_AT":local["till"] if local else None})
     return out
@@ -311,16 +325,22 @@ def _enriched_strategy_catalog()->dict:
 def index():
     return render_template("index.html",
         defaults={"from_date":(date.today()-timedelta(days=365)).isoformat(),"till_date":date.today().isoformat()},
-        strategies=_enriched_strategy_catalog(),security_presets=SECURITY_PRESETS,preset_labels=PRESET_LABELS,
-        realtime_config=realtime_config())
+        # No static ticker->list presets exist for a dynamic Binance catalog
+        # (spec: don't hand-roll the whole catalog) - quote_asset_presets
+        # names the filter chips instead; the frontend catalog UI still
+        # needs to switch from consuming security_presets to fetching
+        # /api/securities?quoteAsset=... itself (tracked as follow-up work).
+        strategies=_enriched_strategy_catalog(),security_presets={},preset_labels=PRESET_LABELS,
+        quote_asset_presets=QUOTE_ASSET_PRESETS,realtime_config=realtime_config())
 
 @app.get("/api/securities")
 def securities():
     refresh=request.args.get("refresh")=="1"
-    try:return jsonify(enriched_catalog(refresh))
+    quote_asset=(request.args.get("quoteAsset") or request.args.get("quote_asset") or "").strip().upper() or None
+    try:return jsonify(enriched_catalog(refresh,quote_asset=quote_asset))
     except Exception:
-        app.logger.exception("Failed to load MOEX securities catalog (refresh=%s)",refresh)
-        return jsonify({"error":"Справочник MOEX временно недоступен. Попробуйте позже."}),500
+        app.logger.exception("Failed to load Binance instrument catalog (refresh=%s)",refresh)
+        return jsonify({"error":"Справочник инструментов Binance временно недоступен. Попробуйте позже."}),500
 
 @app.get("/api/market-ticker")
 def market_ticker_endpoint():
@@ -350,8 +370,13 @@ def market_realtime():
 
 @app.get("/api/securities/<ticker>/info")
 def security_info(ticker):
-    board=(request.args.get("board") or "TQBR").strip().upper()
-    return jsonify(get_instrument_info(ticker.strip().upper(),board))
+    return jsonify(get_instrument_info(ticker.strip().upper()))
+
+@app.get("/api/instruments/<symbol>/info")
+def instrument_info(symbol):
+    """Crypto-neutral name for /api/securities/<ticker>/info - same handler,
+    same response shape. New frontend code should call this one."""
+    return jsonify(get_instrument_info(symbol.strip().upper()))
 
 @app.get("/api/strategies")
 def strategies(): return jsonify(_enriched_strategy_catalog())
@@ -360,8 +385,8 @@ def strategies(): return jsonify(_enriched_strategy_catalog())
 def files():
     items=[]
     for p in sorted(DATA_DIR.glob("*.csv"),key=lambda x:x.stat().st_mtime,reverse=True):
-        t=ticker_from_file(p.name); sec=security_by_ticker(catalog(),t)
-        items.append({"name":p.name,"ticker":t,"shortname":sec.get("SHORTNAME",t),"lot_size":int(sec.get("LOTSIZE") or 1),"size_kb":round(p.stat().st_size/1024,1)})
+        t=ticker_from_file(p.name); inst=instrument_for(t) or {}
+        items.append({"name":p.name,"ticker":t,"shortname":inst.get("baseAsset",t),"lot_size":step_size_for(t),"size_kb":round(p.stat().st_size/1024,1)})
     return jsonify(items)
 
 @app.post("/api/download-batch")
@@ -381,8 +406,8 @@ def download_batch():
             # TICKER_Nm_YYYY-MM-DD_YYYY-MM-DD.csv shape blocks path
             # traversal via "../" or separators smuggled through those fields.
             return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
-        info=download_moex_candles(ticker,str(payload.get("board","TQBR")),int(payload.get("interval",10)),str(payload["from_date"]),str(payload["till_date"]),DATA_DIR/filename)
-        sec=security_by_ticker(catalog(),ticker);rows.append({"ticker":ticker,"file":filename,"lot_size":int(sec.get("LOTSIZE") or 1),**info})
+        info=download_binance_candles(ticker,int(payload.get("interval",10)),str(payload["from_date"]),str(payload["till_date"]),DATA_DIR/filename)
+        rows.append({"ticker":ticker,"file":filename,"lot_size":step_size_for(ticker),**info})
     return jsonify({"ok":True,"rows":rows})
 
 @app.post("/api/backtest")
@@ -572,7 +597,7 @@ def portfolio_data_coverage(portfolio_id):
     strictly finer native base - see backtest_candles.py/timeframes.py).
     Omitted or "10m" (the pinned-file default): zero extra cost, identical
     to the pre-existing period-only behaviour. Any other value can trigger a
-    real MOEX sync attempt to know for sure - that is the only honest way to
+    real Binance sync attempt to know for sure - that is the only honest way to
     ever report a timeframe as unavailable rather than "not yet checked",
     which is why this route now carries @heavy_sync like the sibling
     download-data endpoint."""
@@ -619,7 +644,7 @@ def portfolio_data_coverage(portfolio_id):
               "missing_from":missing_from,"missing_to":missing_to}
         if check_timeframe:
             result=backtest_candles.fetch_full_range(
-                ticker=ticker,board="TQBR",timeframe=canonical(timeframe),
+                symbol=ticker,timeframe=canonical(timeframe),
                 date_from=date_from or (file_range[0] if file_range else None) or "",
                 date_till=date_to or (file_range[1] if file_range else None) or "",
             )
@@ -659,7 +684,7 @@ def portfolio_instrument_download_data(portfolio_id,ticker):
     else:
         from_date,till_date=date_from,date_to
 
-    interval=10;board="TQBR"
+    interval=10
     filename=f"{ticker}_{interval}m_{from_date}_{till_date}.csv"
     if not FILENAME_RE.match(filename):
         # Same path-traversal guard as /api/download-batch - ticker/dates feed
@@ -667,7 +692,7 @@ def portfolio_instrument_download_data(portfolio_id,ticker):
         return jsonify({"error":f"Некорректные параметры запроса для {ticker}"}),400
 
     try:
-        info=download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
+        info=download_binance_candles(ticker,interval,from_date,till_date,DATA_DIR/filename)
     except Exception as exc:
         app.logger.exception("Instrument data download failed for %s in portfolio %s",ticker,portfolio_id)
         return jsonify({"error":f"Не удалось загрузить {ticker}: {exc}"}),502
@@ -719,8 +744,7 @@ def _execute_build_job(job_id:str,payload:dict)->None:
     interval=int(payload.get("interval",10))
     from_date=str(payload.get("from_date") or (date.today()-timedelta(days=365)).isoformat())
     till_date=str(payload.get("till_date") or date.today().isoformat())
-    board=str(payload.get("board","TQBR"))
-    allocation=payload.get("allocation") or {"mode":"equal_lots"}
+    allocation=payload.get("allocation") or {"mode":"equal_capital"}
     starting_capital=float(payload.get("starting_capital") or 1_000_000)
 
     JOBS.update(job_id,status="running",stage="Проверяем локальные данные")
@@ -746,7 +770,7 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                         # Same guard as /api/download-batch - filename feeds
                         # straight into a filesystem path below.
                         raise ValueError(f"Некорректный тикер или диапазон дат для {ticker}")
-                    download_moex_candles(ticker,board,interval,from_date,till_date,DATA_DIR/filename)
+                    download_binance_candles(ticker,interval,from_date,till_date,DATA_DIR/filename)
                     app.logger.info("Build job %s: downloaded %s (%s)",job_id,ticker,filename)
                 except Exception as exc:
                     app.logger.exception("Build job %s: download failed for %s",job_id,ticker)
@@ -762,7 +786,7 @@ def _execute_build_job(job_id:str,payload:dict)->None:
                 JOBS.update(job_id,completed=idx,percent=round(idx/total*100) if total else 100,errors=errors)
                 continue
 
-            prepared.append({"ticker":ticker,"file":filename,"lot_size":lot_size_for(ticker),"_last_close":last_close})
+            prepared.append({"ticker":ticker,"file":filename,"lot_size":step_size_for(ticker),"_last_close":last_close})
             JOBS.update(job_id,completed=idx,percent=round(idx/total*100) if total else 100,errors=errors)
 
         if not prepared:
@@ -772,11 +796,18 @@ def _execute_build_job(job_id:str,payload:dict)->None:
             return
 
         JOBS.update(job_id,stage="Сохраняем инструменты",current_ticker=None)
-        mode=str(allocation.get("mode","equal_lots"))
+        # "equal_lots" (a fixed round-lot count per instrument) doesn't map
+        # onto crypto - default is "equal_capital" (spec §22: equal weights/
+        # equal capital/manual). lot_size here is the symbol's Binance
+        # stepSize (a small float, e.g. 0.00001 for BTCUSDT) - it must never
+        # be int()-cast or floored to a minimum of 1 the way a MOEX LOTSIZE
+        # was; lot_count (an integer count of that step) is what actually
+        # gets floored, giving shares=lot_count*lot_size floored to stepSize.
+        mode=str(allocation.get("mode","equal_capital"))
         manual_lots=allocation.get("lots") or {}
         n=len(prepared)
         for item in prepared:
-            lot_size=max(1,int(item["lot_size"]))
+            lot_size=max(1e-12,float(item["lot_size"]))
             last_close=item.pop("_last_close",None)
             if mode=="manual":
                 lot_count=max(1,int(manual_lots.get(item["ticker"],1)))
@@ -889,7 +920,7 @@ def _execute_portfolio_job(job_id:str,portfolio:dict)->None:
                 started=time.monotonic()
                 params=dict(portfolio.get("params",{}))
                 params.update({"lot_count":int(instrument.get("lot_count",1)),
-                               "lot_size":int(instrument.get("lot_size") or lot_size_for(ticker))})
+                               "lot_size":float(instrument.get("lot_size") or step_size_for(ticker))})
                 result=_run_strategy_with_timeout(portfolio.get("default_strategy_id") or portfolio.get("strategy","false_breakout"),source,params)
                 app.logger.info("Portfolio job %s: %s done in %.2fs, trades=%s",
                                  job_id,ticker,time.monotonic()-started,result["summary"]["trades"])
@@ -1048,7 +1079,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
                 _record_failure(idx,ticker,strategy_id,strategy_name,combo,"validate","not_in_portfolio",f"{ticker} отсутствует в портфеле."); continue
             native_file=DATA_DIR/Path(instrument["file"]).name if instrument.get("file") else None
             source=backtest_candles.get_or_build_source(
-                ticker=ticker,board="TQBR",timeframe=tf,date_from=date_from,date_till=date_till,
+                symbol=ticker,timeframe=tf,date_from=date_from,date_till=date_till,
                 cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
                 native_file_interval=_pinned_file_interval(instrument.get("file")),
             )
@@ -1057,7 +1088,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
                                  f"Для {ticker} отсутствуют данные, необходимые для тестирования на {tf_label}."); continue
 
             lots=int(combo.get("lots") if combo.get("lots") is not None else instrument.get("lot_count",1))
-            lot_size=int(instrument.get("lot_size") or lot_size_for(ticker))
+            lot_size=float(instrument.get("lot_size") or step_size_for(ticker))
             params=dict(portfolio.get("params") or {}); params.update(combo.get("parameters") or {})
             params.update({"lot_count":lots,"lot_size":lot_size,"date_from":date_from,"date_till":date_till})
 
@@ -1265,7 +1296,7 @@ def get_backtest_candles(run_id):
     native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
     tf=canonical(str(run.get("timeframe") or "10m"))
     source=backtest_candles.get_or_build_source(
-        ticker=ticker,board="TQBR",timeframe=tf,date_from=run.get("date_from"),date_till=run.get("date_to"),
+        symbol=ticker,timeframe=tf,date_from=run.get("date_from"),date_till=run.get("date_to"),
         cache_dir=BACKTEST_CACHE_DIR,native_file=native_file,
         native_file_interval=_pinned_file_interval(instrument_file),
     )
@@ -1312,7 +1343,7 @@ def get_backtest_trade(run_id,trade_id):
         instrument_file=next((i["file"] for p in PORTFOLIOS.list() for i in p.get("instruments",[]) if i["ticker"]==trade["ticker"]),None)
         native_file=DATA_DIR/Path(instrument_file).name if instrument_file else None
         source=backtest_candles.get_or_build_source(
-            ticker=trade["ticker"],board="TQBR",timeframe=canonical(str(run.get("timeframe") or "10m")),
+            symbol=trade["ticker"],timeframe=canonical(str(run.get("timeframe") or "10m")),
             date_from=run.get("date_from"),date_till=run.get("date_to"),cache_dir=BACKTEST_CACHE_DIR,
             native_file=native_file,native_file_interval=_pinned_file_interval(instrument_file),
         )
@@ -1396,9 +1427,8 @@ def _forbidden_feature(feature:str):
 def api_candles():
     if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     args=request.args
-    ticker=(args.get("symbol") or args.get("ticker") or "").strip().upper()
-    if not ticker:return jsonify({"error":"Не указан тикер"}),400
-    board=args.get("board","TQBR")
+    symbol=(args.get("symbol") or args.get("ticker") or "").strip().upper()
+    if not symbol:return jsonify({"error":"Не указан символ"}),400
     timeframe=args.get("timeframe","1d")
     till_date=args.get("to") or date.today().isoformat()
     # No `from` = "give me the tail of the full available history" (the
@@ -1407,12 +1437,16 @@ def api_candles():
     # this doesn't fetch more than requested - it only removes the old
     # 365-day floor that used to make hasOlder/nextCursor falsely report
     # "no more history" past a year back. candle_api._ensure_coverage caps
-    # how much it'll backfill from MOEX in a single request regardless
+    # how much it'll backfill from Binance in a single request regardless
     # (see market_data_sync.sync_native_timeframe's max_pages).
     from_date=args.get("from") or mds_sync.EARLIEST_PLAUSIBLE_DATE
     try:
-        from_date=date.fromtimestamp(int(from_date)).isoformat() if from_date.isdigit() else from_date
-        till_date=date.fromtimestamp(int(till_date)).isoformat() if till_date.isdigit() else till_date
+        # utcfromtimestamp, not fromtimestamp: a numeric cursor must resolve
+        # to the same UTC calendar date regardless of the server's local
+        # timezone - Binance is 24/7 UTC end to end, no MSK/local convention
+        # applies here.
+        from_date=date.fromtimestamp(int(from_date),tz=timezone.utc).isoformat() if from_date.isdigit() else from_date
+        till_date=date.fromtimestamp(int(till_date),tz=timezone.utc).isoformat() if till_date.isdigit() else till_date
     except (ValueError,OSError):
         return jsonify({"error":"Некорректный диапазон дат"}),400
     try:limit=max(50,min(20000,int(args.get("limit",5000))))
@@ -1421,14 +1455,14 @@ def api_candles():
     try:before=int(before) if before else None
     except ValueError:return jsonify({"error":"Некорректный курсор before"}),400
     try:
-        result=get_candles(DATA_DIR,ticker=ticker,board=board,timeframe=timeframe,from_date=from_date,
+        result=get_candles(DATA_DIR,symbol=symbol,timeframe=timeframe,from_date=from_date,
                              till_date=till_date,limit=limit,before=before)
     except ValueError as exc:
         return jsonify({"error":str(exc)}),400
     except Exception as exc:
-        app.logger.exception("Candle lookup failed for %s/%s/%s",ticker,board,timeframe)
-        return jsonify({"error":f"Не удалось загрузить свечи {ticker}: {exc}"}),502
-    return jsonify({"symbol":ticker,"board":board,"timeframe":timeframe,**result})
+        app.logger.exception("Candle lookup failed for %s/%s",symbol,timeframe)
+        return jsonify({"error":f"Не удалось загрузить свечи {symbol}: {exc}"}),502
+    return jsonify({"symbol":symbol,"timeframe":timeframe,**result})
 
 @app.get("/api/chart/history")
 def api_chart_history():
@@ -1444,23 +1478,27 @@ def market_data_cache_stats():
 
 @app.get("/api/market-data/tick-coverage")
 def market_data_tick_coverage():
-    ticker=(request.args.get("ticker") or "").strip().upper()
-    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    ticker=(request.args.get("ticker") or request.args.get("symbol") or "").strip().upper()
+    if not ticker:return jsonify({"error":"Не указан символ"}),400
     return jsonify(tick_availability(ticker))
 
 @app.get("/api/market-data/instruments")
 def market_data_instruments():
     if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     q=(request.args.get("q") or "").strip().upper()
+    quote_asset=(request.args.get("quoteAsset") or request.args.get("quote_asset") or "").strip().upper() or None
     items_map:dict[str,dict]={}
-    for it in catalog():
-        ticker=str(it.get("SECID","")).strip()
-        if not ticker:continue
-        items_map[ticker]={"ticker":ticker,"board":"TQBR","shortname":it.get("SHORTNAME",ticker),
+    for it in binance_catalog.search(catalog(),quote_asset=quote_asset):
+        symbol=str(it.get("symbol","")).strip()
+        if not symbol:continue
+        items_map[symbol]={"symbol":symbol,"base":it.get("baseAsset"),"quote":it.get("quoteAsset"),
+                            "status":it.get("status"),"pricePrecision":it.get("quoteAssetPrecision"),
+                            "quantityPrecision":it.get("baseAssetPrecision"),"stepSize":it.get("stepSize"),
+                            "tickSize":it.get("tickSize"),"minNotional":it.get("minNotional"),
                             "timeframes":{},"last_synced_at":None}
     for r in mds.list_instruments_status():
-        entry=items_map.setdefault(r["ticker"],{"ticker":r["ticker"],"board":r["board"],
-                                                  "shortname":r["ticker"],"timeframes":{},"last_synced_at":None})
+        entry=items_map.setdefault(r["symbol"],{"symbol":r["symbol"],"base":None,"quote":None,"status":None,
+                                                  "timeframes":{},"last_synced_at":None})
         entry["timeframes"][r["timeframe"]]={"candle_count":r["candle_count"],"earliest_ts":r["earliest_ts"],
                                               "latest_ts":r["latest_ts"],"status":r["status"],
                                               "progress_pct":r["progress_pct"],"last_error":r["last_error"]}
@@ -1468,33 +1506,33 @@ def market_data_instruments():
             entry["last_synced_at"]=r["last_synced_at"]
     items=list(items_map.values())
     if q:
-        items=[it for it in items if q in it["ticker"] or q in (it["shortname"] or "").upper()]
-    items.sort(key=lambda it:(0 if it["timeframes"] else 1,it["ticker"]))
+        items=[it for it in items if q in it["symbol"] or q in str(it.get("base") or "")]
+    items.sort(key=lambda it:(0 if it["timeframes"] else 1,it["symbol"]))
     return jsonify({"items":items,"native_timeframes":list(NATIVE_TIMEFRAMES),"all_timeframes":list(ALL_TIMEFRAMES)})
 
-def _execute_market_data_sync_job(job_id:str,tickers:list[str],timeframes:list[str],mode:str,board:str)->None:
-    total=len(tickers)*len(timeframes)
+def _execute_market_data_sync_job(job_id:str,symbols:list[str],timeframes:list[str],mode:str)->None:
+    total=len(symbols)*len(timeframes)
     JOBS.update(job_id,status="running",stage="Загрузка…",total=total)
     completed=0; errors=[]
-    for ticker in tickers:
+    for symbol in symbols:
         if JOBS.is_cancel_requested(job_id):
             JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
         for tf in timeframes:
             if JOBS.is_cancel_requested(job_id):
                 JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
-            JOBS.update(job_id,current_ticker=f"{ticker} {tf}",stage=f"{ticker} · {tf}: подключение к MOEX…")
-            def _progress(pages,rows_added,span_from,span_till,_ticker=ticker,_tf=tf):
-                JOBS.update(job_id,stage=f"{_ticker} · {_tf}: страница {pages}, +{rows_added} свечей")
+            JOBS.update(job_id,current_ticker=f"{symbol} {tf}",stage=f"{symbol} · {tf}: подключение к Binance…")
+            def _progress(pages,rows_added,span_from,span_till,_symbol=symbol,_tf=tf):
+                JOBS.update(job_id,stage=f"{_symbol} · {_tf}: страница {pages}, +{rows_added} свечей")
             try:
-                result=mds_sync.sync_native_timeframe(ticker,board,tf,mode=mode,progress_cb=_progress,
+                result=mds_sync.sync_native_timeframe(symbol,tf,mode=mode,progress_cb=_progress,
                     should_cancel=lambda:JOBS.is_cancel_requested(job_id))
                 if result["status"]=="failed":
-                    errors.append({"ticker":ticker,"timeframe":tf,"error":result["error"]})
+                    errors.append({"symbol":symbol,"timeframe":tf,"error":result["error"]})
                 elif result["status"]=="canceled":
                     JOBS.update(job_id,status="canceled",stage="Остановлено пользователем");return
             except Exception as exc:
-                app.logger.exception("market-data sync failed for %s/%s",ticker,tf)
-                errors.append({"ticker":ticker,"timeframe":tf,"error":str(exc)})
+                app.logger.exception("market-data sync failed for %s/%s",symbol,tf)
+                errors.append({"symbol":symbol,"timeframe":tf,"error":str(exc)})
             completed+=1
             JOBS.update(job_id,completed=completed,percent=round(100*completed/total,1) if total else 100)
     JOBS.update(job_id,status=("completed_with_errors" if errors else "completed"),
@@ -1510,13 +1548,12 @@ def market_data_sync_start():
     bad_tf=[t for t in timeframes if t not in NATIVE_TIMEFRAMES]
     if bad_tf:return jsonify({"error":f"Эти таймфреймы не загружаются напрямую (агрегируются на лету): {', '.join(bad_tf)}"}),400
     mode=str(p.get("mode","initial")) if p.get("mode") in ("initial","continue","update") else "initial"
-    board=str(p.get("board","TQBR"))
     total=len(tickers)*len(timeframes)
     label=f"Загрузка данных: {', '.join(tickers[:3])}{'…' if len(tickers)>3 else ''}"
     if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
     job=JOBS.create(None,label,total,kind="market_data_sync",
-                     extra={"tickers":tickers,"timeframes":timeframes,"mode":mode,"board":board})
-    if not _start_heavy_job(_execute_market_data_sync_job,job["job_id"],tickers,timeframes,mode,board):
+                     extra={"tickers":tickers,"timeframes":timeframes,"mode":mode})
+    if not _start_heavy_job(_execute_market_data_sync_job,job["job_id"],tickers,timeframes,mode):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
         return jsonify({"error":HEAVY_BUSY_MESSAGE}),503
@@ -1532,17 +1569,17 @@ def _replay_error(exc:replay_engine.ReplayError,code:int=400):
 def replay_create():
     if not has_feature(_effective_user_id(),"CHART_ANALYSIS_ACCESS"):return _forbidden_feature("CHART_ANALYSIS_ACCESS")
     p=request.get_json(force=True) or {}
-    ticker=str(p.get("ticker","")).strip().upper()
-    if not ticker:return jsonify({"error":"Не указан тикер"}),400
+    symbol=str(p.get("symbol") or p.get("ticker") or "").strip().upper()
+    if not symbol:return jsonify({"error":"Не указан символ"}),400
     try:
         state=replay_engine.create_session(
-            ticker=ticker,board=str(p.get("board","TQBR")),timeframe=str(p.get("timeframe","1m")),
+            symbol=symbol,timeframe=str(p.get("timeframe","1m")),
             start_date=str(p.get("start_date")),start_hour=int(p.get("start_hour",10)),
             start_minute=int(p.get("start_minute",0)),
             starting_balance=float(p.get("starting_balance",1_000_000)),
             commission_rate=float(p.get("commission_rate",0.0005)),
             slippage_bps=float(p.get("slippage_bps",0)),speed=float(p.get("speed",1)),
-            lot_size=int(p.get("lot_size") or lot_size_for(ticker)))
+            lot_size=float(p.get("lot_size") or step_size_for(symbol)))
     except replay_engine.ReplayError as exc:return _replay_error(exc)
     except (ValueError,TypeError) as exc:return jsonify({"error":f"Некорректные параметры: {exc}"}),400
     return jsonify(state),201

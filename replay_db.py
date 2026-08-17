@@ -18,12 +18,9 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS replay_sessions (
     id TEXT PRIMARY KEY,
-    ticker TEXT NOT NULL,
-    board TEXT NOT NULL,
-    market TEXT NOT NULL DEFAULT 'shares',
-    engine TEXT NOT NULL DEFAULT 'stock',
+    symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
-    lot_size INTEGER NOT NULL DEFAULT 1,
+    lot_size REAL NOT NULL DEFAULT 1,
     start_ts INTEGER NOT NULL,
     reveal_index INTEGER NOT NULL DEFAULT 0,
     speed REAL NOT NULL DEFAULT 1,
@@ -34,7 +31,7 @@ CREATE TABLE IF NOT EXISTS replay_sessions (
     slippage_bps REAL NOT NULL DEFAULT 0,
     position_side TEXT,
     position_qty_lots INTEGER NOT NULL DEFAULT 0,
-    position_qty_shares INTEGER NOT NULL DEFAULT 0,
+    position_qty_shares REAL NOT NULL DEFAULT 0,
     position_avg_price REAL,
     position_stop_loss REAL,
     position_take_profit REAL,
@@ -44,7 +41,7 @@ CREATE TABLE IF NOT EXISTS replay_sessions (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_replay_sessions_ticker ON replay_sessions(ticker);
+CREATE INDEX IF NOT EXISTS idx_replay_sessions_symbol ON replay_sessions(symbol);
 CREATE INDEX IF NOT EXISTS idx_replay_sessions_status ON replay_sessions(status);
 
 CREATE TABLE IF NOT EXISTS replay_trades (
@@ -53,7 +50,7 @@ CREATE TABLE IF NOT EXISTS replay_trades (
     side TEXT NOT NULL,
     action TEXT NOT NULL,
     qty_lots INTEGER NOT NULL,
-    qty_shares INTEGER NOT NULL,
+    qty_shares REAL NOT NULL,
     fill_price REAL NOT NULL,
     commission REAL NOT NULL,
     realized_pnl REAL,
@@ -100,19 +97,19 @@ def new_session_id() -> str:
     return "replay_" + uuid.uuid4().hex[:16]
 
 
-def create_session(*, ticker: str, board: str, timeframe: str, lot_size: int, start_ts: int,
+def create_session(*, symbol: str, timeframe: str, lot_size: float, start_ts: int,
                     starting_balance: float, commission_rate: float, slippage_bps: float,
-                    speed: float, market: str = "shares", engine: str = "stock") -> dict:
+                    speed: float) -> dict:
     sid = new_session_id()
     now = time.time()
     with _connect() as conn:
         conn.execute(
             """INSERT INTO replay_sessions
-               (id, ticker, board, market, engine, timeframe, lot_size, start_ts, reveal_index, speed,
+               (id, symbol, timeframe, lot_size, start_ts, reveal_index, speed,
                 status, starting_balance, cash, commission_rate, slippage_bps, realized_pnl,
                 undo_stack_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'paused', ?, ?, ?, ?, 0, '[]', ?, ?)""",
-            (sid, ticker, board, market, engine, timeframe, lot_size, start_ts, speed,
+               VALUES (?, ?, ?, ?, ?, 0, ?, 'paused', ?, ?, ?, ?, 0, '[]', ?, ?)""",
+            (sid, symbol, timeframe, lot_size, start_ts, speed,
              starting_balance, starting_balance, commission_rate, slippage_bps, now, now),
         )
     return get_session(sid)

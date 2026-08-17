@@ -23,7 +23,7 @@ _MAX_PAGES = 200  # generous cap against a runaway loop; a realistic
 # backtest date range at 1m granularity is at most tens of thousands of
 # bars, comfortably under _MAX_PAGES * a several-thousand-candle page size.
 
-_INTERVAL_TO_TIMEFRAME = {1: "1m", 10: "10m", 60: "60m", 1440: "1d"}
+_INTERVAL_TO_TIMEFRAME = {1: "1m", 3: "3m", 5: "5m", 10: "10m", 15: "15m", 30: "30m", 60: "1h", 240: "4h", 1440: "1d"}
 
 
 def interval_to_timeframe(interval_minutes: int | None) -> str | None:
@@ -35,18 +35,18 @@ def interval_to_timeframe(interval_minutes: int | None) -> str | None:
     return _INTERVAL_TO_TIMEFRAME.get(int(interval_minutes))
 
 
-def fetch_full_range(*, ticker: str, board: str, timeframe: str, date_from: str, date_till: str,
-                      market: str = "shares", engine: str = "stock", page_limit: int = 5000) -> dict:
+def fetch_full_range(*, symbol: str, timeframe: str, date_from: str, date_till: str,
+                      page_limit: int = 5000) -> dict:
     """Honestly pulls every candle candle_api can produce for [date_from,
-    date_till] at `timeframe` - native fetch (auto-syncing from MOEX ISS)
-    or aggregation from a strictly finer native base, per candle_api's own
+    date_till] at `timeframe` - native fetch (auto-syncing from Binance) or
+    aggregation from a strictly finer native base, per candle_api's own
     AGGREGATE_TIMEFRAMES. Never fabricates a candle: an empty result means
-    MOEX genuinely has nothing there (or the timeframe can't be derived for
-    this ticker at all).
+    Binance genuinely has nothing there (or the timeframe can't be derived
+    for this symbol at all).
 
     Returns {"candles": [...] (ascending, unix-seconds), "covered": bool}.
     covered=True only when the pull reached back to date_from without
-    truncation; a ticker with SOME but not all of the requested range is
+    truncation; a symbol with SOME but not all of the requested range is
     covered=False, same "partial gap" concept /data-coverage already
     reports for the legacy pinned-file check.
     """
@@ -55,9 +55,9 @@ def fetch_full_range(*, ticker: str, board: str, timeframe: str, date_from: str,
     reached_start = False
     for _ in range(_MAX_PAGES):
         page = candle_api.get_candles(
-            None, ticker=ticker, board=board, timeframe=timeframe,
+            None, symbol=symbol, timeframe=timeframe,
             from_date=date_from, till_date=date_till, limit=page_limit,
-            before=before, market=market, engine=engine,
+            before=before,
         )
         candles = page.get("candles") or []
         if candles:
@@ -80,9 +80,9 @@ def materialize_csv(candles: list[dict], dest_path: Path) -> Path:
     """Writes candles (unix-seconds, ascending) as a CSV strategies/common.py's
     load_candles() can read as-is: header `datetime,open,high,low,close,volume`.
     Uses datetime.utcfromtimestamp - NOT fromtimestamp() (would depend on the
-    host's local timezone) - matching the "naive MSK wall-clock stored as if
-    it were UTC" convention already used end-to-end by candle_api.py,
-    market_data_sync.py and the frontend's parseNaiveDatetime()."""
+    host's local timezone) - since stored candle timestamps are genuinely
+    UTC (Binance klines' own open time), this is a plain, honest conversion
+    with no wall-clock reinterpretation needed."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["datetime,open,high,low,close,volume"]
     for c in candles:
@@ -100,10 +100,11 @@ def _infer_range_from_csv(path: Path) -> tuple[str, str] | None:
     without an explicit period still gets a real, bounded range to build an
     alternate timeframe on instead of refusing outright.
 
-    Pinned files keep MOEX's own column order (`open,close,high,low,value,
-    volume,begin,end` - see strategies/common.py's load_candles() aliasing),
-    not materialize_csv()'s own `datetime,...` shape, so the datetime column
-    must be located by header name rather than assumed to be first."""
+    Pinned files may keep the legacy MOEX column order (`open,close,high,low,
+    value,volume,begin,end` - see strategies/common.py's load_candles()
+    aliasing, kept for old data) or materialize_csv()'s own `datetime,...`
+    shape, so the datetime column must be located by header name rather than
+    assumed to be first."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -124,7 +125,7 @@ def _infer_range_from_csv(path: Path) -> tuple[str, str] | None:
     return (first[:10], last[:10])
 
 
-def get_or_build_source(*, ticker: str, board: str, timeframe: str, date_from: str | None,
+def get_or_build_source(*, symbol: str, timeframe: str, date_from: str | None,
                          date_till: str | None, cache_dir: Path, native_file: Path | None,
                          native_file_interval: int | None) -> Path | None:
     """Single entry point shared by backtest execution, the pre-flight
@@ -156,8 +157,8 @@ def get_or_build_source(*, ticker: str, board: str, timeframe: str, date_from: s
 
     if not date_from or not date_till:
         return None
-    result = fetch_full_range(ticker=ticker, board=board, timeframe=tf, date_from=date_from, date_till=date_till)
+    result = fetch_full_range(symbol=symbol, timeframe=tf, date_from=date_from, date_till=date_till)
     if not result["candles"]:
         return None
-    dest = cache_dir / f"{ticker.upper()}__{tf}__{date_from}__{date_till}.csv"
+    dest = cache_dir / f"{symbol.upper()}__{tf}__{date_from}__{date_till}.csv"
     return materialize_csv(result["candles"], dest)
