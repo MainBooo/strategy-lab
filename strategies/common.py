@@ -214,7 +214,12 @@ def simulate_exit(df: pd.DataFrame, entry_i: int, side: str, stop: float, take: 
 def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
     params=params or {}
     starting_capital=float(params.get("starting_capital",1_000_000))
-    lot_size=max(1,int(params.get("lot_size",1)))
+    # lot_size is a Binance stepSize (e.g. 0.00001 for BTCUSDT), not a MOEX
+    # LOTSIZE - int()-casting it truncates any stepSize below 1 to 0, then
+    # max(1, 0) silently forces every position to a whole-unit increment.
+    # lot_count (an integer step count) is what gets floored; shares =
+    # lot_size * lot_count is then already floor-to-stepSize by construction.
+    lot_size=max(1e-12,float(params.get("lot_size",1)))
     lot_count=max(1,int(params.get("lot_count",1)))
     shares=lot_size*lot_count
     risk_per_trade_pct=float(params.get("risk_per_trade_pct",0) or 0)
@@ -231,8 +236,14 @@ def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
             stop_dist_pct=abs(float(row["entry_price"])-float(row["stop_price"]))/float(row["entry_price"])
             if stop_dist_pct>0:
                 risk_amount=capital*risk_per_trade_pct
-                sized=int(risk_amount/(stop_dist_pct*float(row["entry_price"])))
-                lots=max(1,sized//lot_size)
+                # Raw base-asset quantity that risks risk_amount at this
+                # stop distance - must stay a float here (int() would
+                # truncate any BTC-scale quantity like 0.05 to 0 before it
+                # even reaches the stepSize floor below). The floor to a
+                # whole number of stepSize units happens in the next line,
+                # not here.
+                raw_qty=risk_amount/(stop_dist_pct*float(row["entry_price"]))
+                lots=max(1,int(raw_qty//lot_size))
                 trade_shares=lots*lot_size
         notional=trade_shares*float(row["entry_price"])
         if notional>capital:

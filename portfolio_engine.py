@@ -40,7 +40,10 @@ def simulate_portfolio(portfolio: dict, run_results: list[dict], results_dir: Pa
     events=[]
     starting=float(portfolio.get("starting_capital",1_000_000))
     lot_map={str(x["ticker"]):int(x.get("lot_count",1)) for x in portfolio.get("instruments",[])}
-    size_map={str(x["ticker"]):int(x.get("lot_size",1)) for x in portfolio.get("instruments",[])}
+    # lot_size is a Binance stepSize (e.g. 0.00001 for BTCUSDT), not a MOEX
+    # LOTSIZE - must stay float; int()-casting would truncate any stepSize
+    # below 1 to 0 and silently force whole-unit position sizes downstream.
+    size_map={str(x["ticker"]):float(x.get("lot_size",1)) for x in portfolio.get("instruments",[])}
     has_strategy_dim=any(item.get("strategy_id") for item in run_results)
 
     for item in run_results:
@@ -59,7 +62,7 @@ def simulate_portfolio(portfolio: dict, run_results: list[dict], results_dir: Pa
         ticker=item["ticker"]; strategy_id=item.get("strategy_id")
         label=f"{ticker}::{strategy_id}" if strategy_id else ticker
         lot_count=max(1,int(item.get("lots") if item.get("lots") is not None else lot_map.get(ticker,1)))
-        lot_size=max(1,int(item.get("lot_size") if item.get("lot_size") is not None else size_map.get(ticker,1)))
+        lot_size=max(1e-12,float(item.get("lot_size") if item.get("lot_size") is not None else size_map.get(ticker,1)))
         shares=lot_count*lot_size
         for idx,row in trades.iterrows():
             trade_id=f"{label}_{idx}_{uuid.uuid4().hex[:5]}"
