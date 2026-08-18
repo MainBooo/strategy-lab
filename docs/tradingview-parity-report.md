@@ -167,10 +167,9 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 custom levels закрыты в этой же сессии:
 
 - **Продвинутые инструменты рисования**: Fib Channel/Time Zone/Circles/
-  Spiral/Arcs/Wedge, Anchored VWAP/Volume Profile, Rotated Rectangle,
-  Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker, Multiselect,
-  Grouping — не реализованы (P2/P3 по ТЗ, самый крупный оставшийся кусок
-  работы).
+  Spiral/Arcs/Wedge, Volume Profile, Rotated Rectangle, Path/Arc/Curve/
+  DoubleCurve/Highlighter/Arrow/ArrowMarker, Multiselect, Grouping — не
+  реализованы (P2/P3 по ТЗ, самый крупный оставшийся кусок работы).
 - ~~**Gann Fan / Pitchfork (Standard) / XABCD Pattern**~~ — из MISSING в
   PARTIAL (см. matrix changelog): `gann_fan` (9 классических лучей 1×8..8×1
   от реального-бар наклона), `pitchfork` (медиана + 2 параллельных зубца,
@@ -200,6 +199,14 @@ custom levels закрыты в этой же сессии:
   Cycles (соседний с Cyclic Lines TradingView-инструмент) и авто-
   классификация по названию паттерна (XABCD Gartley/Bat/Butterfly/Crab,
   Elliott волновые правила) не реализованы — остаются MISSING.
+- ~~**Anchored VWAP**~~ — добавлен той же сессией (`anchored_vwap`,
+  соседний крупный MISSING-пункт — переключились на него после
+  диминишинг-ретёрнс на остатках пункта Gann/Pitchfork/паттерны):
+  кумулятивный volume-weighted typical price от анкора до последней
+  свечи, живой пересчёт каждый кадр из `core.candles` — см. matrix
+  changelog. Volume Profile (вторая половина этого пункта ТЗ) остаётся
+  MISSING — значительно больший отдельный кусок работы (гистограмма
+  объёма по ценовым уровням).
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time
