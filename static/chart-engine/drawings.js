@@ -18,6 +18,7 @@
   // give touch a TradingView-like forgiving corridor around thin drawings.
   const TOUCH_HIT_TOLERANCE_PX = 18;
   const TOUCH_HANDLE_HIT_RADIUS_PX = 14;
+  const WEAK_MAGNET_SNAP_PX = 14;
 
   const INTERACTION_STATES = Object.freeze({
     NAVIGATE: "NAVIGATE",
@@ -408,7 +409,7 @@
       this.hoverId = null;
       this.activeTool = null;
       this.draft = null;
-      this.snapEnabled = false;
+      this.magnetMode = "off";
       // Per-tool-type {color,width,dash,opacity} the app layer can seed
       // (see chart-analysis.js's "Сделать стилем по умолчанию" button and
       // its localStorage-backed moexlab_tool_style_defaults) - applied in
@@ -763,8 +764,16 @@
     }
 
     // ---- snap ----
+    // magnetMode: "off" | "weak" | "strong". TradingView distinguishes the
+    // two - Strong always pulls an anchor onto the nearest OHLC value on the
+    // bar under the pointer, Weak only pulls it in when the pointer is
+    // already close (in screen space, not price space, so it behaves the
+    // same at any zoom level) to a candidate value, otherwise the anchor
+    // stays exactly where placed. Previously this was a single boolean
+    // (effectively always "strong" when on), so there was no way to get
+    // free placement near candles without disabling snapping everywhere.
     snapPoint(time, price) {
-      if (!this.snapEnabled) return { time, price };
+      if (this.magnetMode !== "weak" && this.magnetMode !== "strong") return { time, price };
       const candle = this._nearestCandle(time);
       if (!candle) return { time, price };
       const candidates = [candle.open, candle.high, candle.low, candle.close];
@@ -772,6 +781,11 @@
       for (const c of candidates) {
         const d = Math.abs(c - price);
         if (d < bestDist) { bestDist = d; best = c; }
+      }
+      if (this.magnetMode === "weak") {
+        const yRaw = priceToCoordinateSafe(this.core, price);
+        const yBest = priceToCoordinateSafe(this.core, best);
+        if (yRaw == null || yBest == null || Math.abs(yRaw - yBest) > WEAK_MAGNET_SNAP_PX) return { time, price };
       }
       return { time: candle.time, price: best };
     }

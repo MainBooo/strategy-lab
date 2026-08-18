@@ -83,6 +83,7 @@
   const COUNT_TO_LAYOUT = { 1: "1", 2: "2h", 3: "3", 4: "4", 5: "6", 6: "6" };
 
   const SYNC_LABELS = { ticker: "Тикеры", interval: "Интервалы", crosshair: "Перекрестие", scroll: "Прокрутка (позиция)", zoom: "Масштаб (ширина свечей)", range: "Диапазон отображения" };
+  const MAGNET_LABELS = { off: "выкл", weak: "слабый", strong: "сильный" };
 
   const IND_PARAM_LABELS = { period: "Период", mult: "Множитель", fast: "Быстрая", slow: "Медленная", signal: "Сигнальная", kPeriod: "%K период", dPeriod: "%D период" };
   const IND_LINE_LABELS = {
@@ -915,7 +916,7 @@
         </div>
         <div class="ca-more-sep"></div>
         <button class="ca-more-item" data-act="order">⚙ Заказать стратегию по разметке</button>
-        <button class="ca-more-item" data-act="snap">🧲 Прилипание к свечам${tile.drawingMgr && tile.drawingMgr.snapEnabled ? " ✓" : ""}</button>
+        <button class="ca-more-item" data-act="snap">🧲 Магнит: ${MAGNET_LABELS[(tile.drawingMgr && tile.drawingMgr.magnetMode) || "off"]}</button>
         <button class="ca-more-item" data-act="reset">↺ Сбросить масштаб</button>
       `;
       pop.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
@@ -924,10 +925,16 @@
         if (this._toolbarActions[act]) this._toolbarActions[act]();
         else if (act === "order") tile.openOrderModal();
         else if (act === "snap") {
-          // Also keep the rail's own magnet button (chart-editor-terminal-
-          // mobile-v2.js) in sync - it reads the same drawingMgr.snapEnabled
-          // but previously had no way to learn this menu had changed it.
-          if (tile.drawingMgr) tile.drawingMgr.snapEnabled = !tile.drawingMgr.snapEnabled;
+          // Off -> Weak -> Strong -> Off, matching TradingView's own magnet
+          // (see DrawingManager.snapPoint in chart-engine/drawings.js for
+          // what "weak" vs "strong" actually do). Also keeps the rail's own
+          // magnet button (chart-editor-terminal-mobile-v2.js) in sync - it
+          // reads the same drawingMgr.magnetMode but previously had no way
+          // to learn this menu had changed it.
+          if (tile.drawingMgr) {
+            const cycle = ["off", "weak", "strong"];
+            tile.drawingMgr.magnetMode = cycle[(cycle.indexOf(tile.drawingMgr.magnetMode) + 1) % cycle.length];
+          }
           if (window.StrategyLabMobileChart && typeof window.StrategyLabMobileChart.refreshRail === "function") window.StrategyLabMobileChart.refreshRail();
         }
         else if (act === "reset") { if (tile.core) tile.core.fitContent(); }
