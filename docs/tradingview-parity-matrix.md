@@ -56,15 +56,15 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | все 6 реализованы, включая **horizontal_ray** (эта сессия) | да | **PARITY (испр. эта сессия)** | живой Playwright — создан, отрисован, обрезан ровно по границе пейна |
 | Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
 | Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
-| Pitchfork family (4 варианта) | | отсутствуют | да | MISSING | — |
+| Pitchfork family (4 варианта) | | базовый (Standard) `pitchfork` — median + 2 parallel teeth, все в pane-pixel space; Schiff/Modified Schiff/Inside вариантов нет | да | **PARTIAL (испр. эта сессия)** | живой Playwright — 3-точечный drag+tap, все 3 линии визуально параллельны, hit-test/select/Properties/Object Tree подтверждены на проде |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | rectangle/circle(ellipse)/triangle есть; Rotated Rectangle отсутствует | да | PARTIAL | код |
 | Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline, freehand(brush) есть; Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker отсутствуют | да | PARTIAL | код |
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
-| Gann Fan/Square/Box | | отсутствуют | да | MISSING | — |
-| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | отсутствуют | да | MISSING | — |
+| Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
+| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | XABCD `xabcd_pattern` — 5-точечный размеченный зигзаг (X/A/B/C/D) с % отношением каждой ноги к предыдущей; без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab) — это отдельный, более крупный кусок работы; ABCD/Triangle/Three Drives/H&S/Elliott Wave/Cyclic/Sine отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — 5-точечная staged-постановка (drag+3×tap), метки X/A/B/C/D и %-отношения ног видны на графике, hit-test/Object Tree подтверждены |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
 | Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
 | Price Range / Time Range / Price&Time Range | измерение с дельтами (персистентные line tools) | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`) — совпадает с TV, там это тоже отдельные постоянные инструменты, не Measure | да | PARITY | код, унаследовано |
@@ -183,6 +183,47 @@ PARITY там, где нет хотя бы одного из этих подтв
   в мобильном рейле ("Линейка (временная)"). `price_range`/`time_range`/
   `price_date_range` не тронуты — в реальном TradingView это отдельные
   персистентные line tools, существующие наравне с Measure, не вместо него.
+
+- **Pitchfork (Standard)** — из MISSING в PARTIAL. Новый `pitchfork` tool,
+  3 анкора (staged drag+tap, как `parallel_channel`/`triangle`) — медиана из
+  анкора 0 через середину анкоров 1/2, два зубца через анкоры 1/2 параллельно
+  медиане, всё посчитано напрямую в pane-pixel space (не в реальных time/
+  price единицах) — "параллельно" в этом инструменте означает ровно то, что
+  видно на экране, тот же принцип, которым уже клипуются
+  `ray`/`extended_line`/`horizontal_ray`. Schiff/Modified Schiff/Inside Pitchfork
+  варианты не реализованы — остаётся PARTIAL, не PARITY.
+- **Gann Fan** — из MISSING в PARTIAL. Новый `gann_fan` tool, 2 анкора —
+  анкор 1 задаёт "1×1" (45°) наклон в реальных барах (`timeToLogical`, не
+  сырые пиксели, иначе фан выглядел бы по-разному на разных масштабах),
+  остальные 8 лучей — фиксированные множители того же наклона (классический
+  набор 1×8..8×1). Square/Box из этой же TradingView-группы не реализованы.
+- **XABCD Pattern** — из MISSING в PARTIAL. Новый `xabcd_pattern` tool,
+  5 анкоров (staged drag+3×tap) — размеченный зигзаг X-A-B-C-D с %-отношением
+  каждой ноги к предыдущей (по цене) в местах вершин. Сознательно НЕ включает
+  автоматическую классификацию по названию паттерна (Gartley/Bat/Butterfly/
+  Crab) — то, что реальный TradingView XABCD делает поверх скелета, это
+  отдельный, значительно больший кусок работы (сверка отношений с
+  известными наборами Фибоначчи-диапазонов на каждую пару ног). ABCD/
+  Triangle Pattern/Three Drives/Head & Shoulders/Elliott Wave/Cyclic Lines/
+  Sine Line по-прежнему не реализованы вообще.
+- Все три новых инструмента переиспользуют существующую generic-инфраструктуру
+  без единой строчки специального кода: Properties panel (цвет/толщина/
+  стиль/прозрачность/label/видимость по таймфреймам), Object Tree, floating
+  toolbar при выборе (`selectionAnchor()`), undo/redo, автосохранение в
+  `/api/chart-drawings` — всё это уже было написано для произвольного
+  N-анкорного типа рисунка, ничего не пришлось трогать.
+- Кнопки в обоих рейлах: десктопный `chart-analysis.js` TOOL_BUTTONS (3 новые
+  записи) и мобильный/desktop-унифицированный рейл
+  `chart-editor-terminal-mobile-v2.js` — 2 новые группы, "Ганн и вилы"
+  (Вилы Эндрюса + Веер Ганна) и "Паттерны" (XABCD). Попутная находка: этот
+  desktop TOOL_BUTTONS массив в `chart-analysis.js`, судя по всему,
+  фактически мёртвый код — `chart-editor-terminal-mobile-v2.js`'s
+  `buildRail()` рендерит `#caTools` безусловно на любом viewport (не только
+  на телефоне) и переопределяет его содержимое; живая проверка на десктопе
+  (1440×900) показала именно группированный рейл mobile-v2, не плоский
+  список TOOL_BUTTONS. Уже существовавший до этой сессии пробел (`triangle`/
+  `freehand` тоже отсутствовали в TOOL_BUTTONS) подтверждает это — не стал
+  трогать/удалять в этой сессии, вне заявленной задачи.
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 

@@ -166,12 +166,20 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
-- **Продвинутые инструменты рисования**: Gann-семейство, Pitchfork-семейство,
-  паттерны (XABCD/Elliott Wave/Head&Shoulders/Three Drives/...), Fib Channel/
-  Time Zone/Circles/Spiral/Arcs/Wedge, Anchored VWAP/Volume Profile,
-  Rotated Rectangle, Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/
-  ArrowMarker, Multiselect, Grouping — не реализованы (P2/P3 по ТЗ, самый
-  крупный оставшийся кусок работы).
+- **Продвинутые инструменты рисования**: Fib Channel/Time Zone/Circles/
+  Spiral/Arcs/Wedge, Anchored VWAP/Volume Profile, Rotated Rectangle,
+  Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker, Multiselect,
+  Grouping — не реализованы (P2/P3 по ТЗ, самый крупный оставшийся кусок
+  работы).
+- ~~**Gann Fan / Pitchfork (Standard) / XABCD Pattern**~~ — из MISSING в
+  PARTIAL (см. matrix changelog): `gann_fan` (9 классических лучей 1×8..8×1
+  от реального-бар наклона), `pitchfork` (медиана + 2 параллельных зубца,
+  pane-pixel space), `xabcd_pattern` (5-точечный размеченный зигзаг X-A-B-C-D
+  с %-отношением ног). Остаются PARTIAL, не PARITY: Schiff/Modified Schiff/
+  Inside Pitchfork варианты, Gann Square/Box, ABCD/Triangle Pattern/Three
+  Drives/Head&Shoulders/Elliott Wave/Cyclic Lines/Sine Line и авто-
+  классификация XABCD по названию паттерна (Gartley/Bat/Butterfly/Crab) не
+  реализованы — остаются MISSING.
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time
