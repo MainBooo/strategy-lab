@@ -43,7 +43,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 
 | Component | TV reference | Strategy Lab | Required | Status | Test |
 |---|---|---|---|---|---|
-| Chart types | Candles/Bars/Line/Area/Baseline/HollowCandles/HeikinAshi (+опционально Renko/Kagi/PnF/Range) | 6: Candles/Bars/Line/Area/Baseline/HeikinAshi | базовые 7 обязательны | PARTIAL | код — нет Hollow Candles; Renko/Kagi/PnF/Range не реализованы (опционально по ТЗ) |
+| Chart types | Candles/Bars/Line/Area/Baseline/HollowCandles/HeikinAshi (+опционально Renko/Kagi/PnF/Range) | 7: Candles/Bars/Line/Area/Baseline/HeikinAshi/HollowCandles | базовые 7 обязательны | **PARITY (испр. эта сессия)** | живой Playwright — цвет по сравнению с prevClose, hollow/filled по close-vs-open сверены с сырыми `/api/candles`; Renko/Kagi/PnF/Range по-прежнему не реализованы (опционально по ТЗ) |
 | Grid | горизонт+вертикаль, низкая плотность | lightweight-charts встроенный, настроен в `theme.js` | да | PARITY | библиотека |
 | Volume overlay | интегрирован в нижнюю часть pane | `ChartCore` создаёт volume-серию, toggle через индикаторы (`kind:"toggle"`) | да | PARITY | код |
 | Auto-follow / «К последней цене» | компактный контрол, появляется только когда ушли от live-края | `core.js: scrollToRealTime()`, `chart-tile.js: liveBtn` | да | PARITY | код, унаследовано |
@@ -117,7 +117,15 @@ PARITY там, где нет хотя бы одного из этих подтв
 
 ## Changelog этой сессии (после первого снимка, коммит `e1f7afe`)
 
-Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9` — сняты после `6390adb`:
+Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9`, `8838d00` — сняты после `6390adb`:
+
+- **Hollow Candles** (`8838d00`) — из PARTIAL (6/7 обязательных типов) в
+  PARITY. Цвет по сравнению с *предыдущим* close (не своим open, как у
+  обычной свечи), тело hollow (цвет фона графика, виден только
+  border/wick) когда close бара ≥ его собственного open, иначе залито
+  сплошным цветом — два независимых измерения, как в реальном TV.
+  lightweight-charts не имеет встроенного «hollow»-режима — реализовано
+  через per-point `color`/`borderColor`/`wickColor` в данных серии.
 
 - **price-scale «+»** — из PARTIAL в PARITY (визуальная кнопка + меню Create Alert/Add H-Line).
 - **Alert lines на графике** — из NOT VERIFIED в PARITY (реально отсутствовали, теперь есть).

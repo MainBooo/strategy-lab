@@ -180,9 +180,8 @@ custom levels закрыты в этой же сессии:
   «Свойства», не как плавающий toolbar рядом с объектом.
 - **Hide/Remove family-меню** (раздельно Drawings/Indicators/Positions) —
   сейчас рейл умеет только «скрыть/удалить всё разом».
-- **Chart types**: 6 из 7 обязательных (нет Hollow Candles — нужна
-  per-candle цветовая логика по сравнению с предыдущим close, не просто
-  ещё одна опция серии).
+- ~~**Chart types**: 6 из 7 обязательных (нет Hollow Candles)~~ — закрыто
+  коммитом `8838d00`, теперь 7/7 (см. matrix changelog).
 - **Reference pack** (§4 ТЗ, 25 состояний × 4 mobile viewport) не собирался
   — не было доступа к живому TradingView для скриншотинга, только
   предоставленные `Tradingview.PNG`/`Strategy Lab.png`.
