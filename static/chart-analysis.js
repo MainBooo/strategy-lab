@@ -77,6 +77,8 @@
     { id: "xabcd_pattern", label: "Паттерн XABCD (X-A-B-C-D)", icon: "◬" },
     { id: "abcd_pattern", label: "Паттерн ABCD (A-B-C-D)", icon: "◭" },
     { id: "triangle_pattern", label: "Паттерн треугольник", icon: "◺" },
+    { id: "three_drives_pattern", label: "Паттерн «Три драйва»", icon: "◮" },
+    { id: "head_shoulders_pattern", label: "Паттерн «Голова и плечи»", icon: "⛰" },
   ];
 
   const LAYOUTS = [

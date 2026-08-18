@@ -395,7 +395,7 @@ def test_runtime_suite_covers_boundary_matrix_and_multi_tile_isolation():
         "Rectangle right edge + pointer outside canvas",
         "Rectangle left/top/bottom boundaries",
         "Handle drag can cross an edge",
-        "all 28 tools use the same boundary-safe body translation",
+        "all 30 tools use the same boundary-safe body translation",
         "Trend Line anchors may both be outside",
         "Extended Line is clipped mathematically",
         "axis-specific infinite lines",

@@ -98,6 +98,16 @@
     // extended rightward) - the converging/diverging trendlines a triangle
     // chart pattern is actually marked by, not just the raw swing points.
     triangle_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн треугольник" },
+    // 6 anchors placed 0-1-A-2-B-3 (three "drives" 0->1->2->3, corrective
+    // retracements A/B between them) - same labeled-zigzag-with-leg-ratios
+    // rendering as xabcd_pattern/abcd_pattern, just a longer point count
+    // and different labels (see PATTERN_LABELS).
+    three_drives_pattern: { pointsNeeded: 6, anchorCount: 6, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн три драйва" },
+    // 5 anchors placed Left Shoulder - trough - Head - trough - Right
+    // Shoulder, same staged placement/zigzag+boundary rendering family as
+    // triangle_pattern, but exactly one boundary line (the neckline,
+    // through the two troughs at anchor1/anchor3) instead of two.
+    head_shoulders_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн голова и плечи" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -222,23 +232,49 @@
   }
 
   /** Vertex labels for the labeled-zigzag pattern tools (xabcd_pattern/
-   * abcd_pattern) - the render/hit-test code itself is identical for both
-   * (see the "xabcd" op kind), only the label text and point count differ. */
-  const PATTERN_LABELS = { xabcd_pattern: ["X", "A", "B", "C", "D"], abcd_pattern: ["A", "B", "C", "D"] };
+   * abcd_pattern/three_drives_pattern) - the render/hit-test code itself is
+   * identical for all three (see the "xabcd" op kind), only the label text
+   * and point count differ. Three Drives' 0/1/A/2/B/3 is the classic
+   * labeling (drives 0->1->2->3, corrective retracements A/B between
+   * them) - same "labeled zigzag + per-leg ratio" reading as XABCD/ABCD,
+   * just without the harmonic-pattern auto-classification either. */
+  const PATTERN_LABELS = {
+    xabcd_pattern: ["X", "A", "B", "C", "D"],
+    abcd_pattern: ["A", "B", "C", "D"],
+    three_drives_pattern: ["0", "1", "A", "2", "B", "3"],
+  };
 
-  /** Triangle Pattern's two boundary rays: 1->3 extended and 2->4 extended
-   * (0-indexed: anchor0->anchor2, anchor1->anchor3) - the converging or
-   * diverging trendlines a chart triangle pattern is actually marked by,
-   * computed the same pane-pixel-space ray-clipping way as every other
-   * "extends to the pane edge" tool here (ray/pitchfork/gann_fan). Anchor4
-   * (point 5) has no boundary line of its own - it's the pattern's last
-   * confirming swing, not a trendline anchor. */
-  function trianglePatternSegments(core, pix) {
-    if (pix.length < 4 || pix.slice(0, 4).some((p) => !p || p.x == null)) return [];
-    const w = paneWidth(core), h = paneHeight(core);
-    const upper = clipParametricLineToRect(pix[0], pix[2], w, h, "ray");
-    const lower = clipParametricLineToRect(pix[1], pix[3], w, h, "ray");
-    return [upper, lower].filter(Boolean);
+  /** Vertex labels + boundary-line anchor pairs for the "zigzag plus
+   * extended trendline(s)" pattern tools - triangle_pattern's two
+   * converging/diverging sides (through anchor0/anchor2 and
+   * anchor1/anchor3), head_shoulders_pattern's single neckline (through
+   * the two troughs, anchor1/anchor3 of its 5-point LS-trough-Head-trough-
+   * RS skeleton). Shared by _hitDrawing and _buildOp via
+   * patternBoundarySegments() below - only the pairs list differs per
+   * type, the ray-clipping itself is identical. */
+  const PATTERN_BOUNDARY_LABELS = {
+    triangle_pattern: ["1", "2", "3", "4", "5"],
+    head_shoulders_pattern: ["ЛП", "1", "Г", "2", "ПП"],
+  };
+  const PATTERN_BOUNDARY_PAIRS = {
+    triangle_pattern: [[0, 2], [1, 3]],
+    head_shoulders_pattern: [[1, 3]],
+  };
+
+  /** One anchor-pair's line, extended rightward (pane-pixel space, same
+   * ray-clipping every other "extends to the pane edge" tool here uses -
+   * ray/pitchfork/gann_fan). */
+  function extendedRaySegment(core, pix, i, j) {
+    if (!pix[i] || pix[i].x == null || !pix[j] || pix[j].x == null) return null;
+    return clipParametricLineToRect(pix[i], pix[j], paneWidth(core), paneHeight(core), "ray");
+  }
+
+  /** All of a pattern type's boundary-line segments - the actual
+   * converging/diverging trendlines (Triangle Pattern) or neckline (Head &
+   * Shoulders) the zigzag skeleton is marked by, not just the raw swing
+   * points themselves. */
+  function patternBoundarySegments(core, pix, type) {
+    return (PATTERN_BOUNDARY_PAIRS[type] || []).map(([i, j]) => extendedRaySegment(core, pix, i, j)).filter(Boolean);
   }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
@@ -932,11 +968,13 @@
         }
         case "polyline":
         case "freehand":
-        // XABCD/ABCD's anchors are a plain zigzag for hit-testing purposes -
-        // same "handle at any vertex, else distance to any leg" test as
-        // polyline/freehand, just always a fixed point count (5 or 4).
+        // XABCD/ABCD/Three Drives' anchors are a plain zigzag for
+        // hit-testing purposes - same "handle at any vertex, else distance
+        // to any leg" test as polyline/freehand, just always a fixed point
+        // count (5, 4, or 6).
         case "xabcd_pattern":
-        case "abcd_pattern": {
+        case "abcd_pattern":
+        case "three_drives_pattern": {
           if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
@@ -945,14 +983,19 @@
           }
           return null;
         }
-        case "triangle_pattern": {
-          if (pix.length < 5) return null;
+        // Triangle Pattern / Head & Shoulders: zigzag hit-test (as above)
+        // plus their boundary line(s) - two converging/diverging sides for
+        // Triangle Pattern, one neckline for Head & Shoulders (see
+        // PATTERN_BOUNDARY_PAIRS).
+        case "triangle_pattern":
+        case "head_shoulders_pattern": {
+          if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
             if (pix[i].x == null || pix[i + 1].x == null) continue;
             if (pointToSegmentDist(px, py, pix[i].x, pix[i].y, pix[i + 1].x, pix[i + 1].y) <= tol) return { id: d.id, handle: null };
           }
-          for (const seg of trianglePatternSegments(this.core, pix)) {
+          for (const seg of patternBoundarySegments(this.core, pix, d.type)) {
             if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
           }
           return null;
@@ -1970,13 +2013,18 @@
         }
         case "xabcd_pattern":
         case "abcd_pattern":
-          if (pix.length >= (d.type === "xabcd_pattern" ? 5 : 4) && pix.every((p) => p.x != null && p.y != null)) {
+        case "three_drives_pattern":
+          if (pix.length >= TOOL_DEFS[d.type].anchorCount && pix.every((p) => p.x != null && p.y != null)) {
             ops.push({ kind: "xabcd", points: pix, dpoints: d.points, labels: PATTERN_LABELS[d.type], color, width, alpha, handles: pix });
           }
           break;
         case "triangle_pattern":
-          if (pix.length >= 5 && pix.every((p) => p.x != null && p.y != null)) {
-            ops.push({ kind: "triangle_pattern", points: pix, boundary: trianglePatternSegments(this.manager.core, pix), color, width, alpha, handles: pix });
+        case "head_shoulders_pattern":
+          if (pix.length >= TOOL_DEFS[d.type].anchorCount && pix.every((p) => p.x != null && p.y != null)) {
+            ops.push({
+              kind: "pattern_boundary", points: pix, labels: PATTERN_BOUNDARY_LABELS[d.type],
+              boundary: patternBoundarySegments(this.manager.core, pix, d.type), color, width, alpha, handles: pix,
+            });
           }
           break;
       }
@@ -2250,16 +2298,16 @@
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
-        case "triangle_pattern": {
+        // Triangle Pattern's two converging/diverging sides or Head &
+        // Shoulders' single neckline - zigzag skeleton with per-vertex
+        // labels, plus the boundary line(s) drawn a touch fainter so the
+        // real swing points stay the visual focus (same relative-emphasis
+        // convention pitchfork's median/teeth already use).
+        case "pattern_boundary": {
           ctx.beginPath();
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
-          op.points.forEach((p, i) => this._text(ctx, String(i + 1), p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
-          // The two converging/diverging boundary rays (1->3, 2->4) that
-          // actually mark the triangle - drawn a touch fainter than the
-          // zigzag itself so the real swing points stay the visual focus,
-          // same convention pitchfork's median/teeth already use for
-          // relative emphasis.
+          op.points.forEach((p, i) => this._text(ctx, op.labels[i], p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
           ctx.save();
           ctx.globalAlpha = (op.alpha ?? 1) * 0.7;
           op.boundary.forEach((seg) => {
