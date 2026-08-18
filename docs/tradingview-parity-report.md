@@ -187,11 +187,19 @@ custom levels закрыты в этой же сессии:
   (`three_drives_pattern` — тот же скелет, что XABCD, 6 анкоров 0-1-A-2-B-3;
   `head_shoulders_pattern` — тот же зигзаг+boundary семейство, что Triangle
   Pattern, но 1 boundary-линия (neckline) вместо 2 — см. matrix changelog).
-  5 из 8 паттерн-инструментов ТЗ теперь реализованы (XABCD/ABCD/Triangle
-  Pattern/Three Drives/Head & Shoulders).
-  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, Elliott
-  Wave/Cyclic Lines/Sine Line и авто-классификация XABCD по названию
-  паттерна (Gartley/Bat/Butterfly/Crab) не реализованы — остаются MISSING.
+- ~~**Elliott Wave + Cyclic Lines + Sine Line**~~ — добавлены той же
+  сессией (`elliott_impulse_wave`/`elliott_correction_wave` — тот же
+  скелет, что XABCD/Three Drives; `cyclic_lines` — серия равноотстоящих
+  вертикальных линий через весь pane, не сам отрезок между анкорами;
+  `sine_line` — синусоида перпендикулярно базовой линии — см. matrix
+  changelog). По пути найден и исправлен реальный краш на проде
+  (`cyclicLineTimes` читал `d.points[1].time` без guard на draft-preview
+  с 1 точкой). Все 8 категорий паттерн-строки ТЗ (10 конкретных tool-
+  типов) теперь имеют хотя бы PARTIAL-реализацию.
+  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, Time
+  Cycles (соседний с Cyclic Lines TradingView-инструмент) и авто-
+  классификация по названию паттерна (XABCD Gartley/Bat/Butterfly/Crab,
+  Elliott волновые правила) не реализованы — остаются MISSING.
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time

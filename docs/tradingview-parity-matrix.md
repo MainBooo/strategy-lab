@@ -64,7 +64,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
-| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 5 из 8: XABCD `xabcd_pattern` (5-точечный размеченный зигзаг X/A/B/C/D с % отношением ног), ABCD `abcd_pattern` (тот же скелет, 4 точки A/B/C/D — без X), Three Drives `three_drives_pattern` (тот же скелет, 6 точек 0/1/A/2/B/3), Triangle Pattern `triangle_pattern` (5-точечный зигзаг 1-2-3-4-5 + два расходящихся/сходящихся boundary-луча через 1→3 и 2→4), Head & Shoulders `head_shoulders_pattern` (5-точечный зигзаг ЛП/1/Г/2/ПП + одна neckline-линия через оба «плеча»-впадины 1→2, extended вправо); ни один без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab для XABCD) — отдельный, более крупный кусок работы; Elliott Wave/Cyclic Lines/Sine Line отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех пяти (drag+2×tap для ABCD, drag+3×tap для Triangle Pattern/Head & Shoulders, drag+4×tap для Three Drives), метки/лейблы и %-отношения (XABCD/ABCD/Three Drives) или boundary-луч(и) (Triangle Pattern/Head & Shoulders) видны на графике, hit-test/Object Tree подтверждены для всех пяти типов |
+| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 8 из 8 категорий ТЗ покрыты (10 конкретных tool-типов): XABCD `xabcd_pattern`/ABCD `abcd_pattern`/Three Drives `three_drives_pattern`/Elliott Impulse `elliott_impulse_wave`/Elliott Correction `elliott_correction_wave` — общий размеченный-зигзаг+%-отношение рендер; Triangle Pattern `triangle_pattern`/Head & Shoulders `head_shoulders_pattern` — зигзаг + boundary-луч(и) (2 сходящихся/расходящихся для треугольника, 1 neckline для Г&П); Cyclic Lines `cyclic_lines` — серия равноотстоящих по времени вертикальных линий через весь видимый pane (Time Cycles отдельно не реализован — тот же TradingView-концепт); Sine Line `sine_line` — одна синусоида между двумя анкорами, перпендикулярно базовой линии в pane-pixel space (амплитуда — эвристика, не сверялась пиксель-в-пиксель с живым TradingView). Ни один паттерн без авто-классификации по имени (Gartley/Bat/Butterfly/Crab для XABCD, волновые правила для Elliott) — отдельный, более крупный кусок работы | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех новых (drag+2×tap для Elliott Correction, drag+4×tap для Elliott Impulse, drag-release для Cyclic Lines/Sine Line), метки/%-отношения (Elliott), 16 равноотстоящих вертикальных линий подтверждены программно после pan (Cyclic Lines), 65-точечная синусоида подтверждена программно (Sine Line), hit-test/Object Tree подтверждены для всех четырёх новых типов; живьём найден и исправлен реальный краш (`cyclicLineTimes` читал `d.points[1].time` без guard на draft-preview с 1 точкой) |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
 | Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
 | Price Range / Time Range / Price&Time Range | измерение с дельтами (персистентные line tools) | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`) — совпадает с TV, там это тоже отдельные постоянные инструменты, не Measure | да | PARITY | код, унаследовано |
@@ -274,6 +274,67 @@ PARITY там, где нет хотя бы одного из этих подтв
   tap добавлял ровно одну точку (итог: 4 из 6 нужных к моменту, когда
   тест был прерван) — сам движок отработал корректно, это была ошибка
   тестовых координат, не баг кода.
+- **Elliott Wave (Impulse + Correction) + Cyclic Lines + Sine Line**
+  (продолжение той же линии работы) — из MISSING в PARTIAL, закрывает все
+  оставшиеся 3 категории паттерн-строки ТЗ. `elliott_impulse_wave` (6
+  анкоров, 0-1-2-3-4-5) и `elliott_correction_wave` (4 анкора, 0-A-B-C) —
+  оба переиспользуют ровно тот же `kind:"xabcd"` render/hit-test путь, что
+  Three Drives/XABCD/ABCD (добавлены в `PATTERN_LABELS` и оба case-списка)
+  — снова ни строчки нового рендер-кода. Никакой волновой валидации
+  (чередование коррекций, «волна 3 никогда не самая короткая» и т.п.) —
+  только размеченный скелет и %-отношения ног, как у всей этой семьи.
+  `cyclic_lines` (2 анкора) — принципиально другая механика: анкор1.time
+  минус анкор0.time задаёт интервал повтора, рендерится не сам отрезок
+  между анкорами, а серия равноотстоящих по времени вертикальных линий
+  через весь видимый pane в обе стороны от анкора0 (`cyclicLineTimes()`/
+  `cyclicLineXs()`) — пересчитывается каждый кадр от текущего видимого
+  диапазона (через `coordinateToLogicalSafe` по обеим границам pane), так
+  что pan/zoom всегда показывают верный набор линий; жёсткий кап в 300
+  линий на случай вырожденного near-zero интервала. Time Cycles (соседний
+  TradingView-инструмент с тем же концептом) отдельно не реализован.
+  `sine_line` (2 анкора) — одна синусоида от анкора0 до анкора1,
+  осциллирующая перпендикулярно базовой линии анкор0→анкор1, целиком в
+  pane-pixel space (`sineLineSamples()`, 64 сэмпла); амплитуда — доля от
+  длины базовой линии (0.12), разумная, но не сверенная пиксель-в-пиксель
+  с живым TradingView эвристика — честно задокументировано в коде.
+  **Найден и исправлен реальный краш** при живой проверке (изначально не
+  в тестах — синтетический fake-chart harness юнит-тестов случайно не
+  воспроизводил этот конкретный кадр, см. ниже): `cyclicLineTimes()`
+  читал `d.points[1].time` без проверки, что `d.points[1]` вообще
+  существует. Точное окно: между `pointerdown` (анкор0 уже реально
+  помещён в `draft.points`, длина 1) и первым `pointermove` этого же
+  drag'а — `DrawingManager._draftPreviewPoint` в этот момент ещё `null`
+  (устанавливается только в обработчике `pointermove`), так что
+  `DrawingPaneView.update()`'s ветка "добавить preview-точку к
+  draft.points для рендера" (`preview ? draft.points.concat([preview]) :
+  draft.points`) отдаёт ровно 1 точку, а не 2 — `d.points[1]` оказывается
+  `undefined`. На проде это окно реально достижимо (lightweight-charts
+  перерисовывает независимо от движения курсора — live-тик, crosshair-
+  редроу), в отличие от синтетического harness, где рендер вызывается
+  только вручную. Исправлено guard'ом
+  `if (!d.points[0] || !d.points[1]) return [];` в начале функции;
+  воспроизведено вживую на проде, переподтверждено чистым после фикса —
+  статика без build-шага, фикс живой сразу. Добавлен регресс-тест
+  (`chart_drawing_runtime.test.js`), который рендерит именно в этом окне
+  (сразу после `pointerdown`, до первого `pointermove`) — проверено, что
+  тест реально ловит баг: временный откат guard'а немедленно ронял тест
+  тем же `TypeError`, что и на проде.
+  Pattern family теперь 8 из 8 категорий ТЗ (10 конкретных tool-типов)
+  имеют хотя бы PARTIAL-реализацию; полная авто-классификация по имени
+  паттерна (XABCD Gartley/Bat/Butterfly/Crab, Elliott волновые правила) —
+  отдельная, значительно большая задача, остаётся не реализованной везде.
+  **Верифицировано** вживую на проде: Elliott Impulse нарисован
+  (drag+4×tap, 6 точек) — метки `["0","1","2","3","4","5"]` и 4
+  %-отношения (42.9%/266.7%/50.0%/225.0%) видны на скриншоте; Elliott
+  Correction нарисован (drag+2×tap, 4 точки) — метки `["0","A","B","C"]`
+  и 2 %-отношения (64.3%/166.7%) видны; Cyclic Lines нарисован (один
+  drag) — 16 равноотстоящих вертикальных линий подтверждены программно
+  (`op.xs.length === 16`), пересчёт после панорамирования графика
+  подтверждён без ошибок в консоли; Sine Line нарисован (один drag) — 65
+  сэмплов синусоиды подтверждены программно, гладкая S-образная кривая
+  видна на скриншоте; hit-test подтверждён для всех четырёх новых типов
+  программным сканом, Object Tree показал верные подписи; тестовые
+  drawings удалены, reload с прода подтвердил `drawings.length === 0`.
 - **Верифицировано** вживую на проде для Schiff/Modified Schiff — все три
   Pitchfork-варианта нарисованы с идентичными анкорами на одном графике для
   прямого сравнения; программно подтверждено, что Schiff и Modified Schiff
