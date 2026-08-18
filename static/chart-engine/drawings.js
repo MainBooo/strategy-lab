@@ -89,6 +89,15 @@
     // auto-classification (Gartley/Bat/Butterfly/Crab naming) - that's a
     // separate, much larger piece of work left for a future session.
     xabcd_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн XABCD" },
+    // Same labeled-zigzag-with-leg-ratios rendering as xabcd_pattern above,
+    // just 4 anchors (no X) - shares the "xabcd" render/hit-test code via
+    // PATTERN_LABELS below rather than duplicating it.
+    abcd_pattern: { pointsNeeded: 4, anchorCount: 4, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн ABCD" },
+    // 5 anchors placed 1-2-3-4-5, same staged placement as xabcd_pattern.
+    // Renders the zigzag plus two boundary rays (1->3 and 2->4, each
+    // extended rightward) - the converging/diverging trendlines a triangle
+    // chart pattern is actually marked by, not just the raw swing points.
+    triangle_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн треугольник" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -210,6 +219,26 @@
     const tooth1 = clipParametricLineToRect(pix[1], { x: pix[1].x + dx, y: pix[1].y + dy }, w, h, "ray");
     const tooth2 = clipParametricLineToRect(pix[2], { x: pix[2].x + dx, y: pix[2].y + dy }, w, h, "ray");
     return [median, tooth1, tooth2].filter(Boolean);
+  }
+
+  /** Vertex labels for the labeled-zigzag pattern tools (xabcd_pattern/
+   * abcd_pattern) - the render/hit-test code itself is identical for both
+   * (see the "xabcd" op kind), only the label text and point count differ. */
+  const PATTERN_LABELS = { xabcd_pattern: ["X", "A", "B", "C", "D"], abcd_pattern: ["A", "B", "C", "D"] };
+
+  /** Triangle Pattern's two boundary rays: 1->3 extended and 2->4 extended
+   * (0-indexed: anchor0->anchor2, anchor1->anchor3) - the converging or
+   * diverging trendlines a chart triangle pattern is actually marked by,
+   * computed the same pane-pixel-space ray-clipping way as every other
+   * "extends to the pane edge" tool here (ray/pitchfork/gann_fan). Anchor4
+   * (point 5) has no boundary line of its own - it's the pattern's last
+   * confirming swing, not a trendline anchor. */
+  function trianglePatternSegments(core, pix) {
+    if (pix.length < 4 || pix.slice(0, 4).some((p) => !p || p.x == null)) return [];
+    const w = paneWidth(core), h = paneHeight(core);
+    const upper = clipParametricLineToRect(pix[0], pix[2], w, h, "ray");
+    const lower = clipParametricLineToRect(pix[1], pix[3], w, h, "ray");
+    return [upper, lower].filter(Boolean);
   }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
@@ -903,15 +932,28 @@
         }
         case "polyline":
         case "freehand":
-        // XABCD's 5 anchors are a plain zigzag for hit-testing purposes -
+        // XABCD/ABCD's anchors are a plain zigzag for hit-testing purposes -
         // same "handle at any vertex, else distance to any leg" test as
-        // polyline/freehand, just always exactly 5 points.
-        case "xabcd_pattern": {
+        // polyline/freehand, just always a fixed point count (5 or 4).
+        case "xabcd_pattern":
+        case "abcd_pattern": {
           if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
             if (pix[i].x == null || pix[i + 1].x == null) continue;
             if (pointToSegmentDist(px, py, pix[i].x, pix[i].y, pix[i + 1].x, pix[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "triangle_pattern": {
+          if (pix.length < 5) return null;
+          for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
+          for (let i = 0; i < pix.length - 1; i++) {
+            if (pix[i].x == null || pix[i + 1].x == null) continue;
+            if (pointToSegmentDist(px, py, pix[i].x, pix[i].y, pix[i + 1].x, pix[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          for (const seg of trianglePatternSegments(this.core, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
           }
           return null;
         }
@@ -1927,8 +1969,14 @@
           break;
         }
         case "xabcd_pattern":
+        case "abcd_pattern":
+          if (pix.length >= (d.type === "xabcd_pattern" ? 5 : 4) && pix.every((p) => p.x != null && p.y != null)) {
+            ops.push({ kind: "xabcd", points: pix, dpoints: d.points, labels: PATTERN_LABELS[d.type], color, width, alpha, handles: pix });
+          }
+          break;
+        case "triangle_pattern":
           if (pix.length >= 5 && pix.every((p) => p.x != null && p.y != null)) {
-            ops.push({ kind: "xabcd", points: pix, dpoints: d.points, color, width, alpha, handles: pix });
+            ops.push({ kind: "triangle_pattern", points: pix, boundary: trianglePatternSegments(this.manager.core, pix), color, width, alpha, handles: pix });
           }
           break;
       }
@@ -2180,15 +2228,14 @@
           break;
         }
         case "xabcd": {
-          const labels = ["X", "A", "B", "C", "D"];
           ctx.beginPath();
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
-          op.points.forEach((p, i) => this._text(ctx, labels[i], p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
+          op.points.forEach((p, i) => this._text(ctx, op.labels[i], p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
           // Per-leg retracement/extension ratio (curLeg / prevLeg, by price
           // distance) at each interior vertex's outgoing leg - the same
           // "how does this leg relate to the one before it" reading
-          // TradingView's XABCD shows, without the full Gartley/Bat/
+          // TradingView's XABCD/ABCD shows, without the full Gartley/Bat/
           // Butterfly/Crab pattern-name auto-classification (separate,
           // larger piece of work).
           for (let i = 1; i < op.dpoints.length - 1; i++) {
@@ -2200,6 +2247,25 @@
             const my = (op.points[i].y + op.points[i + 1].y) / 2 * rv;
             this._text(ctx, pct, mx, my, op.color);
           }
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "triangle_pattern": {
+          ctx.beginPath();
+          op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          op.points.forEach((p, i) => this._text(ctx, String(i + 1), p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
+          // The two converging/diverging boundary rays (1->3, 2->4) that
+          // actually mark the triangle - drawn a touch fainter than the
+          // zigzag itself so the real swing points stay the visual focus,
+          // same convention pitchfork's median/teeth already use for
+          // relative emphasis.
+          ctx.save();
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.7;
+          op.boundary.forEach((seg) => {
+            ctx.beginPath(); ctx.moveTo(seg.x1 * r, seg.y1 * rv); ctx.lineTo(seg.x2 * r, seg.y2 * rv); ctx.stroke();
+          });
+          ctx.restore();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }

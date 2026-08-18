@@ -75,6 +75,8 @@
     { id: "pitchfork_modified_schiff", label: "Модифицированные вилы Шиффа", icon: "⑄" },
     { id: "gann_fan", label: "Веер Ганна", icon: "⋔" },
     { id: "xabcd_pattern", label: "Паттерн XABCD (X-A-B-C-D)", icon: "◬" },
+    { id: "abcd_pattern", label: "Паттерн ABCD (A-B-C-D)", icon: "◭" },
+    { id: "triangle_pattern", label: "Паттерн треугольник", icon: "◺" },
   ];
 
   const LAYOUTS = [
