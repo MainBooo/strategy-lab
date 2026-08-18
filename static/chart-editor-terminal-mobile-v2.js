@@ -184,6 +184,21 @@
     const select = Page.root?.querySelector("#gtTicker"); if (!select) return;
     [...select.options].forEach(option => { if (!option.dataset.slFullLabel) option.dataset.slFullLabel = option.textContent || option.value; option.textContent = phone() ? option.value : option.dataset.slFullLabel; });
   }
+
+  /** Real TradingView's symbol pill opens a rich search overlay, not an OS
+   * picker wheel - and this app already has that overlay (the watchlist
+   * drawer, with prices/search/favorites), just never wired to the primary
+   * symbol control on phone. #gtTicker stays a native <select> (desktop
+   * mouse users get the OS dropdown, and it's still the source of truth
+   * _commandSelectTicker reads from), but on phone its tap is intercepted
+   * before the native picker opens and redirected to the drawer instead. */
+  function wireTickerTap() {
+    const select = Page.root?.querySelector("#gtTicker"); if (!select || select.dataset.slTapWired) return;
+    select.dataset.slTapWired = "1";
+    const openDrawer = () => { Page.watchlist?.openMobileDrawer(); requestAnimationFrame(() => Page.watchlist?.setActive(Page.activeTile?.symbol)); };
+    select.addEventListener("touchstart", (event) => { if (!phone()) return; event.preventDefault(); select.blur(); openDrawer(); }, { passive:false });
+    select.addEventListener("mousedown", (event) => { if (!phone()) return; event.preventDefault(); openDrawer(); });
+  }
   function relocatePopovers() {
     if (!Page.root) return;
     for (const id of ["gtAlertsPop", "gtTemplatesPop"]) { const pop = Page.root.querySelector(`#${id}`); if (pop && pop.parentElement !== Page.root) Page.root.appendChild(pop); }
@@ -192,7 +207,7 @@
   function sync() {
     const isPhone = phone(); document.documentElement.classList.toggle("sl-chart-phone", isPhone); if (!Page.root) return;
     if (isPhone && lastPhone !== true && Page._bottomCollapsed !== true) Page._setBottomCollapsed(true, { skipSave:true });
-    lastPhone = isPhone; buildRail(); refreshRail(); buildBottomControls(); closeButton(); compactTickerLabels(); relocatePopovers(); renderMarketHeader();
+    lastPhone = isPhone; buildRail(); refreshRail(); buildBottomControls(); closeButton(); compactTickerLabels(); wireTickerTap(); relocatePopovers(); renderMarketHeader();
     Page.tiles.forEach(tile => tile.core?._onResize());
   }
 
