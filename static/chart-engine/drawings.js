@@ -64,6 +64,25 @@
     short_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Short позиция" },
     triangle: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Треугольник" },
     price_date_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Цена и время" },
+    // Anchor 0 is the pitchfork's "handle" - anchors 1/2 are the two prongs
+    // whose midpoint the median passes through. Same 3-anchor staged
+    // placement as parallel_channel/triangle (drag places 0+1, a third tap
+    // places 2), just a different geometry at render/hit-test time.
+    pitchfork: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Вилы Эндрюса" },
+    // Anchor 0 is the fan's origin, anchor 1 defines the "1x1" (45 degree)
+    // angle - every other ray (1x8..8x1) is the same origin at a slope
+    // that's a fixed ratio of that 1x1 slope, measured in real bars (not
+    // raw pixels) so it stays correct across zoom levels - see
+    // gannBaseline()/GANN_RATIOS below.
+    gann_fan: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Веер Ганна" },
+    // 5 anchors placed X-A-B-C-D (drag places X+A, three more taps place
+    // B/C/D) - reuses the generic anchorCount completion path exactly like
+    // triangle/pitchfork, just with 5 points instead of 3. Renders as a
+    // labeled zigzag with per-leg retracement/extension ratios (see the
+    // "xabcd" render case) rather than TradingView's full harmonic-pattern
+    // auto-classification (Gartley/Bat/Butterfly/Crab naming) - that's a
+    // separate, much larger piece of work left for a future session.
+    xabcd_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн XABCD" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -89,6 +108,77 @@
 
   const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   const FIB_EXTENSION_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2.618];
+
+  /** TradingView's classic 9-ray Gann Fan set, labeled by their traditional
+   * "1x8".."8x1" angle names. `r` is the multiple of the fan's own 1x1
+   * slope (anchor0->anchor1, in real price-per-bar - see gannBaseline()),
+   * not a raw pixel-space angle, so the fan looks the same at any zoom. */
+  const GANN_RATIOS = [
+    { r: 1 / 8, label: "1×8" }, { r: 1 / 4, label: "1×4" }, { r: 1 / 3, label: "1×3" },
+    { r: 1 / 2, label: "1×2" }, { r: 1, label: "1×1" }, { r: 2, label: "2×1" },
+    { r: 3, label: "3×1" }, { r: 4, label: "4×1" }, { r: 8, label: "8×1" },
+  ];
+  // Bars to extend a Gann ray past its origin before clipping to the pane -
+  // just needs to be larger than any realistic on-screen bar count.
+  const GANN_FAR_BARS = 100000;
+
+  /** Price-per-bar slope of a Gann Fan's 1x1 ray, in *logical bar* units
+   * (via timeToLogical) rather than raw elapsed time - matches
+   * TradingView's own bar-based Gann angles, and keeps the fan's angles
+   * stable across session gaps (weekends/holidays) the same way the rest
+   * of this file's logical<->time machinery does. 0 for a degenerate
+   * same-bar anchor pair (mirrors lerpPriceAtTime's zero-span fallback). */
+  function gannBaseline(core, d) {
+    const l0 = timeToLogical(core, d.points[0].time);
+    const l1 = timeToLogical(core, d.points[1].time);
+    const dl = l1 - l0;
+    return dl ? (d.points[1].price - d.points[0].price) / dl : 0;
+  }
+  /** Pixel point far along one Gann ray (origin + GANN_FAR_BARS bars, at
+   * the price the given ratio's slope implies) - only ever used as the far
+   * endpoint fed to clipParametricLineToRect's "ray" mode, never rendered
+   * itself, so it doesn't matter that it's usually off-screen. */
+  function gannFarPixel(core, d, baseline, ratio) {
+    const l0 = timeToLogical(core, d.points[0].time);
+    const farTime = logicalToTime(core, l0 + GANN_FAR_BARS);
+    const farPrice = d.points[0].price + baseline * ratio * GANN_FAR_BARS;
+    if (!finite(farTime) || !finite(farPrice)) return null;
+    return toPixels(core, [{ time: farTime, price: farPrice }])[0];
+  }
+  /** The 9 clipped Gann Fan ray segments in pane-pixel space, ready to draw
+   * or hit-test - shared by _hitDrawing and DrawingPaneView._buildOp so the
+   * two never drift apart. Returns [] if pix[0]/pix[1] aren't both visible. */
+  function gannSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return [];
+    const baseline = gannBaseline(core, d);
+    const segs = [];
+    for (const g of GANN_RATIOS) {
+      const far = gannFarPixel(core, d, baseline, g.r);
+      if (!far || far.x == null) continue;
+      const clipped = clipParametricLineToRect(pix[0], far, paneWidth(core), paneHeight(core), "ray");
+      if (clipped) segs.push(Object.assign({ label: g.label, major: g.r === 1 }, clipped));
+    }
+    return segs;
+  }
+
+  /** Andrews' Pitchfork's median ray (anchor0 -> midpoint of anchor1/2) and
+   * its two teeth (rays through anchor1/anchor2, parallel to the median) -
+   * all three computed directly in pane-pixel space so "parallel" means
+   * exactly what it looks like on screen, matching how every other ray
+   * tool (ray/extended_line/horizontal_ray) already clips in pixel space.
+   * Shared by _hitDrawing and _buildOp like gannSegments() above. */
+  function pitchforkSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return [];
+    const mid = { time: (d.points[1].time + d.points[2].time) / 2, price: (d.points[1].price + d.points[2].price) / 2 };
+    const pixMid = toPixels(core, [mid])[0];
+    if (!pixMid || pixMid.x == null) return [];
+    const w = paneWidth(core), h = paneHeight(core);
+    const dx = pixMid.x - pix[0].x, dy = pixMid.y - pix[0].y;
+    const median = clipParametricLineToRect(pix[0], pixMid, w, h, "ray");
+    const tooth1 = clipParametricLineToRect(pix[1], { x: pix[1].x + dx, y: pix[1].y + dy }, w, h, "ray");
+    const tooth2 = clipParametricLineToRect(pix[2], { x: pix[2].x + dx, y: pix[2].y + dy }, w, h, "ray");
+    return [median, tooth1, tooth2].filter(Boolean);
+  }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
    * override the tool's built-in default set; null/empty means "unedited",
@@ -780,12 +870,35 @@
           return norm <= 1.15 ? { id: d.id, handle: null } : null;
         }
         case "polyline":
-        case "freehand": {
+        case "freehand":
+        // XABCD's 5 anchors are a plain zigzag for hit-testing purposes -
+        // same "handle at any vertex, else distance to any leg" test as
+        // polyline/freehand, just always exactly 5 points.
+        case "xabcd_pattern": {
           if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
             if (pix[i].x == null || pix[i + 1].x == null) continue;
             if (pointToSegmentDist(px, py, pix[i].x, pix[i].y, pix[i + 1].x, pix[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "pitchfork": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          for (const seg of pitchforkSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "gann_fan": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          for (const seg of gannSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
           }
           return null;
         }
@@ -1767,6 +1880,21 @@
         case "short_position":
           if (pix[0]?.x != null && pix[1]?.x != null && pix[0]?.y != null) ops.push({ kind: "position", d, x1: Math.min(pix[0].x, pix[1].x), x2: Math.max(pix[0].x, pix[1].x), entryY: pix[0].y, alpha, long: d.type === "long_position" });
           break;
+        case "pitchfork": {
+          const segs = pitchforkSegments(this.manager.core, d, pix);
+          if (segs.length) ops.push({ kind: "pitchfork", segments: segs, color, width, alpha, handles: [pix[0], pix[1], pix[2]] });
+          break;
+        }
+        case "gann_fan": {
+          const segs = gannSegments(this.manager.core, d, pix);
+          if (segs.length) ops.push({ kind: "gann_fan", segments: segs, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "xabcd_pattern":
+          if (pix.length >= 5 && pix.every((p) => p.x != null && p.y != null)) {
+            ops.push({ kind: "xabcd", points: pix, dpoints: d.points, color, width, alpha, handles: pix });
+          }
+          break;
       }
       // Applies to every op this call just pushed (almost always exactly
       // one) without needing every individual ops.push() above to remember
@@ -1993,6 +2121,52 @@
         case "position":
           this._drawPosition(ctx, op, r, rv);
           break;
+        case "pitchfork": {
+          op.segments.forEach((seg, i) => {
+            ctx.beginPath(); ctx.moveTo(seg.x1 * r, seg.y1 * rv); ctx.lineTo(seg.x2 * r, seg.y2 * rv);
+            // Median (segment 0) reads as the pitchfork's spine - draw it a
+            // touch bolder than the two teeth, same convention TradingView
+            // itself uses.
+            ctx.lineWidth = ((op.width || 1) + (i === 0 ? 0.5 : 0)) * r;
+            ctx.stroke();
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "gann_fan": {
+          op.segments.forEach((seg) => {
+            ctx.beginPath(); ctx.moveTo(seg.x1 * r, seg.y1 * rv); ctx.lineTo(seg.x2 * r, seg.y2 * rv);
+            ctx.lineWidth = ((op.width || 1) + (seg.major ? 0.5 : 0)) * r;
+            ctx.stroke();
+            this._text(ctx, seg.label, seg.x1 * r + 4 * r, seg.y1 * rv - 4 * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "xabcd": {
+          const labels = ["X", "A", "B", "C", "D"];
+          ctx.beginPath();
+          op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          op.points.forEach((p, i) => this._text(ctx, labels[i], p.x * r + 6 * r, p.y * rv - 8 * rv, op.color));
+          // Per-leg retracement/extension ratio (curLeg / prevLeg, by price
+          // distance) at each interior vertex's outgoing leg - the same
+          // "how does this leg relate to the one before it" reading
+          // TradingView's XABCD shows, without the full Gartley/Bat/
+          // Butterfly/Crab pattern-name auto-classification (separate,
+          // larger piece of work).
+          for (let i = 1; i < op.dpoints.length - 1; i++) {
+            const prevLen = Math.abs(op.dpoints[i].price - op.dpoints[i - 1].price);
+            const curLen = Math.abs(op.dpoints[i + 1].price - op.dpoints[i].price);
+            if (!prevLen) continue;
+            const pct = `${(curLen / prevLen * 100).toFixed(1)}%`;
+            const mx = (op.points[i].x + op.points[i + 1].x) / 2 * r;
+            const my = (op.points[i].y + op.points[i + 1].y) / 2 * rv;
+            this._text(ctx, pct, mx, my, op.color);
+          }
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
       }
       // "Показ цены" (Stage 7 Properties toggle): kinds that already print
       // their own price-derived label unconditionally (measure/fib/

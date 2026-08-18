@@ -70,6 +70,9 @@
     { id: "short_position", label: "Short позиция", icon: "↓" },
     { id: "fib_retracement", label: "Коррекция Фибоначчи", icon: "F" },
     { id: "fib_extension", label: "Расширение Фибоначчи", icon: "Fx" },
+    { id: "pitchfork", label: "Вилы Эндрюса", icon: "⑂" },
+    { id: "gann_fan", label: "Веер Ганна", icon: "⋔" },
+    { id: "xabcd_pattern", label: "Паттерн XABCD (X-A-B-C-D)", icon: "◬" },
   ];
 
   const LAYOUTS = [

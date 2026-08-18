@@ -185,6 +185,7 @@ function pointsFor(tool) {
   const n = TOOL_DEFS[tool].anchorCount;
   if (n === 1) return [{ time: 60, price: 100 }];
   if (n === 3) return [{ time: 40, price: 100 }, { time: 160, price: 180 }, { time: 100, price: 230 }];
+  if (n === 5) return [{ time: 20, price: 80 }, { time: 60, price: 200 }, { time: 100, price: 120 }, { time: 140, price: 220 }, { time: 180, price: 140 }];
   if (n < 0) return [{ time: 40, price: 100 }, { time: 100, price: 180 }, { time: 160, price: 120 }];
   return [{ time: 40, price: 100 }, { time: 160, price: 180 }];
 }
@@ -193,6 +194,7 @@ function boundaryPointsFor(tool) {
   const n = TOOL_DEFS[tool].anchorCount;
   if (n === 1) return [{ time: 1180, price: 200 }];
   if (n === 3) return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }, { time: 1300, price: 160 }];
+  if (n === 5) return [{ time: 1180, price: 140 }, { time: 1210, price: 220 }, { time: 1240, price: 160 }, { time: 1270, price: 220 }, { time: 1300, price: 180 }];
   if (n < 0) return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }, { time: 1300, price: 170 }];
   return [{ time: 1180, price: 180 }, { time: 1240, price: 220 }];
 }
@@ -244,7 +246,7 @@ const allTools = [
   "trend_line", "ray", "extended_line", "horizontal_line", "horizontal_ray", "vertical_line",
   "parallel_channel", "fib_retracement", "fib_extension", "rectangle", "circle",
   "polyline", "text", "note", "price_range", "time_range", "long_position", "short_position",
-  "triangle", "price_date_range", "freehand", "measure",
+  "triangle", "price_date_range", "freehand", "measure", "pitchfork", "gann_fan", "xabcd_pattern",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -266,7 +268,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
   for (const tool of [
     "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
     "circle", "price_range", "time_range", "long_position", "short_position",
-    "price_date_range",
+    "price_date_range", "gann_fan",
   ]) {
     const env = makeManager();
     env.manager.setTool(tool);
@@ -316,7 +318,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
 }
 
 // First drag establishes the first line for 3-anchor tools, then the third tap commits.
-for (const tool of ["parallel_channel", "fib_extension", "triangle"]) {
+for (const tool of ["parallel_channel", "fib_extension", "triangle", "pitchfork"]) {
   const env = makeManager();
   env.manager.setTool(tool);
   drag(env, 30, 50, 180, 110, 1000);
@@ -327,6 +329,28 @@ for (const tool of ["parallel_channel", "fib_extension", "triangle"]) {
   assert.strictEqual(env.manager.drawings[0].points.length, 3);
   assert.strictEqual(env.manager.draft, null);
   assert.strictEqual(env.manager.activeTool, null);
+}
+
+// XABCD is the one 5-anchor tool: same staged-commit mechanics as the
+// 3-anchor tools above (first drag places X+A, then three more taps place
+// B, C, D), just with a longer tail of single taps before anchorCount is
+// reached.
+{
+  const env = makeManager();
+  env.manager.setTool("xabcd_pattern");
+  drag(env, 20, 60, 60, 180, 1000);
+  assert.strictEqual(env.manager.drawings.length, 0);
+  assert.strictEqual(env.manager.draft.points.length, 2);
+  tap(env, 100, 100, 1800);
+  assert.strictEqual(env.manager.draft.points.length, 3);
+  tap(env, 140, 200, 2000);
+  assert.strictEqual(env.manager.draft.points.length, 4);
+  tap(env, 180, 120, 2200);
+  assert.strictEqual(env.manager.drawings.length, 1);
+  assert.strictEqual(env.manager.drawings[0].points.length, 5);
+  assert.strictEqual(env.manager.draft, null);
+  assert.strictEqual(env.manager.activeTool, null);
+  assertFiniteDrawing(env.manager.drawings[0]);
 }
 
 // One-anchor tools commit on release.
@@ -850,7 +874,7 @@ function runBoundaryBodyCase(tool, edge, pointerType, serial) {
   assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED, `${tool}/${edge}/${pointerType}: did not finish SELECTED`);
 }
 
-// TEST 5 — all 17 tools use the same boundary-safe body translation. Every
+// TEST 5 — all 24 tools use the same boundary-safe body translation. Every
 // edge is covered on touch; right-edge ownership is also verified for mouse
 // and stylus/pen so there is no platform-specific geometry path.
 {
