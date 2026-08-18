@@ -37,7 +37,7 @@
     ["cursor","Курсор",icon("cursor"),[[null,"Курсор / выбор"]]],
     ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["horizontal_ray","Горизонтальный луч"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"]]],
     ["fib","Фибоначчи",icon("fib"),[["fib_retracement","Коррекция Фибоначчи"],["fib_extension","Расширение Фибоначчи"]]],
-    ["gann","Ганн и вилы",icon("gann"),[["pitchfork","Вилы Эндрюса"],["gann_fan","Веер Ганна"]]],
+    ["gann","Ганн и вилы",icon("gann"),[["pitchfork","Вилы Эндрюса"],["pitchfork_schiff","Вилы Шиффа"],["pitchfork_modified_schiff","Модиф. вилы Шиффа"],["gann_fan","Веер Ганна"]]],
     ["pattern","Паттерны",icon("pattern"),[["xabcd_pattern","Паттерн XABCD"]]],
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],

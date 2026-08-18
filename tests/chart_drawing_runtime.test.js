@@ -247,6 +247,7 @@ const allTools = [
   "parallel_channel", "fib_retracement", "fib_extension", "rectangle", "circle",
   "polyline", "text", "note", "price_range", "time_range", "long_position", "short_position",
   "triangle", "price_date_range", "freehand", "measure", "pitchfork", "gann_fan", "xabcd_pattern",
+  "pitchfork_schiff", "pitchfork_modified_schiff",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -318,7 +319,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
 }
 
 // First drag establishes the first line for 3-anchor tools, then the third tap commits.
-for (const tool of ["parallel_channel", "fib_extension", "triangle", "pitchfork"]) {
+for (const tool of ["parallel_channel", "fib_extension", "triangle", "pitchfork", "pitchfork_schiff", "pitchfork_modified_schiff"]) {
   const env = makeManager();
   env.manager.setTool(tool);
   drag(env, 30, 50, 180, 110, 1000);
@@ -874,7 +875,7 @@ function runBoundaryBodyCase(tool, edge, pointerType, serial) {
   assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED, `${tool}/${edge}/${pointerType}: did not finish SELECTED`);
 }
 
-// TEST 5 — all 24 tools use the same boundary-safe body translation. Every
+// TEST 5 — all 26 tools use the same boundary-safe body translation. Every
 // edge is covered on touch; right-edge ownership is also verified for mouse
 // and stylus/pen so there is no platform-specific geometry path.
 {

@@ -71,6 +71,8 @@
     { id: "fib_retracement", label: "Коррекция Фибоначчи", icon: "F" },
     { id: "fib_extension", label: "Расширение Фибоначчи", icon: "Fx" },
     { id: "pitchfork", label: "Вилы Эндрюса", icon: "⑂" },
+    { id: "pitchfork_schiff", label: "Вилы Шиффа", icon: "⑃" },
+    { id: "pitchfork_modified_schiff", label: "Модифицированные вилы Шиффа", icon: "⑄" },
     { id: "gann_fan", label: "Веер Ганна", icon: "⋔" },
     { id: "xabcd_pattern", label: "Паттерн XABCD (X-A-B-C-D)", icon: "◬" },
   ];

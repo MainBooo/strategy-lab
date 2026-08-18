@@ -69,6 +69,12 @@
     // placement as parallel_channel/triangle (drag places 0+1, a third tap
     // places 2), just a different geometry at render/hit-test time.
     pitchfork: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Вилы Эндрюса" },
+    // Same 3-anchor placement/geometry family as pitchfork above - only the
+    // median line's two defining points differ (see PITCHFORK_VARIANTS
+    // below), so these share pitchforkSegments() rather than duplicating
+    // the parallel-teeth construction.
+    pitchfork_schiff: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Вилы Шиффа" },
+    pitchfork_modified_schiff: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Модифицированные вилы Шиффа" },
     // Anchor 0 is the fan's origin, anchor 1 defines the "1x1" (45 degree)
     // angle - every other ray (1x8..8x1) is the same origin at a slope
     // that's a fixed ratio of that 1x1 slope, measured in real bars (not
@@ -161,20 +167,46 @@
     return segs;
   }
 
-  /** Andrews' Pitchfork's median ray (anchor0 -> midpoint of anchor1/2) and
-   * its two teeth (rays through anchor1/anchor2, parallel to the median) -
-   * all three computed directly in pane-pixel space so "parallel" means
-   * exactly what it looks like on screen, matching how every other ray
-   * tool (ray/extended_line/horizontal_ray) already clips in pixel space.
-   * Shared by _hitDrawing and _buildOp like gannSegments() above. */
-  function pitchforkSegments(core, d, pix) {
+  /** Andrews' Pitchfork variant -> tool type, and vice versa: all three
+   * variants share the exact same 3-anchor placement and "two teeth
+   * parallel to the median" construction (pitchforkSegments below) -
+   * they differ *only* in which two model points define the median line:
+   *  - standard:        anchor0                    -> midpoint(anchor1, anchor2)
+   *  - schiff:           midpoint(anchor0, anchor1) -> midpoint(anchor1, anchor2)
+   *  - modified_schiff:  midpoint(anchor0, anchor1) -> anchor2
+   * (Schiff shifts the whole fork's angle by starting the median later;
+   * Modified Schiff shifts it further by aiming at anchor2 itself instead
+   * of the anchor1/2 midpoint.) */
+  const PITCHFORK_VARIANT = { pitchfork: "standard", pitchfork_schiff: "schiff", pitchfork_modified_schiff: "modified_schiff" };
+
+  /** The two *model* points (real time/price, not pixels) that define a
+   * pitchfork variant's median line - see PITCHFORK_VARIANT above for the
+   * three definitions. Kept in model space (like the rest of this file's
+   * geometry) rather than pixel space so a variant's median endpoint that
+   * isn't one of the three raw anchors (the schiff/modified_schiff
+   * midpoints) still projects correctly through toPixels(). */
+  function pitchforkMedianModelPoints(variant, d) {
+    const midPt = (a, b) => ({ time: (a.time + b.time) / 2, price: (a.price + b.price) / 2 });
+    const [p0, p1, p2] = d.points;
+    if (variant === "schiff") return [midPt(p0, p1), midPt(p1, p2)];
+    if (variant === "modified_schiff") return [midPt(p0, p1), p2];
+    return [p0, midPt(p1, p2)];
+  }
+
+  /** Andrews' Pitchfork's median ray and its two teeth (rays through
+   * anchor1/anchor2, parallel to the median) - all three computed directly
+   * in pane-pixel space so "parallel" means exactly what it looks like on
+   * screen, matching how every other ray tool (ray/extended_line/
+   * horizontal_ray) already clips in pixel space. Shared by _hitDrawing
+   * and _buildOp like gannSegments() above, across all three variants. */
+  function pitchforkSegments(core, d, pix, variant) {
     if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return [];
-    const mid = { time: (d.points[1].time + d.points[2].time) / 2, price: (d.points[1].price + d.points[2].price) / 2 };
-    const pixMid = toPixels(core, [mid])[0];
-    if (!pixMid || pixMid.x == null) return [];
+    const [m0, m1] = pitchforkMedianModelPoints(variant, d);
+    const [pixM0, pixM1] = toPixels(core, [m0, m1]);
+    if (!pixM0 || pixM0.x == null || !pixM1 || pixM1.x == null) return [];
     const w = paneWidth(core), h = paneHeight(core);
-    const dx = pixMid.x - pix[0].x, dy = pixMid.y - pix[0].y;
-    const median = clipParametricLineToRect(pix[0], pixMid, w, h, "ray");
+    const dx = pixM1.x - pixM0.x, dy = pixM1.y - pixM0.y;
+    const median = clipParametricLineToRect(pixM0, pixM1, w, h, "ray");
     const tooth1 = clipParametricLineToRect(pix[1], { x: pix[1].x + dx, y: pix[1].y + dy }, w, h, "ray");
     const tooth2 = clipParametricLineToRect(pix[2], { x: pix[2].x + dx, y: pix[2].y + dy }, w, h, "ray");
     return [median, tooth1, tooth2].filter(Boolean);
@@ -883,12 +915,14 @@
           }
           return null;
         }
-        case "pitchfork": {
+        case "pitchfork":
+        case "pitchfork_schiff":
+        case "pitchfork_modified_schiff": {
           if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
           if (handleAt(2)) return { id: d.id, handle: 2 };
-          for (const seg of pitchforkSegments(this.core, d, pix)) {
+          for (const seg of pitchforkSegments(this.core, d, pix, PITCHFORK_VARIANT[d.type])) {
             if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
           }
           return null;
@@ -1880,8 +1914,10 @@
         case "short_position":
           if (pix[0]?.x != null && pix[1]?.x != null && pix[0]?.y != null) ops.push({ kind: "position", d, x1: Math.min(pix[0].x, pix[1].x), x2: Math.max(pix[0].x, pix[1].x), entryY: pix[0].y, alpha, long: d.type === "long_position" });
           break;
-        case "pitchfork": {
-          const segs = pitchforkSegments(this.manager.core, d, pix);
+        case "pitchfork":
+        case "pitchfork_schiff":
+        case "pitchfork_modified_schiff": {
+          const segs = pitchforkSegments(this.manager.core, d, pix, PITCHFORK_VARIANT[d.type]);
           if (segs.length) ops.push({ kind: "pitchfork", segments: segs, color, width, alpha, handles: [pix[0], pix[1], pix[2]] });
           break;
         }
