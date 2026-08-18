@@ -252,6 +252,22 @@
         if (!this._applyingRange) this._rangeChangeCbs.forEach((cb) => cb(range));
       });
 
+      // Alert lines (ТЗ §93): an enabled alert for this tile's symbol shows
+      // as a real horizontal price line on the chart, not just a row in the
+      // alerts popover - createPriceLine() is lightweight-charts' own
+      // built-in feature for exactly this (same mechanism a broker's order
+      // line would use), so this needs no custom canvas drawing. Re-synced
+      // on every AlertService change (create/update/remove/trigger-disable),
+      // on symbol switch (_setSymbol below) and whenever the series itself
+      // is recreated (chart-type switch disposes the old series - lines
+      // attached to it go with it, see ChartCore.setSeriesType).
+      this._alertPriceLines = new Map(); // alert id -> PriceLine
+      if (global.AlertService) {
+        global.AlertService.onChange(() => this._syncAlertLines());
+        this._syncAlertLines();
+      }
+      this.core.onSeriesChange(() => { this._alertPriceLines = new Map(); this._syncAlertLines(); });
+
       this.fsCtrl = new CE.Fullscreen.FullscreenController(container, {
         className: "is-fullscreen",
         onChange: () => {
@@ -351,6 +367,38 @@
       btn.style.right = `${Math.round(gutterWidth) + 4}px`;
     }
 
+    /** Adds/updates/removes this tile's price lines to exactly match its
+     * symbol's currently-enabled alerts. Disabled/triggered-once alerts
+     * (AlertService flips `enabled:false` on a one-shot alert once it
+     * fires) drop off the chart the same way they drop out of "enabled"
+     * everywhere else in the UI - the line was never a second source of
+     * truth, just a rendering of AlertService.listFor(). */
+    _syncAlertLines() {
+      if (!this.core || !this.core.candleSeries || !global.AlertService) return;
+      const alerts = global.AlertService.listFor(this.symbol).filter((a) => a.enabled);
+      const seen = new Set();
+      for (const a of alerts) {
+        seen.add(a.id);
+        const opts = {
+          price: a.value,
+          color: "#ffb74d",
+          lineWidth: 1,
+          lineStyle: 2, // dashed - matches theme.js's own crosshair style:2
+          axisLabelVisible: true,
+          title: `🔔 ${(global.AlertService.CONDITION_LABELS && global.AlertService.CONDITION_LABELS[a.condition]) || ""}`,
+        };
+        const existing = this._alertPriceLines.get(a.id);
+        if (existing) existing.applyOptions(opts);
+        else this._alertPriceLines.set(a.id, this.core.candleSeries.createPriceLine(opts));
+      }
+      for (const [id, line] of this._alertPriceLines) {
+        if (!seen.has(id)) {
+          try { this.core.candleSeries.removePriceLine(line); } catch (err) { /* series already gone */ }
+          this._alertPriceLines.delete(id);
+        }
+      }
+    }
+
     setActiveVisual(active) {
       if (this.el) this.el.classList.toggle("active", active);
     }
@@ -421,6 +469,7 @@
       this.updateHeader();
       if (this.indicator) this.indicator.setSymbol(ticker);
       this._loadOrInit();
+      this._syncAlertLines();
       this._notifyStateChanged({ symbolChanged: true });
     }
 
