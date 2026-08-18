@@ -56,7 +56,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | все 6 реализованы, включая **horizontal_ray** (эта сессия) | да | **PARITY (испр. эта сессия)** | живой Playwright — создан, отрисован, обрезан ровно по границе пейна |
 | Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
 | Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
-| Pitchfork family (4 варианта) | | базовый (Standard) `pitchfork` — median + 2 parallel teeth, все в pane-pixel space; Schiff/Modified Schiff/Inside вариантов нет | да | **PARTIAL (испр. эта сессия)** | живой Playwright — 3-точечный drag+tap, все 3 линии визуально параллельны, hit-test/select/Properties/Object Tree подтверждены на проде |
+| Pitchfork family (4 варианта) | | 3 из 4: Standard `pitchfork`, Schiff `pitchfork_schiff`, Modified Schiff `pitchfork_modified_schiff` — общая геометрия (median + 2 parallel teeth, pane-pixel space), различаются только парой model-точек, задающих median (см. `PITCHFORK_VARIANT`); Inside Pitchfork отсутствует | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 3 варианта нарисованы с идентичными анкорами для сравнения, median-геометрия подтверждена программно (Schiff/Modified Schiff стартуют из одной точки midpoint(P0,P1), расходятся по направлению), hit-test/select/Properties/Object Tree подтверждены на проде |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | rectangle/circle(ellipse)/triangle есть; Rotated Rectangle отсутствует | да | PARTIAL | код |
 | Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline, freehand(brush) есть; Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker отсутствуют | да | PARTIAL | код |
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
@@ -192,6 +192,17 @@ PARITY там, где нет хотя бы одного из этих подтв
   видно на экране, тот же принцип, которым уже клипуются
   `ray`/`extended_line`/`horizontal_ray`. Schiff/Modified Schiff/Inside Pitchfork
   варианты не реализованы — остаётся PARTIAL, не PARITY.
+- **Pitchfork Schiff + Modified Schiff** (продолжение той же сессии) — те же
+  3 анкора и та же placement-механика, что у Standard выше, общая функция
+  `pitchforkSegments()` (теперь принимает `variant`) вместо копипасты: все
+  три варианта различаются только тем, какая пара *model*-точек задаёт
+  median — Standard: анкор0 → midpoint(анкор1,анкор2); Schiff:
+  midpoint(анкор0,анкор1) → midpoint(анкор1,анкор2); Modified Schiff:
+  midpoint(анкор0,анкор1) → анкор2 (см. `PITCHFORK_VARIANT`/
+  `pitchforkMedianModelPoints`). Оба зубца (через анкор1/анкор2, параллельно
+  новой median) не меняются между вариантами — то же самое pane-pixel-space
+  построение. Inside Pitchfork по-прежнему не реализован — 3 из 4 вариантов
+  TradingView-группы теперь есть.
 - **Gann Fan** — из MISSING в PARTIAL. Новый `gann_fan` tool, 2 анкора —
   анкор 1 задаёт "1×1" (45°) наклон в реальных барах (`timeToLogical`, не
   сырые пиксели, иначе фан выглядел бы по-разному на разных масштабах),
@@ -206,6 +217,15 @@ PARITY там, где нет хотя бы одного из этих подтв
   известными наборами Фибоначчи-диапазонов на каждую пару ног). ABCD/
   Triangle Pattern/Three Drives/Head & Shoulders/Elliott Wave/Cyclic Lines/
   Sine Line по-прежнему не реализованы вообще.
+- **Верифицировано** вживую на проде для Schiff/Modified Schiff — все три
+  Pitchfork-варианта нарисованы с идентичными анкорами на одном графике для
+  прямого сравнения; программно подтверждено, что Schiff и Modified Schiff
+  стартуют median из одной и той же точки (midpoint анкор0/анкор1), но
+  расходятся по направлению (Schiff → midpoint анкор1/анкор2, Modified
+  Schiff → анкор2 напрямую), а Standard стартует из анкора0 — ровно по
+  формулам выше; hit-test подтверждён для обоих новых типов программным
+  сканом; тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`.
 - Все три новых инструмента переиспользуют существующую generic-инфраструктуру
   без единой строчки специального кода: Properties panel (цвет/толщина/
   стиль/прозрачность/label/видимость по таймфреймам), Object Tree, floating
