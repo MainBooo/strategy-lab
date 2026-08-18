@@ -83,8 +83,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Magnet Off/Weak/Strong | | было boolean (только Strong); теперь 3 режима | да | **PARITY (испр. эта сессия)** | live-проверка snapPoint() против реальных свечей, см. audit |
 | Keep drawing mode | | `dm.keepDrawing`, рейл-кнопка «✎» | да | PARITY | код |
 | Lock (individual + all) | | `updateDrawing({locked})`, рейл-кнопка блокирует все | да | PARITY | код |
-| Hide (drawings/indicators/all) | family-меню | рейл — только «скрыть все рисунки»; family-меню с раздельными Hide Drawings/Indicators/Positions отсутствует | да | PARTIAL | код |
-| Remove (selected/drawings/indicators/all) | family-меню с подтверждением | рейл-кнопка «удалить всё» с `confirm()`; раздельного family-меню нет | да | PARTIAL | код |
+| Hide (drawings/indicators/all) | family-меню | рейл — попап с раздельными Скрыть рисунки/позиции/индикаторы/всё, disabled на пустых категориях, label флипается в «Показать …» | да | **PARITY (испр. эта сессия)** | живой Playwright — SMA спрятана точечно (series.options().visible), рисунок/позиция не тронуты |
+| Remove (selected/drawings/indicators/all) | family-меню с подтверждением | тот же попап, раздельные Удалить рисунки/позиции/индикаторы/всё, каждый со своим `confirm()` | да | **PARITY (испр. эта сессия)** | живой Playwright — «Удалить позиции» стёр только позицию, trend_line и SMA целы |
 | Undo/Redo | | `_undoStack`/`_redoStack`, 100 записей, один push на operation (не на pointermove) | да | PARITY | код, ТЗ §84 уже соблюдён |
 | Drawing persistence (reload/timeframe/symbol) | | `/api/chart-drawings`, привязка к symbol/pane, `loadDrawings()` при смене тикера | да | PARITY | код |
 | Multiselect (Ctrl/Cmd click) | | отсутствует | да (desktop) | MISSING | — |
@@ -117,7 +117,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 
 ## Changelog этой сессии (после первого снимка, коммит `e1f7afe`)
 
-Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9`, `8838d00` — сняты после `6390adb`:
+Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9`, `8838d00`, `181bc1f` —
+сняты после `6390adb`:
 
 - **Hollow Candles** (`8838d00`) — из PARTIAL (6/7 обязательных типов) в
   PARITY. Цвет по сравнению с *предыдущим* close (не своим open, как у
@@ -126,6 +127,15 @@ PARITY там, где нет хотя бы одного из этих подтв
   сплошным цветом — два независимых измерения, как в реальном TV.
   lightweight-charts не имеет встроенного «hollow»-режима — реализовано
   через per-point `color`/`borderColor`/`wickColor` в данных серии.
+- **Hide/Remove family-меню** (`181bc1f`) — из PARTIAL в PARITY. Рейл-
+  кнопки «глаз»/«корзина» открывают попап с раздельными действиями:
+  Скрыть/Удалить рисунки · позиции · индикаторы · всё. Позиции
+  (`long_position`/`short_position`) отделены от рисунков просто по
+  `d.type`, без изменений в `drawings.js`. Индикаторы раньше вообще не
+  умели скрываться (не было даже `visible`-флага на инстансе) —
+  `IndicatorPaneManager` получил `setVisible`/`setAllVisible`/
+  `allHidden()`, обобщив уже существовавший спец-кейс volume-тумблера
+  на любой тип серии.
 
 - **price-scale «+»** — из PARTIAL в PARITY (визуальная кнопка + меню Create Alert/Add H-Line).
 - **Alert lines на графике** — из NOT VERIFIED в PARITY (реально отсутствовали, теперь есть).

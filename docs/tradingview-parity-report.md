@@ -178,8 +178,8 @@ custom levels закрыты в этой же сессии:
   (Price Range/Time Range/Price&Time Range).
 - **Floating toolbar** при выборе объекта — реализовано как нижняя панель
   «Свойства», не как плавающий toolbar рядом с объектом.
-- **Hide/Remove family-меню** (раздельно Drawings/Indicators/Positions) —
-  сейчас рейл умеет только «скрыть/удалить всё разом».
+- ~~**Hide/Remove family-меню** (раздельно Drawings/Indicators/Positions)~~ —
+  закрыто коммитом `181bc1f`.
 - ~~**Chart types**: 6 из 7 обязательных (нет Hollow Candles)~~ — закрыто
   коммитом `8838d00`, теперь 7/7 (см. matrix changelog).
 - **Reference pack** (§4 ТЗ, 25 состояний × 4 mobile viewport) не собирался
