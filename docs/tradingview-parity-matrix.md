@@ -1,6 +1,7 @@
 # TradingView parity matrix — «Анализ графиков»
 
-Снято 2026-08-18, после коммита `e1f7afe`. Методология: код `static/chart-engine/*.js`,
+Снято 2026-08-18, обновлено после коммита `f38b4c9` (см. changelog в конце
+файла). Методология: код `static/chart-engine/*.js`,
 `static/chart-analysis.js`, `static/chart-editor-terminal-*.js` + выборочная
 живая проверка на `strategylab.generationweb.ru` (390×844, Playwright,
 реальные Pointer Events на проде). Колонка **Test** отмечает, была ли
@@ -33,8 +34,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Current price label | подпись у последней цены | встроено в серию | да | PARITY | библиотека |
 | Crosshair (desktop, мышь) | линии + подписи | lightweight-charts встроенный crosshair | да | PARITY | библиотека |
 | Crosshair (touch) | активация жестом, drag без панорамирования | не найден отдельный mobile-специфичный жест активации; предположительно поведение по умолчанию библиотеки | да | **NOT VERIFIED** | не проверено на реальном touch-устройстве |
-| Price-scale «+» (визуальный, следует за ценой) | плавающая «+» кнопка у шкалы | отсутствует как визуальный элемент | да, high priority (ТЗ §31) | **PARTIAL** | есть функциональный эквивалент — тап по шкале цены (`bindPriceAxisAlertGesture`) открывает алерт с этой ценой; нет самой «+», нет «Add Horizontal Line» из этого меню |
-| Price-scale quick menu | Create Alert / Add H-Line / Create Order | только Create Alert (через тап по шкале или через context-menu «Добавить алерт здесь») | да (Order — только если есть trading backend, которого нет) | PARTIAL | код |
+| Price-scale «+» (визуальный, следует за ценой) | плавающая «+» кнопка у шкалы | `ChartTile._updateScalePlus` — реальная кнопка, следует за крестом по Y, позиция считается от `priceScale("right").width()` | да, high priority (ТЗ §31) | **PARITY (испр. эта сессия)** | живой Playwright, 5/5 повторных тестов; см. audit — потребовалось 2 раунда реальных багов (высота 22→44px из-за конфликтующего правила, pointerup/click ретаргетился на canvas у самой шкалы) |
+| Price-scale quick menu | Create Alert / Add H-Line / Create Order | оба пункта есть (Create Alert / Add Horizontal Line); Create Order отсутствует | да (Order — только если есть trading backend, которого нет — сознательно не реализовано) | **PARITY (испр. эта сессия)** | живой Playwright — создана реальная horizontal_line на точной цене под кнопкой |
 | Time scale (даты, зум, drag) | стандартное поведение | lightweight-charts встроенный | да | PARITY | библиотека |
 | Timezone | не хардкодить UTC+3 | `theme.js` форматирует явно как UTC (см. docs/chart-engine.md «Тайм-зоны» — намеренно, т.к. свечи хранятся наивно как MSK-время, трактовка как UTC на фронте не искажает часы зрителя) | да | PARITY (по замыслу) | код + существующая документация |
 
@@ -52,15 +53,15 @@ PARITY там, где нет хотя бы одного из этих подтв
 
 | Component | TV reference | Strategy Lab | Required | Status | Test |
 |---|---|---|---|---|---|
-| Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | trend_line/ray/extended_line/horizontal_line/vertical_line реализованы; **Horizontal Ray отдельным типом отсутствует** (только Horizontal Line — на всю ширину, не луч от точки) | да | PARTIAL | код |
+| Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | все 6 реализованы, включая **horizontal_ray** (эта сессия) | да | **PARITY (испр. эта сессия)** | живой Playwright — создан, отрисован, обрезан ровно по границе пейна |
 | Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
 | Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
 | Pitchfork family (4 варианта) | | отсутствуют | да | MISSING | — |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | rectangle/circle(ellipse)/triangle есть; Rotated Rectangle отсутствует | да | PARTIAL | код |
 | Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline, freehand(brush) есть; Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker отсутствуют | да | PARTIAL | код |
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
-| Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | реализован (`fib_retracement`, `FIB_RETRACEMENT_LEVELS`), но без UI для custom-уровней/reverse/extend-lines в панели свойств | да, high priority | PARTIAL | код |
-| Fib Extension | | реализован (`fib_extension`) | да | PARITY (базовая геометрия) | код |
+| Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
+| Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
 | Gann Fan/Square/Box | | отсутствуют | да | MISSING | — |
 | Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | отсутствуют | да | MISSING | — |
@@ -100,8 +101,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Conditions (Crossing/Up/Down, Greater/Less) | | `AS.CONDITION_LABELS` — нужно свериться с фактическим списком в `alert-service.js` (не вычитано построчно в эту сессию) | да | NOT VERIFIED | — |
 | Persistent backend (не только пока открыта страница) | | `/api/alerts` REST для авторизованных, `/api/alerts/events` для polling триггеров | да | PARITY | код |
 | Anonymous fallback | | localStorage-only режим для неавторизованных | — | PARITY (сознательное решение) | код |
-| Alert line на графике | | не найдено — не подтверждено, что сработавший/активный алерт рисуется как horizontal line с меткой на самом графике | да | **NOT VERIFIED / вероятно MISSING** | требует отдельной проверки `trades.js`/`drawings.js` на предмет alert-рендеринга |
-| Horizontal Line → Create Alert | | context-menu «Добавить алерт здесь» работает от любой точки клика, не именно от существующей Horizontal Line drawing | да | PARTIAL | код |
+| Alert line на графике | | `ChartTile._syncAlertLines()` (эта сессия) — каждый включённый алерт символа рисуется как `createPriceLine` (пунктир, 🔔+условие+цена в подписи оси), пересинхронизируется на create/update/remove/trigger, смену символа, пересоздание серии | да | **PARITY (испр. эта сессия)** | живой Playwright — создан реальный алерт, линия появилась с точной ценой/подписью, исчезла при удалении |
+| Horizontal Line → Create Alert | | context-menu «Добавить алерт здесь» + новая «Добавить горизонтальную линию» рядом (эта сессия); работают от любой точки клика/тапа по price-scale «+», не именно от существующей Horizontal Line drawing | да | PARTIAL | код + живой Playwright для price-scale «+» вариант |
 
 ## Multi-chart / workspace / fullscreen
 
@@ -113,6 +114,24 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Mobile viewport (100dvh, safe-area, no double scroll) | | `env(safe-area-inset-*)`, `100dvh`, единая `overflow:hidden` цепочка | да | PARITY | живой Playwright (визуально, эта и предыдущие сессии) |
 | Replay совместимость | | не проверялось в эту сессию | должен не сломаться | NOT VERIFIED | — |
 | Backtest trade markers | entry/exit/long/short/hover | `trades.js: TradeOverlayPrimitive`, `TradeSelectionManager`, один canvas-примитив на все сделки | да | PARITY | код + существующая документация |
+
+## Changelog этой сессии (после первого снимка, коммит `e1f7afe`)
+
+Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9` — сняты после `6390adb`:
+
+- **price-scale «+»** — из PARTIAL в PARITY (визуальная кнопка + меню Create Alert/Add H-Line).
+- **Alert lines на графике** — из NOT VERIFIED в PARITY (реально отсутствовали, теперь есть).
+- **Horizontal Ray** — из PARTIAL (не было как отдельный тип) в PARITY.
+- **Fibonacci custom levels/Reverse/Extend-left** — из PARTIAL в PARITY.
+- **Найден и исправлен independent баг**: `ray`/`extended_line`/`fib_retracement`/
+  `fib_extension`/`time_range` — все инструменты, «продлевающиеся до края»,
+  обрезались по `container.clientWidth/clientHeight` (весь host, включая
+  price-scale gutter и time-scale strip), а не по фактическому размеру
+  canvas'а самого пейна (`DrawingLayerPrimitive` рисует только на нём) —
+  часть линии, тянущаяся к правому/нижнему краю, просто не рендерилась
+  (не «пряталась» под шкалой — canvas обрезает контент по своим
+  границам). Исправлено централизованно (`paneWidth()`/`paneHeight()`
+  хелперы) во всех 9 местах разом, не по одному инструменту.
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
