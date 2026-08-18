@@ -179,10 +179,15 @@ custom levels закрыты в этой же сессии:
 - ~~**Pitchfork Schiff + Modified Schiff**~~ — добавлены той же сессией
   (`pitchfork_schiff`/`pitchfork_modified_schiff`, общая функция с Standard,
   различаются только парой точек, задающих median — см. matrix changelog).
-  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, ABCD/
-  Triangle Pattern/Three Drives/Head&Shoulders/Elliott Wave/Cyclic Lines/
-  Sine Line и авто-классификация XABCD по названию паттерна (Gartley/Bat/
-  Butterfly/Crab) не реализованы — остаются MISSING.
+- ~~**ABCD Pattern + Triangle Pattern**~~ — добавлены той же сессией
+  (`abcd_pattern` — тот же скелет, что XABCD, 4 анкора без X;
+  `triangle_pattern` — 5-точечный зигзаг + 2 boundary-луча через
+  1→3/2→4 — см. matrix changelog). 3 из 8 паттерн-инструментов ТЗ теперь
+  реализованы (XABCD/ABCD/Triangle Pattern).
+  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, Three
+  Drives/Head&Shoulders/Elliott Wave/Cyclic Lines/Sine Line и авто-
+  классификация XABCD по названию паттерна (Gartley/Bat/Butterfly/Crab) не
+  реализованы — остаются MISSING.
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time

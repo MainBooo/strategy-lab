@@ -64,7 +64,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
-| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | XABCD `xabcd_pattern` — 5-точечный размеченный зигзаг (X/A/B/C/D) с % отношением каждой ноги к предыдущей; без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab) — это отдельный, более крупный кусок работы; ABCD/Triangle/Three Drives/H&S/Elliott Wave/Cyclic/Sine отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — 5-точечная staged-постановка (drag+3×tap), метки X/A/B/C/D и %-отношения ног видны на графике, hit-test/Object Tree подтверждены |
+| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 3 из 8: XABCD `xabcd_pattern` (5-точечный размеченный зигзаг X/A/B/C/D с % отношением ног), ABCD `abcd_pattern` (тот же скелет, 4 точки A/B/C/D — без X), Triangle Pattern `triangle_pattern` (5-точечный зигзаг 1-2-3-4-5 + два расходящихся/сходящихся boundary-луча через 1→3 и 2→4); ни один без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab для XABCD) — отдельный, более крупный кусок работы; Three Drives/H&S/Elliott Wave/Cyclic/Sine отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка (drag+2×tap для ABCD, drag+3×tap для Triangle Pattern), метки A/B/C/D и 1-5, %-отношения ног (ABCD) и boundary-лучи (Triangle Pattern) видны на графике, hit-test/Object Tree подтверждены для обоих новых типов |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
 | Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
 | Price Range / Time Range / Price&Time Range | измерение с дельтами (персистентные line tools) | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`) — совпадает с TV, там это тоже отдельные постоянные инструменты, не Measure | да | PARITY | код, унаследовано |
@@ -217,6 +217,28 @@ PARITY там, где нет хотя бы одного из этих подтв
   известными наборами Фибоначчи-диапазонов на каждую пару ног). ABCD/
   Triangle Pattern/Three Drives/Head & Shoulders/Elliott Wave/Cyclic Lines/
   Sine Line по-прежнему не реализованы вообще.
+- **ABCD Pattern + Triangle Pattern** (продолжение той же линии работы) —
+  из MISSING в PARTIAL. `abcd_pattern` — тот же размеченный-зигзаг + %-
+  отношения рендер, что у XABCD, но 4 анкора (A-B-C-D, без X); отрефакторено
+  под общий `PATTERN_LABELS`/`kind:"xabcd"` render-путь вместо копипасты —
+  разница только в списке меток и точке отсчёта цикла %-отношений.
+  `triangle_pattern` — 5 анкоров (тот же staged drag+3×tap, что у XABCD),
+  но рендерит не только зигзаг 1-2-3-4-5 (метки цифрами, без %-отношений),
+  а ещё и два boundary-луча — через анкор0→анкор2 и анкор1→анкор3, оба
+  extended в pane-pixel space (`trianglePatternSegments()`, тот же принцип
+  клипования, что у pitchfork/gann_fan) — это и есть сходящиеся/расходящиеся
+  трендлинии, которыми реальный треугольный паттерн размечается, а не
+  просто 5 точек. ABCD/Triangle Pattern теперь оба PARTIAL — из 8
+  паттерн-инструментов ТЗ реализовано 3 (XABCD/ABCD/Triangle Pattern),
+  Three Drives/H&S/Elliott Wave/Cyclic Lines/Sine Line остаются MISSING.
+  **Верифицировано** вживую на проде: ABCD нарисован (drag+2×tap, 4 точки),
+  подтверждены метки `["A","B","C","D"]` и обе %-отношения (66.7%/125.0% на
+  скриншоте); Triangle Pattern нарисован (drag+3×tap, 5 точек) с двумя
+  расходящимися boundary-лучами, подтверждено программно
+  `trianglePatternSegments()` вернул 2 сегмента; hit-test подтверждён для
+  обоих новых типов программным сканом, Object Tree показал верные русские
+  подписи; тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`.
 - **Верифицировано** вживую на проде для Schiff/Modified Schiff — все три
   Pitchfork-варианта нарисованы с идентичными анкорами на одном графике для
   прямого сравнения; программно подтверждено, что Schiff и Modified Schiff
