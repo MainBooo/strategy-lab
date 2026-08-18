@@ -56,14 +56,29 @@
     fib_extension: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Расширение Фибоначчи" },
     long_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Long позиция" },
     short_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Short позиция" },
+    triangle: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Треугольник" },
+    price_date_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Цена и время" },
+    // Unlike every other tool, points aren't placed one anchor per tap/drag -
+    // they're continuously sampled from pointer position while the button is
+    // held (see the "drag-release" branches in _onPointerMove/
+    // _finishCreatePointer/_finishDraft below). completion:"drag-release" is
+    // a third completion mode alongside the existing "anchor-count"/
+    // "explicit" ones.
+    freehand: { pointsNeeded: -1, anchorCount: -1, creationGesture: "freehand-drag", dragStagePoints: 0, completion: "drag-release", preview: "none", label: "Кисть" },
   };
+
+  // Minimum on-screen movement (px) between two sampled freehand points -
+  // keeps the stored point count (and therefore render/hit-test cost, and
+  // saved-drawing payload size) bounded instead of one point per pointermove
+  // event, which can fire far more often than is visually meaningful.
+  const FREEHAND_SAMPLE_MIN_DIST_PX = 6;
 
   const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   const FIB_EXTENSION_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2.618];
 
   function defaultProperties(type) {
     const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "", showPrice: false, visibleTimeframes: null };
-    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel") return Object.assign(base, { fill: true });
+    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range") return Object.assign(base, { fill: true });
     if (type === "long_position") return Object.assign(base, { color: theme.up, riskDistance: null, rewardDistance: null, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "text") return Object.assign(base, { text: "Заметка" });
@@ -109,6 +124,19 @@
   }
 
   // ------------------------------------------------------------- geometry --
+
+  /** True if (px,py) is inside (or on) the triangle (x1,y1)-(x2,y2)-(x3,y3),
+   * via the standard same-sign-barycentric test. Used so clicking anywhere
+   * inside a filled triangle selects it, matching rectangle/circle's
+   * filled-interior hit-testing rather than only the 3 edges. */
+  function pointInTriangle(px, py, x1, y1, x2, y2, x3, y3) {
+    const d1 = (px - x2) * (y1 - y2) - (x1 - x2) * (py - y2);
+    const d2 = (px - x3) * (y2 - y3) - (x2 - x3) * (py - y3);
+    const d3 = (px - x1) * (y3 - y1) - (x3 - x1) * (py - y1);
+    const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+    const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+    return !(hasNeg && hasPos);
+  }
 
   function pointToSegmentDist(px, py, x1, y1, x2, y2) {
     const dx = x2 - x1, dy = y2 - y1;
@@ -381,6 +409,14 @@
       this.activeTool = null;
       this.draft = null;
       this.snapEnabled = false;
+      // Per-tool-type {color,width,dash,opacity} the app layer can seed
+      // (see chart-analysis.js's "Сделать стилем по умолчанию" button and
+      // its localStorage-backed moexlab_tool_style_defaults) - applied in
+      // addDrawing() below new drawings' own defaultProperties() but above
+      // an explicit `properties` argument, so a user's saved style becomes
+      // the starting point for every new drawing of that tool without this
+      // engine module knowing anything about localStorage itself.
+      this.styleOverrides = {};
       // Set by ChartTile whenever the tile's timeframe changes (see
       // setTimeframe() in chart-tile.js) - read by _buildOp's "видимость на
       // таймфреймах" filter above. null means "not tracked yet"; a drawing
@@ -453,7 +489,7 @@
         id: uid(),
         type,
         points: points.map((p) => ({ time: p.time ?? null, price: p.price ?? null })),
-        properties: Object.assign(defaultProperties(type), properties || {}),
+        properties: Object.assign(defaultProperties(type), this.styleOverrides[type] || {}, properties || {}),
         locked: false,
         hidden: false,
         zIndex: this.drawings.length,
@@ -627,6 +663,7 @@
         }
         case "rectangle":
         case "price_range":
+        case "price_date_range":
         case "time_range": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
@@ -635,6 +672,18 @@
           const y1 = d.type === "time_range" ? 0 : Math.min(pix[0].y, pix[1].y);
           const y2 = d.type === "time_range" ? this.core.container.clientHeight : Math.max(pix[0].y, pix[1].y);
           return px >= x1 - tol && px <= x2 + tol && py >= y1 - tol && py <= y2 + tol ? { id: d.id, handle: null } : null;
+        }
+        case "triangle": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          if (pointInTriangle(px, py, pix[0].x, pix[0].y, pix[1].x, pix[1].y, pix[2].x, pix[2].y)) return { id: d.id, handle: null };
+          const edges = [[0, 1], [1, 2], [2, 0]];
+          for (const [a, b] of edges) {
+            if (pointToSegmentDist(px, py, pix[a].x, pix[a].y, pix[b].x, pix[b].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
         }
         case "circle": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
@@ -648,7 +697,8 @@
           const norm = ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2;
           return norm <= 1.15 ? { id: d.id, handle: null } : null;
         }
-        case "polyline": {
+        case "polyline":
+        case "freehand": {
           if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
@@ -1060,6 +1110,18 @@
         if (distance > this._movementThreshold(session.pointerType)) session.moved = true;
 
         if (session.kind === "create") {
+          const createDef = TOOL_DEFS[session.tool];
+          if (createDef && createDef.completion === "drag-release") {
+            // Freehand doesn't rubber-band a single next anchor like every
+            // other tool - it appends a new point to the draft whenever the
+            // pointer has moved far enough from the last sampled one.
+            const last = session.freehandLastSample;
+            if (!last || Math.hypot(pos.x - last.x, pos.y - last.y) >= FREEHAND_SAMPLE_MIN_DIST_PX) {
+              this._placePoint(pos.x, pos.y, { deferFinish: true });
+              session.freehandLastSample = { x: pos.x, y: pos.y };
+            }
+            return;
+          }
           if (session.provisionalIndex != null) this._updateDraftPointAt(session.provisionalIndex, pos.x, pos.y);
           else if (this.draft) {
             this._draftPreviewPoint = { x: pos.x, y: pos.y };
@@ -1117,6 +1179,19 @@
       if (!def) return;
 
       if (session.completedByDoubleTap) return;
+
+      if (def.completion === "drag-release") {
+        // A real drag sampled >=2 points (see the _onPointerMove branch
+        // above) and finishes normally; a plain click with no movement only
+        // ever placed the one pointerdown point, which _finishDraft's own
+        // guard refuses to turn into a drawing - cancelDraft() (not just
+        // leaving it) so the tool stays cleanly armed for another attempt
+        // instead of a dangling 1-point draft sitting around like an
+        // unfinished polyline.
+        if (this.draft && this.draft.points.length >= 2) this._finishDraft();
+        else this.cancelDraft();
+        return;
+      }
 
       if (session.anchorsBefore === 0 && session.moved && def.dragStagePoints >= 2 && this.draft) {
         this._placePoint(pos.x, pos.y, { deferFinish: true });
@@ -1202,7 +1277,7 @@
       if (!this.draft) return null;
       const def = TOOL_DEFS[this.draft.type];
       if (!def) return null;
-      if (def.completion === "explicit" && this.draft.points.length < 2) return null;
+      if ((def.completion === "explicit" || def.completion === "drag-release") && this.draft.points.length < 2) return null;
       if (def.anchorCount > 0 && this.draft.points.length < def.anchorCount) return null;
 
       const points = this.draft.points.map((point) => ({ time: point.time, price: point.price }));
@@ -1471,10 +1546,22 @@
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "ellipse", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
           break;
         case "polyline":
+        case "freehand":
           if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
+          break;
+        case "triangle":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
+            ops.push({
+              kind: "triangle", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, x3: pix[2].x, y3: pix[2].y,
+              color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1], pix[2]],
+            });
+          }
           break;
         case "price_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        case "price_date_range":
+          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "price_date_range", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         case "time_range":
           if (pix[0]?.x != null && pix[1]?.x != null) {
@@ -1663,6 +1750,41 @@
           const pct = priceA ? ((priceB - priceA) / priceA * 100) : 0;
           const label = `${(priceB - priceA) >= 0 ? "+" : ""}${(priceB - priceA).toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
           this._text(ctx, label, (x1 + x2) / 2 - 40 * r, (y1 + y2) / 2, up ? theme.up : theme.down);
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "triangle": {
+          const p1x = op.x1 * r, p1y = op.y1 * rv, p2x = op.x2 * r, p2y = op.y2 * rv, p3x = op.x3 * r, p3y = op.y3 * rv;
+          ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(p2x, p2y); ctx.lineTo(p3x, p3y); ctx.closePath();
+          if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fill(); ctx.globalAlpha = op.alpha ?? 1; }
+          ctx.stroke();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        // Superset of "measure" (price delta box) and "timerange" (duration
+        // band label) - one dragged box shows both the price and the time
+        // delta between its two anchors, matching TradingView's combined
+        // Price+Date range tool.
+        case "price_date_range": {
+          const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
+          const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
+          const priceA = op.d.points[0].price, priceB = op.d.points[1].price;
+          const up = priceB >= priceA;
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.15;
+          ctx.fillStyle = up ? theme.up : theme.down;
+          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.globalAlpha = op.alpha ?? 1;
+          ctx.strokeStyle = up ? theme.up : theme.down;
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          const pct = priceA ? ((priceB - priceA) / priceA * 100) : 0;
+          const priceLabel = `${(priceB - priceA) >= 0 ? "+" : ""}${(priceB - priceA).toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+          const t1 = op.d.points[0].time, t2 = op.d.points[1].time;
+          const seconds = Math.abs(t2 - t1);
+          const bars = this.manager.core.candles.filter((c) => c.time >= Math.min(t1, t2) && c.time <= Math.max(t1, t2)).length;
+          const timeLabel = `${fmtDuration(seconds)} · ${bars} бар.`;
+          const midX = (x1 + x2) / 2 - 40 * r, midY = (y1 + y2) / 2;
+          this._text(ctx, priceLabel, midX, midY - 8 * rv, up ? theme.up : theme.down);
+          this._text(ctx, timeLabel, midX, midY + 10 * rv, up ? theme.up : theme.down);
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }

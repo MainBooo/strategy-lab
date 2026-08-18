@@ -332,6 +332,48 @@
       this._buildPanelChrome();
       this._wireToolbarOverflow();
       this._syncCollapseRightButton();
+      this._bindTimeframeHotkeys();
+    },
+
+    /** TradingView-style timeframe hotkeys: type a number (buffered briefly
+     * so "1" then "5" within the window reads as 15, not two separate
+     * switches to 1 and 5) to jump to that many minutes, or H/D/W for
+     * hour/day/week (optionally after a number, e.g. "4" then "H" = 4h).
+     * _build() can re-run (layout changes, tab re-entry) but this listener
+     * must only ever attach once per page lifetime. */
+    _bindTimeframeHotkeys() {
+      if (this._tfHotkeysBound) return;
+      this._tfHotkeysBound = true;
+      const BUFFER_MS = 600;
+      let buffer = "";
+      let timer = null;
+      const clearBuffer = () => { buffer = ""; if (timer) { clearTimeout(timer); timer = null; } };
+      const apply = (tf) => {
+        const list = this.activeTile ? this.activeTile.listTimeframes() : [];
+        if (!list.some((t) => t.id === tf)) return;
+        this._commandSetTimeframe(tf);
+        const select = this.root && this.root.querySelector("#gtTimeframe");
+        if (select) select.value = tf;
+      };
+      document.addEventListener("keydown", (event) => {
+        if (!document.body.classList.contains("charts-active")) return;
+        const target = event.target;
+        if (target instanceof Element && target.matches("input,textarea,select,[contenteditable],[contenteditable='true']")) return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        const key = event.key;
+        if (/^[0-9]$/.test(key)) {
+          buffer = (buffer + key).slice(-3);
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => { apply(`${Number(buffer)}m`); clearBuffer(); }, BUFFER_MS);
+          return;
+        }
+        const letter = key.length === 1 ? key.toUpperCase() : "";
+        const suffix = { H: "h", D: "d", W: "w", M: "mo" }[letter];
+        if (!suffix) return;
+        const n = buffer ? Number(buffer) : 1;
+        clearBuffer();
+        apply(`${n}${suffix}`);
+      }, true);
     },
 
     _wireToolTools() {
@@ -795,6 +837,41 @@
       }));
     },
 
+    /** TradingView signature gesture: tap the price axis to create an alert
+     * at that price, instead of only via the toolbar bell's manual form
+     * (see _bindPriceAxisAlertGesture below, wired from ChartTile.mount). */
+    _openAlertPopoverWithPrice(tile, price) {
+      // Deferred one tick: both callers (the context menu's click handler
+      // and the price-axis tap's pointerup handler) run synchronously
+      // inside a click/pointerup dispatch that _wireGlobalPopover's own
+      // document-level "click outside closes the popover" listener also
+      // observes later in the very same bubble phase - opening synchronously
+      // here had it immediately re-hidden by that listener a moment later.
+      setTimeout(() => {
+        const btn = this.root.querySelector("#gtAlertBtn");
+        const pop = this.root.querySelector("#gtAlertsPop");
+        if (!btn || !pop) return;
+        this.root.querySelectorAll(".ca-popover").forEach((p) => p.classList.add("hidden"));
+        pop.classList.remove("hidden");
+        this._renderAlertsInto(pop);
+        const valueInput = pop.querySelector("#alValue");
+        const symbolInput = pop.querySelector("#alSymbol");
+        const conditionSelect = pop.querySelector("#alCondition");
+        const candles = tile.core && tile.core.candles;
+        const lastClose = candles && candles.length ? candles[candles.length - 1].close : null;
+        if (symbolInput) symbolInput.value = tile.symbol;
+        if (valueInput) {
+          // coordinateToPrice()/pixelToPoint() return raw float pixel-math
+          // (e.g. 81.60333746898263) - round to a sane number of decimals
+          // for a price field instead of dumping 14 digits into it.
+          const digits = Number.isFinite(price) ? (Math.abs(price) >= 1 ? 2 : Math.abs(price) >= 0.01 ? 4 : 8) : 2;
+          valueInput.value = Number.isFinite(price) ? Number(price.toFixed(digits)) : "";
+        }
+        if (conditionSelect && lastClose != null) conditionSelect.value = price >= lastClose ? "price_above" : "price_below";
+        if (valueInput) { valueInput.focus(); valueInput.select(); }
+      }, 0);
+    },
+
     _refreshAlertBadge() {
       const badge = this.root.querySelector("#gtAlertBadge");
       if (!badge) return;
@@ -827,7 +904,7 @@
         </div>
         <div class="ca-more-sep"></div>
         <button class="ca-more-item" data-act="order">⚙ Заказать стратегию по разметке</button>
-        <button class="ca-more-item" data-act="snap">🧲 Прилипание к свечам</button>
+        <button class="ca-more-item" data-act="snap">🧲 Прилипание к свечам${tile.drawingMgr && tile.drawingMgr.snapEnabled ? " ✓" : ""}</button>
         <button class="ca-more-item" data-act="reset">↺ Сбросить масштаб</button>
       `;
       pop.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
@@ -835,7 +912,13 @@
         const act = b.dataset.act;
         if (this._toolbarActions[act]) this._toolbarActions[act]();
         else if (act === "order") tile.openOrderModal();
-        else if (act === "snap") { if (this.drawingMgr) this.drawingMgr.snapEnabled = !this.drawingMgr.snapEnabled; }
+        else if (act === "snap") {
+          // Also keep the rail's own magnet button (chart-editor-terminal-
+          // mobile-v2.js) in sync - it reads the same drawingMgr.snapEnabled
+          // but previously had no way to learn this menu had changed it.
+          if (tile.drawingMgr) tile.drawingMgr.snapEnabled = !tile.drawingMgr.snapEnabled;
+          if (window.StrategyLabMobileChart && typeof window.StrategyLabMobileChart.refreshRail === "function") window.StrategyLabMobileChart.refreshRail();
+        }
         else if (act === "reset") { if (tile.core) tile.core.fitContent(); }
       }));
       pop.querySelectorAll(".range-preset[data-range-days]").forEach((b) => (b.onclick = () => {
@@ -1318,6 +1401,7 @@
             ${tfList.map((t) => `<label class="ca-more-toggle"><input type="checkbox" data-tf="${t.id}" ${visibleTf.includes(t.id) ? "checked" : ""}><span>${t.label}</span></label>`).join("")}
           </div>
         </div>
+        <button class="secondary" id="propSetDefault" title="Каждый новый ${CE.Drawings.TOOL_DEFS[d.type].label} будет начинаться с этого стиля">Сделать стилем по умолчанию</button>
         <button class="secondary" id="propDuplicate">Дублировать (Ctrl+D)</button>
         <button class="secondary" id="propDelete">Удалить</button>
       `;
@@ -1357,6 +1441,13 @@
         const checked = [...tfGrid.querySelectorAll("[data-tf]")].filter((x) => x.checked).map((x) => x.dataset.tf);
         dm.updateDrawing(d.id, { properties: { visibleTimeframes: checked } });
       }));
+      panel.querySelector("#propSetDefault").onclick = () => {
+        const style = { color: d.properties.color, opacity: d.properties.opacity };
+        if (!isTextual) { style.width = d.properties.width; style.dash = d.properties.dash; }
+        saveToolStyleDefault(d.type, style);
+        (this.tiles || []).forEach((t) => { if (t.drawingMgr) t.drawingMgr.styleOverrides[d.type] = style; });
+        if (typeof showToast === "function") showToast(`Стиль «${CE.Drawings.TOOL_DEFS[d.type].label}» по умолчанию сохранён`, "success");
+      };
       panel.querySelector("#propDuplicate").onclick = () => dm.duplicateDrawing(d.id);
       panel.querySelector("#propDelete").onclick = () => dm.removeDrawing(d.id);
     },
@@ -1390,6 +1481,154 @@
       panel.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); dm.removeDrawing(b.dataset.remove); }));
     },
   };
+
+  // ---------------------------------------------- per-tool style defaults --
+  // TradingView lets you set a drawing tool's default style once (right-
+  // click a tool -> Template -> "Save as default") so every future trend
+  // line, say, starts red/2px without re-styling each one. Previously the
+  // only place style persisted here was whole-chart templates (saveAsTemplate
+  // above), which bundle layout+indicators+drawings together - there was no
+  // way to set "new trend lines default to red" independent of one specific
+  // chart. See _renderProps' propSetDefault button and DrawingManager's
+  // styleOverrides (chart-engine/drawings.js).
+  const TOOL_STYLE_DEFAULTS_KEY = "moexlab_tool_style_defaults";
+  function loadToolStyleDefaults() {
+    try { return JSON.parse(localStorage.getItem(TOOL_STYLE_DEFAULTS_KEY) || "{}"); } catch (e) { return {}; }
+  }
+  function saveToolStyleDefault(type, style) {
+    const all = loadToolStyleDefaults();
+    all[type] = style;
+    try { localStorage.setItem(TOOL_STYLE_DEFAULTS_KEY, JSON.stringify(all)); } catch (e) { /* storage unavailable */ }
+  }
+  // --------------------------------------- price-axis tap-to-alert gesture --
+  // TradingView's signature alert gesture: tap the right-edge price axis to
+  // open the alert form pre-filled with the price under the tap. A real
+  // drag on the axis is left completely alone (never preventDefault/
+  // stopPropagation) so lightweight-charts' own native manual-scale-drag
+  // interaction keeps working exactly as before - only a clean, short,
+  // near-stationary tap is treated as "create an alert here".
+  const PRICE_AXIS_TAP_MAX_MOVE_PX = 5;
+  const PRICE_AXIS_TAP_MAX_MS = 400;
+  const PRICE_AXIS_FALLBACK_WIDTH_PX = 56;
+  function bindPriceAxisAlertGesture(tile) {
+    const host = tile.el && tile.el.querySelector('[data-role="chartHost"]');
+    if (!host || host._priceAxisAlertBound) return;
+    host._priceAxisAlertBound = true;
+    let down = null;
+    host.addEventListener("pointerdown", (e) => {
+      const rect = host.getBoundingClientRect();
+      let axisWidth = PRICE_AXIS_FALLBACK_WIDTH_PX;
+      try { axisWidth = tile.core.chart.priceScale("right").width() || PRICE_AXIS_FALLBACK_WIDTH_PX; } catch (err) { /* older/odd lightweight-charts build */ }
+      if (e.clientX > rect.right || rect.right - e.clientX > axisWidth) { down = null; return; }
+      down = { x: e.clientX, y: e.clientY, time: Date.now() };
+    }, { passive: true });
+    host.addEventListener("pointerup", (e) => {
+      if (!down) return;
+      const info = down;
+      down = null;
+      if (Math.hypot(e.clientX - info.x, e.clientY - info.y) > PRICE_AXIS_TAP_MAX_MOVE_PX) return;
+      if (Date.now() - info.time > PRICE_AXIS_TAP_MAX_MS) return;
+      let price = null;
+      try { price = tile.core.candleSeries.coordinateToPrice(e.clientY - host.getBoundingClientRect().top); } catch (err) { /* series not ready */ }
+      if (price == null || !Number.isFinite(price)) return;
+      Page._openAlertPopoverWithPrice(tile, price);
+    }, { passive: true });
+  }
+
+  // ------------------------------------------------------ context menu ----
+  // TradingView-standard right-click affordances - previously the only
+  // context menu anywhere in this module was on the watchlist; the chart
+  // canvas and its drawings had none at all.
+  function closeContextMenu() {
+    const menu = document.getElementById("caContextMenu");
+    if (menu) menu.remove();
+  }
+  function buildContextMenuItems(tile, hit, coordPoint) {
+    const dm = tile.drawingMgr;
+    if (hit && dm) {
+      const d = dm.drawings.find((x) => x.id === hit.id);
+      if (!d) return [];
+      return [
+        { label: "Настройки", onClick: () => {
+          if (typeof Page._setBottomCollapsed === "function") Page._setBottomCollapsed(false);
+          const tab = Page.root.querySelector('.ca-side-tab[data-side="props"]');
+          if (tab) tab.click();
+        } },
+        { label: "Дублировать (Ctrl+D)", onClick: () => dm.duplicateDrawing(d.id) },
+        { label: d.hidden ? "Показать" : "Скрыть", onClick: () => dm.updateDrawing(d.id, { hidden: !d.hidden }) },
+        { label: d.locked ? "Разблокировать" : "Заблокировать", onClick: () => dm.updateDrawing(d.id, { locked: !d.locked }) },
+        { separator: true },
+        { label: "Удалить", danger: true, onClick: () => dm.removeDrawing(d.id) },
+      ];
+    }
+    return [
+      { label: "Добавить алерт здесь", onClick: () => { if (coordPoint && Number.isFinite(coordPoint.price)) Page._openAlertPopoverWithPrice(tile, coordPoint.price); } },
+      { separator: true },
+      { label: "Сбросить масштаб", onClick: () => tile.core && tile.core.fitContent() },
+      { label: "Снимок графика", onClick: () => Page._downloadSnapshot && Page._downloadSnapshot() },
+    ];
+  }
+  function openContextMenu(tile, clientX, clientY, host) {
+    closeContextMenu();
+    if (tile !== Page.activeTile) Page._setActiveTile(tile.id);
+    const rect = host.getBoundingClientRect();
+    const px = clientX - rect.left, py = clientY - rect.top;
+    const dm = tile.drawingMgr;
+    const hit = dm ? dm.hitTest(px, py) : null;
+    if (hit) dm.select(hit.id);
+    let coordPoint = null;
+    try { coordPoint = dm ? dm.pixelToPoint(px, py) : null; } catch (err) { /* off-chart click */ }
+    const items = buildContextMenuItems(tile, hit, coordPoint);
+    if (!items.length) return;
+    const menu = document.createElement("div");
+    menu.id = "caContextMenu";
+    menu.className = "ca-context-menu";
+    menu.innerHTML = items.map((item, i) => item.separator
+      ? `<div class="ca-context-sep"></div>`
+      : `<button type="button" class="ca-context-item ${item.danger ? "danger" : ""}" data-idx="${i}">${item.label}</button>`
+    ).join("");
+    document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    const maxLeft = window.innerWidth - menuRect.width - 8;
+    const maxTop = window.innerHeight - menuRect.height - 8;
+    menu.style.left = `${Math.max(4, Math.min(clientX, maxLeft))}px`;
+    menu.style.top = `${Math.max(4, Math.min(clientY, maxTop))}px`;
+    menu.querySelectorAll("[data-idx]").forEach((btn) => {
+      btn.onclick = () => {
+        const item = items[Number(btn.dataset.idx)];
+        closeContextMenu();
+        if (item && item.onClick) item.onClick();
+      };
+    });
+    setTimeout(() => {
+      document.addEventListener("pointerdown", function onOutside(e) {
+        if (!menu.contains(e.target)) { closeContextMenu(); document.removeEventListener("pointerdown", onOutside, true); }
+      }, true);
+      document.addEventListener("keydown", function onKey(e) {
+        if (e.key === "Escape") { closeContextMenu(); document.removeEventListener("keydown", onKey, true); }
+      }, true);
+    }, 0);
+  }
+  function bindContextMenu(tile) {
+    const host = tile.el && tile.el.querySelector('[data-role="chartHost"]');
+    if (!host || host._contextMenuBound) return;
+    host._contextMenuBound = true;
+    host.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(tile, e.clientX, e.clientY, host);
+    });
+  }
+
+  if (CE.ChartTile && CE.ChartTile.prototype && typeof CE.ChartTile.prototype.mount === "function") {
+    const originalTileMountForStyles = CE.ChartTile.prototype.mount;
+    CE.ChartTile.prototype.mount = function (container) {
+      const result = originalTileMountForStyles.apply(this, arguments);
+      if (this.drawingMgr) this.drawingMgr.styleOverrides = loadToolStyleDefaults();
+      bindPriceAxisAlertGesture(this);
+      bindContextMenu(this);
+      return result;
+    };
+  }
 
   global.ChartAnalysisPage = Page;
 })(window);

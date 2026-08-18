@@ -8,6 +8,7 @@ INTERACTIONS = ROOT / "static" / "chart-mobile-interactions.js"
 POLISH = ROOT / "static" / "chart-editor-polish.js"
 TILE = ROOT / "static" / "chart-engine" / "chart-tile.js"
 ANALYSIS = ROOT / "static" / "chart-analysis.js"
+RAIL = ROOT / "static" / "chart-editor-terminal-mobile-v2.js"
 RUNTIME = ROOT / "tests" / "chart_drawing_runtime.test.js"
 
 
@@ -134,12 +135,12 @@ def test_keep_drawing_and_completion_are_engine_owned():
 
 def test_circle_persistence_id_is_retained_but_ui_semantics_are_ellipse():
     engine = source(ENGINE)
-    mobile = source(INTERACTIONS)
+    rail = source(RAIL)
     analysis = source(ANALYSIS)
     assert 'circle: {' in engine
     assert 'semanticShape: "ellipse"' in engine
     assert 'label: "Эллипс"' in engine
-    assert '{ id: "circle", label: "Эллипс"' in mobile
+    assert '["circle","Эллипс"]' in rail
     assert '{ id: "circle", label: "Эллипс"' in analysis
     assert 'case "circle"' in engine
     assert 'kind: "ellipse"' in engine
@@ -162,21 +163,39 @@ def test_mobile_escape_delegates_to_engine_lifecycle():
 
 
 def test_tool_activation_cancels_previous_draft_and_other_tiles():
-    js = source(INTERACTIONS)
-    assert "deactivateEveryTool(page, { deselectActive: true })" in js
-    assert "dm.setTool(null)" in js
-    assert "dm.setTool(toolId)" in js
+    """The rail lives in chart-editor-terminal-mobile-v2.js, but cross-tile
+    draft cancellation stays engine-adjacent logic in chart-mobile-
+    interactions.js (deactivateEveryTool, walking every tile's manager) -
+    exposed via ChartDrawingUI so the rail can call it before arming a new
+    tool, instead of only cancelling the active tile's own manager."""
+    interactions = source(INTERACTIONS)
+    rail = source(RAIL)
+    assert "function deactivateEveryTool(page" in interactions
+    assert "dm.setTool(null)" in interactions
+    assert "global.ChartDrawingUI = {" in interactions
+    assert "deactivateEveryTool: (page, opts) => deactivateEveryTool(page || Page, opts)" in interactions
+    assert "g.ChartDrawingUI?.deactivateEveryTool(Page, { deselectActive: true })" in rail
+    assert "drawingManager()?.setTool(" in rail
 
 
-def test_fullscreen_and_rail_regressions_remain_covered():
+def test_fullscreen_regressions_remain_covered():
     js = source(INTERACTIONS)
     assert 'global.matchMedia("(max-width: 620px)")' in js
     assert "singleTile" in js
     assert "page._fsCtrl.toggle()" in js
-    assert 'document.addEventListener("pointerdown", onDocumentPointerDown, true)' in js
-    assert 'rail.addEventListener("pointerup", onRailPointerUp)' in js
-    assert "rail.contains(target)" in js
-    assert re.search(r"\.tv-flyout-item\s*\{[^}]*min-height:44px", js, re.S)
+
+
+def test_rail_regressions_remain_covered():
+    """The rail itself (tool groups, its picker/flyout, outside-click-to-
+    close, touch target sizing) lives in chart-editor-terminal-mobile-v2.js
+    now - see the architecture note at the top of chart-mobile-
+    interactions.js."""
+    js = source(RAIL)
+    assert 'rail.onclick = (event) => {' in js
+    assert "event.target.closest(\"[data-sl-tool]\")" in js
+    assert 'rail.contains(event.target)' in js
+    assert "picker.classList.add(\"hidden\")" in js
+    assert re.search(r"\.sl-draw-group,#chartsRoot \.sl-rail-action\{[^}]*min-height:44px", js, re.S)
     assert "touch-action:manipulation" in js
 
 
@@ -232,7 +251,7 @@ def test_mobile_escape_claims_event_before_delegating_to_engine():
     js = source(INTERACTIONS)
     marker = "if (dm && (dm.draft || dm.activeTool))"
     start = js.index(marker)
-    body = js[start: js.index("refreshTradingViewRail(page)", start)]
+    body = js[start: js.index("refreshRail()", start)]
     assert body.index("event.preventDefault()") < body.index("event.stopPropagation()") < body.index("dm.handleEscape()")
 
 

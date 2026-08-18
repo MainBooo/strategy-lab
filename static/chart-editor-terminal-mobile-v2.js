@@ -32,10 +32,10 @@
     ["cursor","Курсор",icon("cursor"),[[null,"Курсор / выбор"]]],
     ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"]]],
     ["fib","Фибоначчи",icon("fib"),[["fib_retracement","Коррекция Фибоначчи"],["fib_extension","Расширение Фибоначчи"]]],
-    ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник",true]]],
+    ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],
-    ["measure","Измерения",icon("measure"),[["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время",true]]],
-    ["brush","Кисть",icon("brush"),[["freehand","Кисть / freehand",true]]],
+    ["measure","Измерения",icon("measure"),[["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время"]]],
+    ["brush","Кисть",icon("brush"),[["freehand","Кисть / freehand"]]],
     ["position","Позиции",icon("position"),[["long_position","Long Position"],["short_position","Short Position"]]]
   ];
   const drawingManager = () => Page.activeTile && Page.activeTile.drawingMgr;
@@ -46,12 +46,13 @@
     if (!rail || rail.dataset.slV2) return;
     if (typeof Page._drawingToolbarCleanup === "function") Page._drawingToolbarCleanup();
     rail.dataset.slV2 = "1"; rail.classList.add("tv-rail");
-    rail.innerHTML = groups.map(gp => `<button class="sl-draw-group" type="button" data-sl-group="${gp[0]}" title="${esc(gp[1])}" aria-label="${esc(gp[1])}">${gp[2]}<i></i></button>`).join("") + `
+    rail.innerHTML = groups.map(gp => `<button class="sl-draw-group" type="button" data-sl-group="${gp[0]}" title="${esc(gp[1])}" aria-label="${esc(gp[1])}" aria-pressed="false">${gp[2]}<i></i></button>`).join("") + `
       <span class="sl-rail-sep"></span>
-      <button class="sl-rail-action" data-sl-act="magnet" title="Магнит" aria-label="Магнит">${icon("magnet")}</button>
-      <button class="sl-rail-action" data-sl-act="lock" title="Блокировка разметки" aria-label="Блокировка разметки">${icon("lock")}</button>
-      <button class="sl-rail-action" data-sl-act="hide" title="Показать/скрыть разметку" aria-label="Показать/скрыть разметку">${icon("eye")}</button>
-      <button class="sl-rail-action" data-sl-act="objects" data-tv-action="objects" title="Объекты" aria-label="Объекты">${icon("list")}</button>
+      <button class="sl-rail-action" data-sl-act="magnet" title="Магнит: привязка к OHLC" aria-label="Магнит" aria-pressed="false">${icon("magnet")}</button>
+      <button class="sl-rail-action" data-sl-act="keep" title="Оставаться в режиме рисования" aria-label="Оставаться в режиме рисования" aria-pressed="false">✎</button>
+      <button class="sl-rail-action" data-sl-act="lock" title="Блокировка разметки" aria-label="Блокировка разметки" aria-pressed="false">${icon("lock")}</button>
+      <button class="sl-rail-action" data-sl-act="hide" title="Показать/скрыть разметку" aria-label="Показать/скрыть разметку" aria-pressed="false">${icon("eye")}</button>
+      <button class="sl-rail-action" data-sl-act="objects" data-tv-action="objects" title="Объекты" aria-label="Объекты" aria-pressed="false">${icon("list")}</button>
       <button class="sl-rail-action" data-sl-act="delete" title="Удалить разметку" aria-label="Удалить разметку">${icon("trash")}</button>
       <div class="sl-draw-picker hidden" role="menu"></div>`;
     const picker = rail.querySelector(".sl-draw-picker");
@@ -59,21 +60,61 @@
       const groupButton = event.target.closest("[data-sl-group]");
       if (groupButton) {
         event.stopPropagation(); const gp = groups.find(x => x[0] === groupButton.dataset.slGroup); if (!gp) return;
+        if (gp[3].length === 1) { g.ChartDrawingUI?.deactivateEveryTool(Page, { deselectActive: true }); drawingManager()?.setTool(gp[3][0][0] || null); picker.classList.add("hidden"); refreshRail(); return; }
         const same = picker.dataset.group === gp[0] && !picker.classList.contains("hidden");
         picker.dataset.group = gp[0];
-        picker.innerHTML = `<strong>${esc(gp[1])}</strong>` + gp[3].map(t => `<button type="button" data-sl-tool="${t[0] || ""}" ${t[2] ? "disabled" : ""}>${esc(t[1])}${t[2] ? " · недоступно" : ""}</button>`).join("");
+        picker.innerHTML = `<strong>${esc(gp[1])}</strong>` + gp[3].map(t => `<button type="button" data-sl-tool="${t[0] || ""}">${esc(t[1])}</button>`).join("");
         picker.classList.toggle("hidden", same); return;
       }
       const tool = event.target.closest("[data-sl-tool]");
-      if (tool && !tool.disabled) { drawingManager()?.setTool(tool.dataset.slTool || null); picker.classList.add("hidden"); return; }
+      if (tool) { g.ChartDrawingUI?.deactivateEveryTool(Page, { deselectActive: true }); drawingManager()?.setTool(tool.dataset.slTool || null); picker.classList.add("hidden"); refreshRail(); return; }
       const action = event.target.closest("[data-sl-act]"); if (!action) return;
       const dm = drawingManager(); if (!dm) return;
       if (action.dataset.slAct === "magnet") dm.snapEnabled = !dm.snapEnabled;
+      else if (action.dataset.slAct === "keep") dm.keepDrawing = !dm.keepDrawing;
       else if (action.dataset.slAct === "lock") { const lock = !(dm.drawings.length && dm.drawings.every(x => x.locked)); dm.drawings.slice().forEach(x => dm.updateDrawing(x.id, { locked:lock })); }
       else if (action.dataset.slAct === "hide") { const hide = !(dm.drawings.length && dm.drawings.every(x => x.hidden)); dm.drawings.slice().forEach(x => dm.updateDrawing(x.id, { hidden:hide })); }
       else if (action.dataset.slAct === "objects") { const opening = Page._bottomCollapsed !== false; Page._setBottomCollapsed(!opening); if (opening) Page.root.querySelector('.ca-side-tab[data-side="objects"]')?.click(); }
       else if (action.dataset.slAct === "delete" && dm.drawings.length && g.confirm("Удалить все объекты разметки?")) dm.drawings.slice().forEach(x => dm.removeDrawing(x.id));
+      refreshRail();
     };
+    document.addEventListener("pointerdown", (event) => {
+      if (picker.classList.contains("hidden")) return;
+      if (event.target instanceof Node && rail.contains(event.target)) return;
+      picker.classList.add("hidden");
+    }, true);
+  }
+
+  /** Reflects current drawing-engine state onto the rail's buttons - which
+   * tool group is armed, magnet/keep-drawing/lock-all/hide-all pressed
+   * state, objects-panel-open state. buildRail() only runs the DOM build
+   * once (guarded by data-sl-v2); this is the cheap per-change refresh, and
+   * is also what chart-mobile-interactions.js's object-toolbar/props-panel
+   * hooks call (via g.StrategyLabMobileChart.refreshRail) now that this file
+   * owns the one live rail. */
+  function refreshRail() {
+    const rail = Page.root && Page.root.querySelector("#caTools");
+    if (!rail) return;
+    const dm = drawingManager();
+    const activeTool = dm ? dm.activeTool : null;
+    rail.querySelectorAll("[data-sl-group]").forEach((btn) => {
+      const gp = groups.find((x) => x[0] === btn.dataset.slGroup);
+      if (!gp) return;
+      const belongs = gp[0] === "cursor" ? !activeTool : gp[3].some((t) => t[0] === activeTool);
+      btn.classList.toggle("active", belongs);
+      btn.setAttribute("aria-pressed", belongs ? "true" : "false");
+    });
+    const setPressed = (act, on) => {
+      const btn = rail.querySelector(`[data-sl-act="${act}"]`);
+      if (!btn) return;
+      btn.classList.toggle("active", !!on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    };
+    setPressed("magnet", dm && dm.snapEnabled);
+    setPressed("keep", dm && dm.keepDrawing);
+    setPressed("lock", dm && dm.drawings.length && dm.drawings.every((x) => x.locked));
+    setPressed("hide", dm && dm.drawings.length && dm.drawings.every((x) => x.hidden));
+    setPressed("objects", Page._bottomCollapsed === false);
   }
 
   function renderMarketHeader() {
@@ -126,7 +167,7 @@
     const style = document.createElement("style"); style.id = "sl-pro-terminal-v2";
     style.textContent = `
       :root{--sl-nav:58px}#chartsRoot .sl-market-head,#chartsRoot .sl-chart-controls,#chartsRoot .sl-chart-tabs{display:none}
-      #chartsRoot .sl-draw-group,#chartsRoot .sl-rail-action{position:relative;width:40px;height:44px;min-height:44px;border:0;border-radius:7px;background:transparent;color:#9ca8bd;display:grid;place-items:center;padding:0;touch-action:manipulation}#chartsRoot .sl-draw-group svg,#chartsRoot .sl-rail-action svg,#chartsRoot .sl-chart-tabs svg,#chartsRoot .sl-panel-close svg,#chartsRoot .sl-ind-item svg,#chartsRoot .sl-active-row svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}#chartsRoot .sl-draw-group i{position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-right:1px solid;border-bottom:1px solid;opacity:.55}.sl-rail-sep{width:26px;height:1px;background:#ffffff18;margin:3px}.sl-draw-picker{position:absolute;z-index:800;left:44px;top:4px;width:270px;max-height:65dvh;overflow:auto;padding:7px;border:1px solid #96a0b433;border-radius:10px;background:#111725;box-shadow:0 20px 60px #0009}.sl-draw-picker.hidden{display:none}.sl-draw-picker strong{display:block;padding:6px;color:#8995aa;font-size:11px}.sl-draw-picker button{display:block;width:100%;min-height:44px;padding:8px;border:0;border-radius:7px;background:transparent;color:#e8edf8;text-align:left}.sl-draw-picker button:disabled{opacity:.35;pointer-events:none}
+      #chartsRoot .sl-draw-group,#chartsRoot .sl-rail-action{position:relative;width:40px;height:44px;min-height:44px;border:0;border-radius:7px;background:transparent;color:#9ca8bd;display:grid;place-items:center;padding:0;touch-action:manipulation}#chartsRoot .sl-draw-group.active,#chartsRoot .sl-rail-action.active{color:#8e9bff;background:#7c8cff2e;box-shadow:inset 0 0 0 1px #7c8cffb8}#chartsRoot .sl-draw-group svg,#chartsRoot .sl-rail-action svg,#chartsRoot .sl-chart-tabs svg,#chartsRoot .sl-panel-close svg,#chartsRoot .sl-ind-item svg,#chartsRoot .sl-active-row svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}#chartsRoot .sl-draw-group i{position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-right:1px solid;border-bottom:1px solid;opacity:.55}.sl-rail-sep{width:26px;height:1px;background:#ffffff18;margin:3px}.sl-draw-picker{position:absolute;z-index:800;left:44px;top:4px;width:270px;max-height:65dvh;overflow:auto;padding:7px;border:1px solid #96a0b433;border-radius:10px;background:#111725;box-shadow:0 20px 60px #0009}.sl-draw-picker.hidden{display:none}.sl-draw-picker strong{display:block;padding:6px;color:#8995aa;font-size:11px}.sl-draw-picker button{display:block;width:100%;min-height:44px;padding:8px;border:0;border-radius:7px;background:transparent;color:#e8edf8;text-align:left}.sl-draw-picker button:disabled{opacity:.35;pointer-events:none}
       @media ${PHONE}{html.sl-chart-phone body.charts-active{overflow:hidden;background:#080c14}html.sl-chart-phone body.charts-active .hero,html.sl-chart-phone body.charts-active .ticker-tape,html.sl-chart-phone body.charts-active .site-footer,html.sl-chart-phone body.charts-active .app-primary-tabs{display:none!important}html.sl-chart-phone body.charts-active .shell{width:100%;max-width:none;height:100dvh;margin:0;padding:max(0px,env(safe-area-inset-top)) 0 calc(var(--sl-nav) + env(safe-area-inset-bottom));display:flex;flex-direction:column}html.sl-chart-phone body.charts-active #tab-charts{flex:1;min-height:0;padding:0 max(0px,env(safe-area-inset-right)) 0 max(0px,env(safe-area-inset-left));overflow:hidden}html.sl-chart-phone body.charts-active #chartsRoot{height:100%;min-height:0;display:flex;flex-direction:column;background:#080c14;overflow:hidden}html.sl-chart-phone body.charts-active #caToolbar{flex:0 0 48px;min-height:48px;padding:2px 3px;border:0;border-bottom:1px solid #ffffff18;border-radius:0;background:#0a0f19;overflow:hidden}html.sl-chart-phone body.charts-active #gtScroll{min-width:0;gap:2px;overflow:visible}html.sl-chart-phone body.charts-active #gtName,html.sl-chart-phone body.charts-active #gtPrice,html.sl-chart-phone body.charts-active #gtChange,html.sl-chart-phone body.charts-active #gtChartType,html.sl-chart-phone body.charts-active #gtTemplatesMenu,html.sl-chart-phone body.charts-active #gtAlertsMenu,html.sl-chart-phone body.charts-active #gtReplayBtn,html.sl-chart-phone body.charts-active #caUndoBtn,html.sl-chart-phone body.charts-active #caRedoBtn,html.sl-chart-phone body.charts-active #gtLayoutMenu,html.sl-chart-phone body.charts-active #gtSaveBtn,html.sl-chart-phone body.charts-active #gtSettingsBtn,html.sl-chart-phone body.charts-active #caSnapshotBtn,html.sl-chart-phone body.charts-active #caFullscreenBtn,html.sl-chart-phone body.charts-active #gtCollapseBottomBtn,html.sl-chart-phone body.charts-active #gtCollapseRightBtn{display:none!important}html.sl-chart-phone body.charts-active #gtTicker{flex:1 1 90px;min-width:72px;max-width:110px;height:44px}html.sl-chart-phone body.charts-active #gtTimeframe{flex:0 0 58px;min-width:54px;height:44px}html.sl-chart-phone body.charts-active #gtIndicatorsMenu{display:block!important;flex:1 1 125px;min-width:105px}html.sl-chart-phone body.charts-active #gtIndicatorsBtn{display:flex!important;width:100%;height:44px;min-height:44px;justify-content:center}html.sl-chart-phone body.charts-active #gtIndicatorsBtn .gt-btn-label{display:inline!important}html.sl-chart-phone body.charts-active #gtMoreMenu{display:block!important;flex:0 0 44px;margin-left:0}html.sl-chart-phone body.charts-active #gtMoreBtn{width:44px;height:44px;min-width:44px}html.sl-chart-phone body.charts-active #caWorkspace{flex:1;min-height:0;gap:0;overflow:hidden}html.sl-chart-phone body.charts-active #caTools.tv-rail{flex:0 0 44px;width:44px;min-width:44px;max-width:44px;padding:1px 2px;gap:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid #ffffff18;background:#090e18;scrollbar-width:none}html.sl-chart-phone body.charts-active #caCenter{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}html.sl-chart-phone body.charts-active .ca-chart-col,html.sl-chart-phone body.charts-active .ca-tile-grid,html.sl-chart-phone body.charts-active .ca-tile{flex:1;min-height:0!important;height:auto}html.sl-chart-phone body.charts-active .ca-tile-grid{display:block!important;height:100%}html.sl-chart-phone body.charts-active .ca-tile-grid>.ca-tile{display:none!important;height:100%}html.sl-chart-phone body.charts-active .ca-tile-grid>.ca-tile.active{display:flex!important}html.sl-chart-phone body.charts-active .ca-tile-header{display:none!important}html.sl-chart-phone body.charts-active .ca-tile-chart-host{position:relative;height:100%;min-height:0;border:0;border-radius:0;background:#080c14}.sl-market-head{display:block!important;position:absolute;z-index:30;top:7px;left:8px;max-width:72%;pointer-events:none;color:#eaf0fa;text-shadow:0 1px 2px #000}.sl-market-head>b{font-size:13px}.sl-market-head>span{font-size:10px;color:#8d99ae}.sl-market-head>div{margin-top:3px}.sl-market-head strong{font-size:17px}.sl-market-head em{font-size:10px;font-style:normal}.sl-market-head section{display:flex;gap:4px;margin-top:5px}.sl-market-head i{min-width:72px;padding:3px 6px;border:1px solid;border-radius:5px;background:#080c14cc;font-style:normal;font-size:10px}.sl-market-head i small{display:block;font-size:7px}.sl-market-head .sell{color:#ff7081}.sl-market-head .buy{color:#4dd4ac}.sl-market-head>small{display:block;margin-top:4px;color:#8793aa;font-size:9px}.sl-chart-controls{display:grid!important;flex:0 0 38px;grid-template-columns:minmax(74px,1fr) auto 38px 38px 44px;border-top:1px solid #ffffff18;background:#090e18}.sl-chart-controls>*{min-width:0;height:38px;border:0;border-right:1px solid #ffffff12;background:transparent;color:#8e9aaf;font-size:9.5px;display:flex;align-items:center;justify-content:center}.sl-chart-controls button.active{color:#b8c0ff;background:#7c8cff1f}.sl-chart-tabs{display:grid!important;flex:0 0 42px;grid-template-columns:1fr 1fr;border-top:1px solid #ffffff18;background:#0a0f19}.sl-chart-tabs button{min-width:0;height:42px;border:0;border-right:1px solid #ffffff12;background:transparent;color:#8e9aaf;display:flex;align-items:center;justify-content:center;gap:5px;font-size:10px}.ca-bottom:not(.collapsed){position:fixed!important;z-index:795!important;left:max(6px,env(safe-area-inset-left))!important;right:max(6px,env(safe-area-inset-right))!important;bottom:calc(var(--sl-nav) + max(6px,env(safe-area-inset-bottom)))!important;width:auto!important;height:auto!important;max-height:70dvh!important;border-radius:16px!important;background:#0d1320!important}.sl-panel-close{position:absolute;right:4px;top:3px;width:44px;height:44px;border:0;background:transparent;color:#a0abbd}.sl-ind-top{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px}.sl-ind-top span{color:#7f8ba0;font-size:11px}.sl-ind-search{width:100%;min-height:44px;border:1px solid #ffffff1f;border-radius:9px;background:#090e18;color:#eef2fa;padding:0 10px}.sl-ind-tabs{display:flex;gap:4px;margin:7px 0}.sl-ind-tabs button{flex:1;min-height:40px;border:0;border-radius:7px;background:transparent;color:#8793aa}.sl-ind-tabs .active{background:#7c8cff22;color:#dce2f5}.sl-active-row{display:grid;grid-template-columns:minmax(0,1fr) 42px 42px 42px;align-items:center;min-height:46px;border-bottom:1px solid #ffffff10}.sl-active-row>button{height:42px;border:0;background:transparent;color:#9aa6ba}.sl-inline-settings{grid-column:1/-1;padding:8px}.sl-inline-settings.hidden{display:none}.sl-ind-cat h5{margin:12px 4px 5px;color:#748096;font-size:10px}.sl-ind-item{display:grid;grid-template-columns:minmax(0,1fr) 44px;align-items:center;min-height:50px;border-bottom:1px solid #ffffff0c}.sl-ind-item span{display:flex;flex-direction:column;min-width:0}.sl-ind-item small{color:#778399;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sl-ind-item button{width:44px;height:44px;border:0;background:transparent;color:#9ca7ff}.mobile-bottom-nav{display:flex!important;position:fixed!important;z-index:830!important;left:0;right:0;bottom:0;margin:0!important;padding:3px max(3px,env(safe-area-inset-right)) max(3px,env(safe-area-inset-bottom)) max(3px,env(safe-area-inset-left))!important;border-top:1px solid #ffffff18!important;background:#0a0f19fa!important}.mobile-bottom-nav .tab{flex:1;min-width:0;min-height:52px!important;padding:3px 1px!important;border:0!important;background:transparent!important;color:#677389!important}.mobile-bottom-nav .tab.active{color:#9ca7ff!important;background:#7c8cff18!important}#chartsRoot.is-fullscreen,#chartsRoot:fullscreen{position:fixed!important;z-index:900;inset:0;width:100vw;height:100dvh;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);background:#080c14}body.sl-chart-fs .mobile-bottom-nav{display:none!important}.ca-modal-backdrop{align-items:stretch;padding:max(6px,env(safe-area-inset-top)) max(6px,env(safe-area-inset-right)) max(6px,env(safe-area-inset-bottom)) max(6px,env(safe-area-inset-left))}.ca-settings-modal{width:100%;max-width:none;max-height:100%;margin:0;border-radius:14px;overflow:auto}}
       @media(max-width:980px) and (max-height:520px){:root{--sl-nav:52px}.mobile-bottom-nav .tab{min-height:46px!important}.mobile-bottom-nav .tab span{display:none}.sl-chart-tabs{flex-basis:34px}.sl-chart-tabs button{height:34px}.sl-chart-controls{flex-basis:32px}.sl-chart-controls>*{height:32px}}
     `; document.head.appendChild(style);
@@ -144,7 +185,7 @@
   function sync() {
     const isPhone = phone(); document.documentElement.classList.toggle("sl-chart-phone", isPhone); if (!Page.root) return;
     if (isPhone && lastPhone !== true && Page._bottomCollapsed !== true) Page._setBottomCollapsed(true, { skipSave:true });
-    lastPhone = isPhone; buildRail(); buildBottomControls(); closeButton(); compactTickerLabels(); relocatePopovers(); renderMarketHeader();
+    lastPhone = isPhone; buildRail(); refreshRail(); buildBottomControls(); closeButton(); compactTickerLabels(); relocatePopovers(); renderMarketHeader();
     Page.tiles.forEach(tile => tile.core?._onResize());
   }
 
@@ -155,11 +196,11 @@
   const oldTicker = Page._renderTickerOptions;
   Page._renderTickerOptions = function () { const result = oldTicker.apply(this, arguments); compactTickerLabels(); return result; };
   const oldActive = Page._setActiveTile;
-  Page._setActiveTile = function () { const result = oldActive.apply(this, arguments); requestAnimationFrame(() => { buildRail(); renderMarketHeader(); }); return result; };
+  Page._setActiveTile = function () { const result = oldActive.apply(this, arguments); requestAnimationFrame(() => { buildRail(); refreshRail(); renderMarketHeader(); }); return result; };
   const oldFullscreen = Page._onFullscreenChange;
   Page._onFullscreenChange = function (active) { const result = oldFullscreen.apply(this, arguments); document.body.classList.toggle("sl-chart-fs", !!active); requestAnimationFrame(sync); return result; };
   const viewport = document.querySelector('meta[name="viewport"]'); if (viewport && !/viewport-fit\s*=\s*cover/i.test(viewport.content)) viewport.content += ",viewport-fit=cover";
   mobileCSS(); g.addEventListener("resize", () => requestAnimationFrame(sync), { passive:true }); g.addEventListener("orientationchange", () => requestAnimationFrame(sync), { passive:true });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync, { once:true }); else sync();
-  g.StrategyLabMobileChart = { refresh:sync, indicatorCount:() => I ? I.registry.length : 0 };
+  g.StrategyLabMobileChart = { refresh:sync, refreshRail, indicatorCount:() => I ? I.registry.length : 0 };
 })(window);

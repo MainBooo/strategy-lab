@@ -244,6 +244,7 @@ const allTools = [
   "trend_line", "ray", "extended_line", "horizontal_line", "vertical_line",
   "parallel_channel", "fib_retracement", "fib_extension", "rectangle", "circle",
   "polyline", "text", "note", "price_range", "time_range", "long_position", "short_position",
+  "triangle", "price_date_range", "freehand",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 for (const tool of allTools) {
@@ -259,6 +260,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
   for (const tool of [
     "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
     "circle", "price_range", "time_range", "long_position", "short_position",
+    "price_date_range",
   ]) {
     const env = makeManager();
     env.manager.setTool(tool);
@@ -308,7 +310,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
 }
 
 // First drag establishes the first line for 3-anchor tools, then the third tap commits.
-for (const tool of ["parallel_channel", "fib_extension"]) {
+for (const tool of ["parallel_channel", "fib_extension", "triangle"]) {
   const env = makeManager();
   env.manager.setTool(tool);
   drag(env, 30, 50, 180, 110, 1000);
@@ -329,6 +331,37 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   assert.strictEqual(env.manager.drawings.length, 1, `${tool} did not commit`);
   assert.strictEqual(env.manager.drawings[0].points.length, 1);
   assert.strictEqual(env.manager.draft, null);
+}
+
+// Freehand: continuously samples points during one drag (not a fixed
+// anchor count like every other tool) and discards a no-movement click
+// instead of leaving a dangling 1-point stroke.
+{
+  const env = makeManager();
+  env.manager.setTool("freehand");
+  tap(env, 40, 40, 1000);
+  assert.strictEqual(env.manager.drawings.length, 0, "freehand: no-drag tap must not create a stroke");
+  assert.strictEqual(env.manager.draft, null, "freehand: no-drag tap must not leave a dangling draft");
+  assert.strictEqual(env.manager.activeTool, "freehand", "freehand: tool should stay armed after a no-op click");
+
+  const down = send(env.container, "pointerdown", 40, 40, 2000);
+  send(windowTarget, "pointermove", 70, 60, 2020);
+  send(windowTarget, "pointermove", 110, 90, 2040);
+  send(windowTarget, "pointermove", 160, 130, 2060);
+  send(windowTarget, "pointerup", 160, 130, 2080);
+  assert.ok(down.defaultPrevented, "freehand: drawing did not own pointerdown");
+  assert.strictEqual(env.manager.drawings.length, 1, "freehand: drag did not commit a stroke");
+  const stroke = env.manager.drawings[0];
+  assert.strictEqual(stroke.type, "freehand");
+  assert.ok(stroke.points.length >= 3, `freehand: expected multiple sampled points, got ${stroke.points.length}`);
+  assertFiniteDrawing(stroke);
+  assert.strictEqual(env.manager.draft, null);
+  assert.strictEqual(env.manager.activeTool, null, "freehand: tool should disarm after a completed stroke");
+
+  const ops = renderOps(env);
+  const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
+  assert.ok(strokeOp, "freehand: no render op produced for the stroke");
+  assert.strictEqual(strokeOp.kind, "polyline", "freehand should reuse polyline's paint/hit-test op kind");
 }
 
 // Tool A -> Tool B cancels an unfinished draft rather than inheriting anchors.
