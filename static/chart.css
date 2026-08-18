@@ -608,10 +608,15 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 }
 .ca-side-panel input[type=color] { width: 100%; height: 30px; padding: 2px; }
 .ca-side-panel > button { flex: 0 0 auto; align-self: flex-end; }
-.ca-prop-coords, .ca-prop-tfvis { flex-basis: 100%; display: flex; flex-direction: column; gap: 3px; }
+.ca-prop-coords, .ca-prop-tfvis, .ca-prop-fib { flex-basis: 100%; display: flex; flex-direction: column; gap: 3px; }
 .ca-coord-row { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
 .ca-tf-grid { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 12px; margin-top: 4px; }
 .ca-tf-grid.hidden { display: none; }
+.ca-fib-levels { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.ca-fib-level-row { display: flex; align-items: center; gap: 6px; }
+.ca-fib-level-row input[type=number] { flex: 1 1 auto; min-width: 0; }
+.ca-fib-level-rm { flex: 0 0 auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; }
+.ca-fib-level-rm:hover { color: var(--danger); }
 
 /* Objects list: a real list (not label/row wrap), so it always spans full width. */
 #caObjects.ca-side-panel { flex-direction: column; flex-wrap: nowrap; }

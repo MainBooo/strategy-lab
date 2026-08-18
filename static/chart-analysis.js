@@ -1425,6 +1425,9 @@
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
       const isTextual = d.type === "text" || d.type === "note";
+      const isFib = d.type === "fib_retracement" || d.type === "fib_extension";
+      const fibDefaults = d.type === "fib_retracement" ? CE.Drawings.FIB_RETRACEMENT_LEVELS : CE.Drawings.FIB_EXTENSION_LEVELS;
+      const fibLevels = Array.isArray(d.properties.levels) && d.properties.levels.length ? d.properties.levels : fibDefaults;
       const tile = this.activeTile;
       const tfList = tile ? tile.listTimeframes() : [];
       const visibleTf = d.properties.visibleTimeframes || [];
@@ -1460,6 +1463,17 @@
           <label>Кол-во <input type="number" id="propQty" value="${d.properties.quantity || 0}"></label>
           <label>Стоп, % <input type="number" step="0.1" id="propStopPct" value="${(d.properties.stopOffsetPct || 0).toFixed(2)}"></label>
           <label>Тейк, % <input type="number" step="0.1" id="propTakePct" value="${(d.properties.takeOffsetPct || 0).toFixed(2)}"></label>
+        ` : ""}
+        ${isFib ? `
+          <div class="ca-prop-fib">
+            <span class="ca-more-heading">Уровни Фибоначчи</span>
+            <label class="toggle"><input type="checkbox" id="propFibReverse" ${d.properties.reverse ? "checked" : ""}><span>Развернуть</span></label>
+            <label class="toggle"><input type="checkbox" id="propFibExtend" ${d.properties.extendLeft ? "checked" : ""}><span>Продлить влево</span></label>
+            <div class="ca-fib-levels" id="propFibLevels">
+              ${fibLevels.map((lv, i) => `<div class="ca-fib-level-row"><input type="number" step="0.001" data-fib-level="${i}" value="${lv}"><button type="button" class="ca-fib-level-rm" data-fib-remove="${i}" title="Удалить уровень" aria-label="Удалить уровень">✕</button></div>`).join("")}
+            </div>
+            <button class="secondary" id="propFibAdd">+ Добавить уровень</button>
+          </div>
         ` : ""}
         <div class="ca-prop-tfvis">
           <span class="ca-more-heading">Видимость на таймфреймах</span>
@@ -1497,6 +1511,29 @@
         panel.querySelector("#propQty").onchange = (e) => dm.updateDrawing(d.id, { properties: { quantity: Number(e.target.value) } });
         panel.querySelector("#propStopPct").onchange = (e) => dm.updateDrawing(d.id, { properties: { stopOffsetPct: Number(e.target.value) } });
         panel.querySelector("#propTakePct").onchange = (e) => dm.updateDrawing(d.id, { properties: { takeOffsetPct: Number(e.target.value) } });
+      }
+      if (isFib) {
+        panel.querySelector("#propFibReverse").onchange = (e) => dm.updateDrawing(d.id, { properties: { reverse: e.target.checked } });
+        panel.querySelector("#propFibExtend").onchange = (e) => dm.updateDrawing(d.id, { properties: { extendLeft: e.target.checked } });
+        const currentLevels = () => (Array.isArray(d.properties.levels) && d.properties.levels.length ? d.properties.levels.slice() : fibDefaults.slice());
+        panel.querySelectorAll("[data-fib-level]").forEach((input) => (input.onchange = () => {
+          const levels = currentLevels();
+          const i = Number(input.dataset.fibLevel);
+          const v = Number(input.value);
+          if (Number.isFinite(v)) levels[i] = v;
+          dm.updateDrawing(d.id, { properties: { levels } });
+        }));
+        panel.querySelectorAll("[data-fib-remove]").forEach((btn) => (btn.onclick = () => {
+          const levels = currentLevels();
+          if (levels.length <= 1) return; // at least one level must remain
+          levels.splice(Number(btn.dataset.fibRemove), 1);
+          dm.updateDrawing(d.id, { properties: { levels } });
+        }));
+        panel.querySelector("#propFibAdd").onclick = () => {
+          const levels = currentLevels();
+          levels.push(0);
+          dm.updateDrawing(d.id, { properties: { levels } });
+        };
       }
       const tfAll = panel.querySelector("#propTfAll");
       const tfGrid = panel.querySelector("#propTfGrid");

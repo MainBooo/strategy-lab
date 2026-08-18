@@ -82,6 +82,23 @@
   const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   const FIB_EXTENSION_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2.618];
 
+  /** A drawing's own properties.levels (edited via the Properties panel)
+   * override the tool's built-in default set; null/empty means "unedited",
+   * i.e. every fib placed before per-drawing levels existed. */
+  function fibLevels(d, defaults) {
+    const custom = d.properties.levels;
+    return Array.isArray(custom) && custom.length ? custom : defaults;
+  }
+  /** TradingView's own "Reverse": swaps which anchor is treated as 0% vs
+   * 100%, without moving either anchor point itself. */
+  function fibRetracementPrice(d, level) {
+    const [a, b] = d.properties.reverse ? [d.points[1], d.points[0]] : [d.points[0], d.points[1]];
+    return a.price + (b.price - a.price) * level;
+  }
+  function fibExtensionBase(d) {
+    return d.properties.reverse ? (d.points[0].price - d.points[1].price) : (d.points[1].price - d.points[0].price);
+  }
+
   function defaultProperties(type) {
     const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "", showPrice: false, visibleTimeframes: null };
     if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range") return Object.assign(base, { fill: true });
@@ -89,7 +106,13 @@
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "text") return Object.assign(base, { text: "Заметка" });
     if (type === "note") return Object.assign(base, { text: "Заметка", color: "#ffce54" });
-    if (type === "fib_retracement" || type === "fib_extension") return Object.assign(base, { color: theme.accent });
+    // levels: null means "use the tool's own default set" (FIB_RETRACEMENT_
+    // LEVELS / FIB_EXTENSION_LEVELS below) - only a drawing whose levels the
+    // user actually edited carries its own array, so every fib placed before
+    // this existed keeps behaving exactly as before. reverse swaps which
+    // anchor is 0% vs 100% (TradingView's own "Reverse"); extendLeft draws
+    // each level line from the pane's left edge instead of from the anchor.
+    if (type === "fib_retracement" || type === "fib_extension") return Object.assign(base, { color: theme.accent, levels: null, reverse: false, extendLeft: false });
     return base;
   }
 
@@ -756,10 +779,10 @@
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
-          const x1 = Math.min(pix[0].x, pix[1].x);
+          const x1 = d.properties.extendLeft ? 0 : Math.min(pix[0].x, pix[1].x);
           const x2 = paneWidth(this.core);
-          for (const level of FIB_RETRACEMENT_LEVELS) {
-            const price = d.points[0].price + (d.points[1].price - d.points[0].price) * level;
+          for (const level of fibLevels(d, FIB_RETRACEMENT_LEVELS)) {
+            const price = fibRetracementPrice(d, level);
             const y = priceToCoordinateSafe(this.core, price);
             if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
           }
@@ -770,10 +793,10 @@
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
           if (handleAt(2)) return { id: d.id, handle: 2 };
-          const x1 = pix[2].x;
+          const x1 = d.properties.extendLeft ? 0 : pix[2].x;
           const x2 = paneWidth(this.core);
-          const base = d.points[1].price - d.points[0].price;
-          for (const level of FIB_EXTENSION_LEVELS) {
+          const base = fibExtensionBase(d);
+          for (const level of fibLevels(d, FIB_EXTENSION_LEVELS)) {
             const price = d.points[2].price + base * level;
             const y = priceToCoordinateSafe(this.core, price);
             if (y != null && px >= x1 - tol && px <= x2 && Math.abs(py - y) <= tol) return { id: d.id, handle: null };
@@ -1636,19 +1659,19 @@
         case "fib_retracement":
           if (pix[0]?.x != null && pix[1]?.x != null) {
             ops.push({
-              kind: "fib", d, x1: Math.min(pix[0].x, pix[1].x), color, width, alpha,
-              handles: [pix[0], pix[1]], levels: FIB_RETRACEMENT_LEVELS,
-              priceAt: (level) => d.points[0].price + (d.points[1].price - d.points[0].price) * level,
+              kind: "fib", d, x1: d.properties.extendLeft ? 0 : Math.min(pix[0].x, pix[1].x), color, width, alpha,
+              handles: [pix[0], pix[1]], levels: fibLevels(d, FIB_RETRACEMENT_LEVELS),
+              priceAt: (level) => fibRetracementPrice(d, level),
               w: paneWidth(this.manager.core),
             });
           }
           break;
         case "fib_extension":
           if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
-            const base = d.points[1].price - d.points[0].price;
+            const base = fibExtensionBase(d);
             ops.push({
-              kind: "fib", d, x1: pix[2].x, color, width, alpha,
-              handles: [pix[0], pix[1], pix[2]], levels: FIB_EXTENSION_LEVELS,
+              kind: "fib", d, x1: d.properties.extendLeft ? 0 : pix[2].x, color, width, alpha,
+              handles: [pix[0], pix[1], pix[2]], levels: fibLevels(d, FIB_EXTENSION_LEVELS),
               priceAt: (level) => d.points[2].price + base * level,
               w: paneWidth(this.manager.core),
             });
@@ -1940,5 +1963,7 @@
     defaultProperties,
     positionStopPrice,
     positionTakePrice,
+    FIB_RETRACEMENT_LEVELS,
+    FIB_EXTENSION_LEVELS,
   };
 })(window);
