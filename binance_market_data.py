@@ -44,6 +44,7 @@ def _row_to_candle(row: list) -> dict | None:
             "taker_buy_quote_volume": float(row[10]),
         }
     except (IndexError, TypeError, ValueError):
+        log.warning("Unparseable kline row for a klines page, skipping: %r", row)
         return None
 
 
@@ -59,13 +60,29 @@ def fetch_klines_page(symbol: str, timeframe: str, *, start_ms: int | None = Non
     if end_ms is not None:
         params["endTime"] = int(end_ms)
     rows = request(KLINES_PATH, params=params)
+    # A malformed/unexpected-shape 200 (not a JSON array) used to be silently
+    # treated as "an empty page" - indistinguishable from a genuine "no
+    # trades in this window" response. During an initial backward backfill,
+    # market_data_sync.sync_native_timeframe reads rows_added==0 + status
+    # "completed" as proof the symbol's history doesn't extend further back
+    # and permanently marks it backfilled_complete - so a single transient
+    # bad response here could silently and permanently truncate a symbol's
+    # available history. Raising instead makes the sync fail loudly (status
+    # "failed"), which correctly skips that mark_backfilled call.
     if not isinstance(rows, list):
-        return []
+        raise BinanceAPIError(f"Unexpected /api/v3/klines response shape for {symbol} {timeframe}: {type(rows).__name__}")
     out = []
+    unparseable = 0
     for row in rows:
         candle = _row_to_candle(row)
         if candle is not None:
             out.append(candle)
+        else:
+            unparseable += 1
+    if rows and unparseable == len(rows):
+        # Every row in a non-empty page failed to parse - almost certainly a
+        # response-shape change, not "no trades", for the same reason as above.
+        raise BinanceAPIError(f"All {len(rows)} rows unparseable in a /api/v3/klines page for {symbol} {timeframe}")
     return out
 
 
@@ -165,7 +182,11 @@ def fetch_ticker_24hr(symbols: list[str] | None = None) -> list[dict]:
             params["symbol"] = symbols[0].upper()
         else:
             import json as _json
-            params["symbols"] = _json.dumps([s.upper() for s in symbols])
+            # Binance's `symbols` param is strictly format-validated and
+            # rejects whitespace (error -1100) - json.dumps' default
+            # separators put a space after each comma, so that must be
+            # stripped, not just the array JSON-encoded.
+            params["symbols"] = _json.dumps([s.upper() for s in symbols]).replace(" ", "")
     payload = request("/api/v3/ticker/24hr", params=params or None, timeout=20)
     return payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
 

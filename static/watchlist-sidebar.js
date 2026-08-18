@@ -1,5 +1,5 @@
 /* Right-hand ticker watchlist for the "Анализ графиков" workspace, in the
- * spirit of a TradingView watchlist. Loads the real MOEX board catalog
+ * spirit of a TradingView watchlist. Loads the real Binance catalog
  * (/api/securities) and last-price/change (/api/market/prices) each with a
  * single batched request - never one request per row. Favorites and custom
  * lists persist in localStorage (no accounts/DB in this single-user app, so
@@ -66,7 +66,12 @@
   }
 
   function fmtMoney(n) {
-    return n == null ? "—" : Number(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Sub-cent Binance instruments (SHIB, PEPE, ...) would round to "0.00"
+    // at a fixed 2-decimal cap - scale precision to magnitude instead.
+    if (n == null) return "—";
+    const v = Number(n);
+    const digits = Math.abs(v) >= 1 ? 2 : Math.abs(v) >= 0.01 ? 4 : 8;
+    return v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: digits });
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));

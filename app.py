@@ -59,7 +59,10 @@ bdb.init_db(STORAGE/"backtests.db")
 cdb.init_db(STORAGE/"charts.db")
 spdb.init_db(STORAGE/"strategy_presets.db")
 auth_db.init_db(STORAGE/"users.db")
-auth_routes.configure(PORTFOLIOS)
+# instrument_for is defined further below; Python only resolves this name
+# when the lambda actually runs (first alert-creation request), by which
+# point the whole module is loaded - safe forward reference.
+auth_routes.configure(PORTFOLIOS,symbol_exists=lambda s:instrument_for(s) is not None)
 
 # The candle cache (re-fetchable from Binance, unlike backtests/charts/replay
 # data above) lives in its own directory, outside both the frontend source
@@ -91,12 +94,15 @@ def _market_cache_eviction_loop():
 threading.Thread(target=_market_cache_eviction_loop,daemon=True).start()
 
 CHART_SCREENSHOTS_DIR=STORAGE/"chart_screenshots"; CHART_SCREENSHOTS_DIR.mkdir(exist_ok=True)
-# Legacy MOEX CSV -> market_data.db auto-import (legacy_candle_migration.py)
-# is deliberately NOT run against the new Binance-schema store - those CSVs
-# are old Russian-equity candles, never Binance data, and importing them
-# here would corrupt the new schema with rows that only look superficially
-# similar. The old CSVs and the old market_data.db stay on disk untouched,
-# reachable only by that now-legacy, no-longer-invoked module.
+# Old MOEX CSV/market_data.db files (data/*.csv, the pre-Binance
+# market_data.db) are deliberately left untouched and never auto-imported
+# into the new Binance-schema store - those CSVs are old Russian-equity
+# candles, never Binance data, and importing them here would corrupt the new
+# schema with rows that only look superficially similar. The one-off
+# importer that used to exist for this (legacy_candle_migration.py) was
+# itself unreachable dead code by the time of the Binance migration audit -
+# its import of a MOEX-era timeframes.py symbol had already gone stale - so
+# it was removed rather than fixed; nothing calls it and nothing should.
 # Every chart-layout/drawing/request row carries a user id - the "switched
 # on later without another migration" this comment used to promise before
 # accounts existed. A logged-in user now gets their own private namespace;
@@ -230,7 +236,14 @@ def instrument_for(symbol:str)->dict|None: return binance_catalog.instrument_by_
 def step_size_for(symbol:str)->float:
     inst=instrument_for(symbol)
     step=inst.get("stepSize") if inst else None
-    return float(step) if step and step>0 else 1.0
+    if step and step>0:
+        return float(step)
+    # A real Binance spot symbol always carries a LOT_SIZE filter with a
+    # stepSize far below 1 (e.g. ~0.00001 for BTCUSDT) - silently defaulting
+    # to 1.0 base-asset unit here would be five orders of magnitude wrong
+    # and produce a nonsensical position size with no error surfaced.
+    app.logger.warning("step_size_for(%s): no stepSize in catalog, falling back to 1.0 - position sizing for this symbol will be wrong",symbol)
+    return 1.0
 
 def run_strategy(strategy:str,source:Path,params:dict):
     ticker=ticker_from_file(source.name); params=dict(params or {}); params.setdefault("lot_size",step_size_for(ticker)); params.setdefault("lot_count",1); params.setdefault("starting_capital",10_000)
@@ -424,7 +437,7 @@ def backtest():
 @app.post("/api/batch-backtest")
 @heavy_sync
 def batch_backtest():
-    p=request.get_json(force=True); files=[DATA_DIR/Path(x).name for x in p.get("files",[])]
+    p=request.get_json(force=True) or {}; files=[DATA_DIR/Path(x).name for x in p.get("files",[])]
     rows=[]
     try:
         for source in files:
@@ -446,7 +459,7 @@ def optimize():
 def portfolios(): return jsonify([p for p in PORTFOLIOS.list() if _portfolio_accessible(p)])
 
 @app.post("/api/portfolios")
-def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True),user_id=auth.current_user_id()))
+def create_portfolio(): return jsonify(PORTFOLIOS.create(request.get_json(force=True) or {},user_id=auth.current_user_id()))
 
 @app.get("/api/portfolios/<portfolio_id>")
 def get_portfolio(portfolio_id):
@@ -469,10 +482,19 @@ def portfolio_summary(portfolio_id):
     if not rows:
         return jsonify({"has_run":False,"portfolio_id":portfolio_id,"portfolio_name":portfolio.get("name")})
     run=rows[0]
+    # Figures above are in whatever quote asset the portfolio's instruments
+    # actually trade in (almost always USDT, but not guaranteed - see
+    # _quote_asset_conflict) - never RUB, so the client must not hardcode a
+    # currency symbol/label.
+    quote_asset=None
+    first_ticker=next((i.get("ticker") for i in portfolio.get("instruments",[]) if i.get("ticker")),None)
+    if first_ticker:
+        info=binance_catalog.instrument_by_symbol(catalog(),str(first_ticker))
+        quote_asset=info.get("quoteAsset") if info else None
     return jsonify({
         "has_run":True,"portfolio_id":portfolio_id,"portfolio_name":portfolio.get("name"),
         "run_id":run["id"],"status":run["status"],"date_from":run.get("date_from"),"date_to":run.get("date_to"),
-        "completed_at":run.get("completed_at"),
+        "completed_at":run.get("completed_at"),"quote_asset":quote_asset or "USDT",
         "initial_capital":run.get("initial_capital"),"final_capital":run.get("final_capital"),
         "profit":run.get("profit"),"return_percent":run.get("return_percent"),"max_drawdown":run.get("max_drawdown"),
         "trades_count":run.get("trades_count"),
@@ -898,11 +920,13 @@ def portfolio_build():
         if not existing_portfolio or not _portfolio_accessible(existing_portfolio,user_id):
             return jsonify({"error":"Портфель не найден"}),404
         portfolio_name=existing_portfolio["name"]
-        active=JOBS.find_active_for_portfolio(portfolio_id,kind="build")
+
+    with JOBS.portfolio_lock(portfolio_id,"build"):
+        active=JOBS.find_active_for_portfolio(portfolio_id,kind="build") if portfolio_id else None
         if active:return jsonify({"job_id":active["job_id"],"status":active["status"]}),202
 
-    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
-    job=JOBS.create(portfolio_id,portfolio_name,len(tickers),kind="build")
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        job=JOBS.create(portfolio_id,portfolio_name,len(tickers),kind="build")
     if not _start_heavy_job(_execute_build_job,job["job_id"],{**p,"tickers":tickers,"user_id":user_id}):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
@@ -1000,11 +1024,12 @@ def run_portfolio(portfolio_id):
     instruments=portfolio.get("instruments",[])
     if not instruments:return jsonify({"error":"В портфеле нет инструментов"}),400
 
-    existing=JOBS.find_active_for_portfolio(portfolio_id,kind="portfolio_run")
-    if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
+    with JOBS.portfolio_lock(portfolio_id,"portfolio_run"):
+        existing=JOBS.find_active_for_portfolio(portfolio_id,kind="portfolio_run")
+        if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
-    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
-    job=JOBS.create(portfolio_id,portfolio.get("name",""),len(instruments),kind="portfolio_run")
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        job=JOBS.create(portfolio_id,portfolio.get("name",""),len(instruments),kind="portfolio_run")
     if not _start_heavy_job(_execute_portfolio_job,job["job_id"],portfolio):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
@@ -1144,10 +1169,18 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
                 if not trades_df.empty:
                     starting_price=float(trades_df.iloc[0]["entry_price"]); ending_price=float(trades_df.iloc[-1]["exit_price"])
                     candles=_candles_for(ticker,source)
-                    shares=lots*lot_size
+                    fixed_shares=lots*lot_size
+                    has_position_shares="position_shares" in trades_df.columns
                     for _,row in trades_df.iterrows():
                         entry_price=float(row["entry_price"]); side=str(row.get("side","long"))
                         net_return=float(row["net_return"]); gross_return=net_return+2*COMMISSION_SIDE
+                        # Reuse the exact per-trade quantity strategies.common
+                        # actually priced this fill at (risk-based sizing when
+                        # enabled) instead of a flat lots*lot_size, so this
+                        # trade log reconciles with the summary card's
+                        # final_capital_rub/money_return_pct above.
+                        shares=float(row["position_shares"]) if has_position_shares and pd.notna(row["position_shares"]) else fixed_shares
+                        row_lots=round(shares/lot_size) if lot_size else lots
                         notional=shares*entry_price
                         mae=mfe=None
                         if not candles.empty:
@@ -1155,7 +1188,7 @@ def _execute_combo_backtest_job(job_id:str,portfolio:dict,combos:list[dict],date
                         trades_rows.append({
                             "direction":side,"entry_datetime":str(row["entry_time"]),"entry_price":entry_price,
                             "exit_datetime":str(row["exit_time"]),"exit_price":float(row["exit_price"]),
-                            "quantity_lots":lots,"quantity_shares":shares,
+                            "quantity_lots":row_lots,"quantity_shares":shares,
                             "gross_profit":round(notional*gross_return,2),"commission":round(notional*2*COMMISSION_SIDE,2),
                             "net_profit":round(notional*net_return,2),"return_percent":round(net_return*100,4),
                             "stop_loss":row.get("stop_price"),"take_profit":row.get("take_price"),
@@ -1248,18 +1281,19 @@ def portfolio_backtest(portfolio_id):
     if canonical(timeframe) not in {canonical(t) for t in BACKTEST_TIMEFRAMES}:
         return jsonify({"error":f"Неизвестный таймфрейм: {timeframe}"}),400
 
-    existing=JOBS.find_active_for_portfolio(portfolio_id,kind="backtest")
-    if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
+    with JOBS.portfolio_lock(portfolio_id,"backtest"):
+        existing=JOBS.find_active_for_portfolio(portfolio_id,kind="backtest")
+        if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
-    date_from=p.get("date_from"); date_to=p.get("date_to")
-    run_id=bdb.new_run_id()
-    bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
-                    float(portfolio.get("starting_capital") or 10_000),len(combos),
-                    {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to,"timeframe":timeframe},
-                    user_id=auth.current_user_id(),timeframe=timeframe)
+        date_from=p.get("date_from"); date_to=p.get("date_to")
+        run_id=bdb.new_run_id()
+        bdb.create_run(run_id,portfolio_id,portfolio.get("name",""),date_from,date_to,
+                        float(portfolio.get("starting_capital") or 10_000),len(combos),
+                        {"tickers":tickers,"assignments":combos,"date_from":date_from,"date_to":date_to,"timeframe":timeframe},
+                        user_id=auth.current_user_id(),timeframe=timeframe)
 
-    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
-    job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        job=JOBS.create(portfolio_id,portfolio.get("name",""),len(combos),kind="backtest",extra={"db_run_id":run_id})
     if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,combos,date_from,date_to,run_id,timeframe):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",
                      error={"message":HEAVY_BUSY_MESSAGE,"ticker":None,"stage":"busy","code":"server_busy"})
@@ -1412,16 +1446,17 @@ def repeat_backtest(run_id):
     assignments=config.get("assignments") or []
     if not assignments:return jsonify({"error":"Не удалось восстановить конфигурацию запуска"}),400
 
-    existing=JOBS.find_active_for_portfolio(portfolio["id"],kind="backtest")
-    if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
+    with JOBS.portfolio_lock(portfolio["id"],"backtest"):
+        existing=JOBS.find_active_for_portfolio(portfolio["id"],kind="backtest")
+        if existing:return jsonify({"job_id":existing["job_id"],"status":existing["status"]}),202
 
-    timeframe=config.get("timeframe") or "10m"
-    new_run_id=bdb.new_run_id()
-    bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
-                    float(portfolio.get("starting_capital") or 10_000),len(assignments),config,
-                    user_id=auth.current_user_id(),timeframe=timeframe)
-    if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
-    job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
+        timeframe=config.get("timeframe") or "10m"
+        new_run_id=bdb.new_run_id()
+        bdb.create_run(new_run_id,portfolio["id"],portfolio.get("name",""),config.get("date_from"),config.get("date_to"),
+                        float(portfolio.get("starting_capital") or 10_000),len(assignments),config,
+                        user_id=auth.current_user_id(),timeframe=timeframe)
+        if not _heavy_trigger_ok():return jsonify({"error":RATE_LIMIT_MESSAGE}),429
+        job=JOBS.create(portfolio["id"],portfolio.get("name",""),len(assignments),kind="backtest",extra={"db_run_id":new_run_id})
     if not _start_heavy_job(_execute_combo_backtest_job,job["job_id"],portfolio,assignments,
                              config.get("date_from"),config.get("date_to"),new_run_id,timeframe):
         JOBS.update(job["job_id"],status="failed",stage="Сервер занят",

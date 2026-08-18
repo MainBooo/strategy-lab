@@ -2,12 +2,18 @@ from __future__ import annotations
 
 """Single entry point for chart-module entitlement checks.
 
-There is no authentication or billing in this app today (single
-operator, no login, no tariffs) - see app.py CURRENT_USER_ID. Scattering
-`plan == "PRO"` checks across chart endpoints would only create work to
-undo later, so every check goes through has_feature() instead. Right
-now it always returns True; a real entitlement/plan lookup can replace
-the body of this one function without touching call sites.
+NOTE: this app has since grown real authentication and billing
+(auth.py/auth_routes.py, commerce_routes.py/billing_service.py) - the
+"no login, no tariffs" premise this module was written under no longer
+holds. has_feature() still always returns True for every user, including
+anonymous ones, for every chart feature listed below. It is wired into
+~16 call sites across app.py as if it were a real entitlement gate;
+anyone reading only those call sites (not this docstring) will reasonably
+assume chart access is actually plan-gated today. It is not - every
+chart feature is unconditionally free. A real entitlement/plan lookup can
+replace the body of has_feature() without touching call sites, but until
+that happens, do not treat CHART_FEATURES membership as proof any of
+these are paid or restricted.
 """
 
 CHART_FEATURES = {

@@ -29,6 +29,17 @@ class ReplayError(Exception):
     pass
 
 
+def _floor_units(qty: float, step: float) -> int:
+    """Whole-step count that fits in qty, tolerant of binary-float noise.
+
+    Plain ``qty // step`` mis-floors for common fractional stepSizes, e.g.
+    ``1.0 // 0.1 == 9.0`` in raw IEEE-754 float, not 10 - silently losing one
+    whole step every time. A tiny epsilon before truncating fixes that
+    without meaningfully affecting genuine non-boundary quantities.
+    """
+    return int(qty / step + 1e-9)
+
+
 def _snapshot(session: dict) -> dict:
     return {
         "reveal_index": session["reveal_index"],
@@ -290,7 +301,7 @@ def _open_or_add(session: dict, *, side: str, lots: int, fill_price: float, bar_
 def _reduce(session: dict, *, lots: int, fill_price: float, bar_ts: int, exit_reason: str) -> None:
     lot_size = session["lot_size"]
     shares_to_close = min(lots * lot_size, session["position_qty_shares"])
-    lots_closed = shares_to_close // lot_size
+    lots_closed = _floor_units(shares_to_close, lot_size)
     side = session["position_side"]
     avg = session["position_avg_price"]
     sign = 1 if side == "long" else -1

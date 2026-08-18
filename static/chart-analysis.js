@@ -135,7 +135,13 @@
   }
 
   function fmtPrice(n) {
-    return n == null ? "—" : n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // A fixed 2-decimal cap rounds sub-cent Binance instruments (SHIB, PEPE,
+    // ...) to "0.00" everywhere this feeds the price readout/coordinate
+    // panel/alerts - scale precision to magnitude instead.
+    if (n == null) return "—";
+    const v = Number(n);
+    const digits = Math.abs(v) >= 1 ? 2 : Math.abs(v) >= 0.01 ? 4 : 8;
+    return v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: digits });
   }
   /** Coordinate-panel time display for a drawing's anchor point - same
    * UTC formatting as the chart's own axis (see theme.js's formatTime),
@@ -1205,6 +1211,15 @@
       }
       const o = tile.core.displayOptions || {};
       const theme = CE.theme;
+      // 2 decimals suits RUB-scale prices but truncates sub-cent Binance
+      // instruments (SHIB, PEPE, ...) to "0.00" by default - derive a
+      // sensible starting point from the tile's actual last price instead.
+      let autoPrecision = 2;
+      const lastClose = tile.core.candles && tile.core.candles.length ? tile.core.candles[tile.core.candles.length - 1].close : null;
+      if (lastClose != null) {
+        const p = Math.abs(lastClose);
+        autoPrecision = p >= 1 ? 2 : p >= 0.01 ? 4 : 8;
+      }
       overlay.innerHTML = `
         <div class="ca-modal ca-settings-modal">
           <button class="close-btn" id="csClose" aria-label="Закрыть">×</button>
@@ -1221,7 +1236,7 @@
             <label class="toggle"><input type="checkbox" id="csVolume" ${o.showVolume !== false ? "checked" : ""}><span>Объёмы</span></label>
             <label class="toggle"><input type="checkbox" id="csAutoScale" ${o.autoScale !== false ? "checked" : ""}><span>Автомасштаб</span></label>
             <label>Фон <input type="color" id="csBg" value="${toHex(o.background || "#0c1019")}"></label>
-            <label>Точность цены <input type="number" id="csPrecision" min="0" max="6" value="${o.priceFormatPrecision != null ? o.priceFormatPrecision : 2}"></label>
+            <label>Точность цены <input type="number" id="csPrecision" min="0" max="8" value="${o.priceFormatPrecision != null ? o.priceFormatPrecision : autoPrecision}"></label>
             <label>Часовой пояс
               <select id="csTz">
                 <option value="0" ${(tile.core._tzOffsetHours || 0) === 0 ? "selected" : ""}>UTC</option>

@@ -36,6 +36,21 @@ def test_full_backfill_from_earliest_plausible_date_marks_backfilled(monkeypatch
     assert state["backfilled_complete"] == 1
 
 
+def test_malformed_klines_response_fails_loudly_instead_of_marking_backfilled(monkeypatch):
+    """A malformed/non-list 200 response used to be silently treated as
+    'zero rows in this window' by fetch_klines_page, and zero rows on an
+    initial backward backfill reads as 'reached the true start of history' -
+    permanently marking the symbol backfilled_complete even though the
+    response was just broken, not an honest empty answer."""
+    monkeypatch.setattr(binance_market_data, "request", lambda path, params=None, timeout=15, max_retries=5: {"unexpected": "shape"})
+
+    result = sync.sync_native_timeframe("BTCUSDT", "1d", mode="initial",
+                                         from_date=sync.EARLIEST_PLAUSIBLE_DATE, till_date="2017-01-05")
+    assert result["status"] == "failed"
+    state = store.get_sync_state("BTCUSDT", "1d")
+    assert state["backfilled_complete"] == 0
+
+
 def test_continue_mode_resumes_from_last_stored_bar(monkeypatch):
     calls = []
     monkeypatch.setattr(binance_market_data, "request", fake_klines_request(calls))

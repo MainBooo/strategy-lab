@@ -257,6 +257,30 @@ def test_pending_sync_endpoint_exists_and_is_csrf_protected(client):
     assert resp.status_code == 200 and resp.get_json()["synced"] == 0
 
 
+def test_portfolio_strategy_assignment_and_backtest_require_csrf(client):
+    """These two commerce_routes.py routes touch a user's (possibly paid,
+    private) strategy assignments but historically had no CSRF check at all,
+    unlike every sibling route - see csrf.py."""
+    _register(client, email="csrfcheck@example.com")
+    uid = auth_db.get_by_email("csrfcheck@example.com")["id"]
+    portfolio = client.portfolios.create({"name":"P","instruments":[{"ticker":"SBER","file":"x.csv","lot_size":1,"lot_count":1}]}, user_id=uid)
+    assert client.patch(f"/api/portfolios/{portfolio['id']}/strategies", json={"ticker_strategies":{}}).status_code == 403
+    assert client.post(f"/api/portfolios/{portfolio['id']}/backtest", json={"tickers":["SBER"]}).status_code == 403
+    token = _csrf(client, "/")
+    ok = client.patch(f"/api/portfolios/{portfolio['id']}/strategies", json={"ticker_strategies":{}}, headers={"X-CSRF-Token": token})
+    assert ok.status_code == 200
+
+
+def test_public_strategy_preset_save_requires_csrf(client):
+    """Only the private-strategy branch enforced CSRF here before; a public/
+    system strategy preset save (the common case) had none."""
+    _register(client, email="presetcsrf@example.com")
+    assert client.put("/api/strategy-presets/false_breakout", json={"parameters": {}}).status_code == 403
+    token = _csrf(client, "/")
+    ok = client.put("/api/strategy-presets/false_breakout", json={"parameters": {}}, headers={"X-CSRF-Token": token})
+    assert ok.status_code == 200
+
+
 # ------------------------------------------------------ private strategy ---
 
 def _paid_order(client):
@@ -304,7 +328,11 @@ def test_private_strategy_cannot_be_assigned_by_other_user(client):
     _logout(client); _register(client, email="other@example.com")
     other_id = auth_db.get_by_email("other@example.com")["id"]
     other_portfolio = client.portfolios.create({"name":"Other P","instruments":[{"ticker":"SBER","file":"x.csv","lot_size":1,"lot_count":1}]}, user_id=other_id)
-    resp = client.patch(f"/api/portfolios/{other_portfolio['id']}/strategies", json={"ticker_strategies":{"SBER":[{"strategy_id":strategy_id,"parameters":{},"enabled":True}]}})
+    other_token = _csrf(client, "/")
+    # With a valid CSRF token supplied, this must still 403 on the private-
+    # strategy ownership check itself, not just on the (separately tested)
+    # missing-token path.
+    resp = client.patch(f"/api/portfolios/{other_portfolio['id']}/strategies", json={"ticker_strategies":{"SBER":[{"strategy_id":strategy_id,"parameters":{},"enabled":True}]}}, headers={"X-CSRF-Token": other_token})
     assert resp.status_code == 403
 
 
@@ -342,3 +370,20 @@ def test_yookassa_provider_uses_redirect_and_idempotence_key(monkeypatch):
     assert captured["json"]["amount"] == {"value":"7900.00","currency":"RUB"}
     assert captured["json"]["capture"] is True
     assert captured["json"]["confirmation"]["type"] == "redirect"
+
+
+# ------------------------------------------------------------- price alerts --
+
+def test_create_alert_rejects_unknown_symbol(client):
+    """notifications_db.create_alert only checked length/emptiness of
+    `symbol`, not whether it's a real instrument - a typo'd symbol used to be
+    accepted with 201 and then sit "active" forever, never able to fire since
+    the price snapshot never has a quote for it. app.py wires a real
+    catalog-backed validator in production; here we stub one directly."""
+    auth_routes.configure(client.portfolios, symbol_exists=lambda s: s == "BTCUSDT")
+    _register(client, email="alerts@example.com")
+    token = _csrf(client, "/")
+    bad = client.post("/api/alerts", json={"symbol": "NOTREAL", "condition": "price_above", "value": 100}, headers={"X-CSRF-Token": token})
+    assert bad.status_code == 400
+    good = client.post("/api/alerts", json={"symbol": "BTCUSDT", "condition": "price_above", "value": 100}, headers={"X-CSRF-Token": token})
+    assert good.status_code == 201

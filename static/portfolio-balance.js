@@ -28,7 +28,14 @@
 
   function fmtMoney(n) {
     if (n == null) return "—";
-    return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 0 }) + " ₽";
+    // /api/portfolios/<id>/summary reports figures in the portfolio's real
+    // quote asset (almost always USDT, but not guaranteed - see
+    // _quote_asset_conflict in app.py) - never RUB. maximumFractionDigits:0
+    // also silently rounded sub-$1 balances to "0"; scale with magnitude.
+    const v = Number(n);
+    const digits = Math.abs(v) >= 1 ? 2 : 8;
+    const cur = (lastData && lastData.quote_asset) || "USDT";
+    return v.toLocaleString("ru-RU", { maximumFractionDigits: digits }) + " " + cur;
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));

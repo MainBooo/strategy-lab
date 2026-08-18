@@ -13,11 +13,13 @@ from notification_delivery import email_configured, send_test_web_push, telegram
 
 notification_bp = Blueprint("notifications", __name__)
 _STATIC_DIR = None
+_SYMBOL_EXISTS = None
 
 
-def configure(static_dir) -> None:
-    global _STATIC_DIR
+def configure(static_dir, symbol_exists=None) -> None:
+    global _STATIC_DIR, _SYMBOL_EXISTS
     _STATIC_DIR = static_dir
+    _SYMBOL_EXISTS = symbol_exists
 
 
 def _json() -> dict:
@@ -35,13 +37,21 @@ def list_alerts():
 @csrf_protect
 def create_alert():
     p = _json()
+    symbol = str(p.get("symbol") or "").strip().upper()
+    # notifications_db.create_alert only checked length/emptiness, never
+    # whether the symbol is real - a typo'd or delisted symbol was accepted
+    # with 201 and then sat "active" forever: the worker's price snapshot
+    # simply never has a quote for it, so the per-symbol loop silently skips
+    # it every cycle with no error ever surfaced to the user.
+    if _SYMBOL_EXISTS is not None and symbol and not _SYMBOL_EXISTS(symbol):
+        return jsonify({"error": f"Инструмент «{symbol}» не найден в каталоге Binance."}), 400
     try:
         value = float(p.get("value"))
         if not math.isfinite(value):
             raise ValueError
         alert = ndb.create_alert(
             auth.current_user_id(),
-            symbol=str(p.get("symbol") or ""),
+            symbol=symbol,
             condition=str(p.get("condition") or ""),
             value=value,
             repeat=str(p.get("repeat") or "once"),

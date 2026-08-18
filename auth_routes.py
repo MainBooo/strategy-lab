@@ -13,6 +13,7 @@ this module to register the blueprint).
 """
 
 import re
+import secrets
 import sqlite3
 from functools import wraps
 from pathlib import Path
@@ -43,13 +44,13 @@ auth_bp.register_blueprint(notification_routes.notification_bp)
 _PORTFOLIOS = None
 
 
-def configure(portfolios_store) -> None:
+def configure(portfolios_store, symbol_exists=None) -> None:
     global _PORTFOLIOS
     _PORTFOLIOS = portfolios_store
     commerce_routes.configure(portfolios_store)
     base_dir = Path(__file__).resolve().parent
     notifications_db.init_db(base_dir / "storage" / "notifications.db")
-    notification_routes.configure(base_dir / "static")
+    notification_routes.configure(base_dir / "static", symbol_exists=symbol_exists)
     # Gunicorn imports this module in each worker; notification_worker uses a
     # process-level flock so exactly one worker evaluates alert rules.
     notification_worker.start(base_dir / "storage" / "notification-worker.lock")
@@ -167,6 +168,18 @@ def api_register():
     return jsonify({"ok": True, "display_name": user["display_name"]}), 201
 
 
+
+# check_password_hash (scrypt) is deliberately slow; `or` short-circuits it
+# away entirely when the account doesn't exist, so a nonexistent-email
+# request returns in microseconds while a wrong-password one for a real
+# account takes tens of milliseconds. GENERIC_LOGIN_ERROR hides that in the
+# response body but not in latency, letting an attacker enumerate
+# valid/active emails purely by timing this endpoint. Hashing against this
+# fixed dummy hash on the "no such user" path costs the same time as a real
+# check, closing the side channel.
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_hex(32))
+
+
 @auth_bp.post("/api/auth/login")
 @_rate_limited("LOGIN_LIMITER")
 @csrf_protect
@@ -177,7 +190,8 @@ def api_login():
     remember = bool(p.get("remember"))
 
     user = auth_db.get_by_email(email)
-    if not user or not user.get("is_active") or not check_password_hash(user["password_hash"], password):
+    password_ok = check_password_hash(user["password_hash"] if user else _DUMMY_PASSWORD_HASH, password)
+    if not user or not user.get("is_active") or not password_ok:
         return jsonify({"error": GENERIC_LOGIN_ERROR}), 401
 
     auth.log_in(user, remember)

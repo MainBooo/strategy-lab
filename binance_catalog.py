@@ -12,6 +12,7 @@ optional filter, e.g. no MIN_NOTIONAL, is normal, not an error).
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -30,7 +31,10 @@ KNOWN_QUOTE_ASSETS = ("USDT", "USDC", "BTC", "FDUSD", "EUR")
 # In-process refresh guard: exchangeInfo is a large (multi-MB) response for
 # ~2000+ symbols; a burst of concurrent "no catalog cached yet" requests
 # should collapse onto a single Binance round trip, not each fire their own.
-_refresh_lock_holder = {"lock": None}
+# Only guards threads within one gunicorn worker process, same as this
+# comment always intended - a separate worker process still makes its own
+# request, but that's a much smaller multiplier than every thread doing it.
+_refresh_lock = threading.Lock()
 
 
 def _get_filter(filters: list[dict], filter_type: str) -> dict | None:
@@ -107,26 +111,42 @@ def save_catalog(path: Path) -> list[dict]:
 _CATALOG_TTL_SECONDS = 6 * 3600
 
 
-def load_catalog(path: Path, refresh: bool = False) -> list[dict]:
-    if not refresh and path.exists():
-        try:
-            if time.time() - path.stat().st_mtime < _CATALOG_TTL_SECONDS:
-                return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            log.warning("Catalog cache at %s unreadable (%s), refetching", path, exc)
-
+def _fresh_cached(path: Path) -> list[dict] | None:
+    if not path.exists():
+        return None
     try:
-        return save_catalog(path)
-    except (BinanceAPIError, OSError):
-        log.exception("Failed to refresh Binance catalog")
-        if path.exists():
-            try:
-                stale = json.loads(path.read_text(encoding="utf-8"))
-                log.warning("Serving stale cached Binance catalog after refresh failure")
-                return stale
-            except (json.JSONDecodeError, OSError):
-                pass
-        raise
+        if time.time() - path.stat().st_mtime < _CATALOG_TTL_SECONDS:
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("Catalog cache at %s unreadable (%s), refetching", path, exc)
+    return None
+
+
+def load_catalog(path: Path, refresh: bool = False) -> list[dict]:
+    if not refresh:
+        cached = _fresh_cached(path)
+        if cached is not None:
+            return cached
+
+    with _refresh_lock:
+        # Another thread may have already refreshed while this one waited
+        # for the lock - re-check before making our own Binance round trip.
+        if not refresh:
+            cached = _fresh_cached(path)
+            if cached is not None:
+                return cached
+        try:
+            return save_catalog(path)
+        except (BinanceAPIError, OSError):
+            log.exception("Failed to refresh Binance catalog")
+            if path.exists():
+                try:
+                    stale = json.loads(path.read_text(encoding="utf-8"))
+                    log.warning("Serving stale cached Binance catalog after refresh failure")
+                    return stale
+                except (json.JSONDecodeError, OSError):
+                    pass
+            raise
 
 
 def instrument_by_symbol(items: list[dict], symbol: str) -> dict | None:

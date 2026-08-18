@@ -65,7 +65,7 @@ def sync_native_timeframe(symbol: str, timeframe: str, *, mode: str = "continue"
     symbol = symbol.upper()
     span_from, span_till = _resolve_range(symbol, timeframe, mode=mode, from_date=from_date, till_date=till_date)
     start_ms = _date_to_ms(span_from)
-    end_ms = _date_to_ms(span_till) + 86_399_000  # inclusive through the end of till_date, in ms
+    end_ms = _date_to_ms(span_till) + 86_399_999  # inclusive through 23:59:59.999 of till_date, in ms
 
     store.update_sync_state(symbol, timeframe, status="running")
     started_at = time.time()

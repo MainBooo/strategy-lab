@@ -10,6 +10,17 @@ import pandas as pd
 COMMISSION_SIDE = 0.0005
 
 
+def _floor_units(qty: float, step: float) -> int:
+    """Whole-step count that fits in qty, tolerant of binary-float noise.
+
+    Plain ``qty // step`` mis-floors for common fractional stepSizes, e.g.
+    ``1.0 // 0.1 == 9.0`` in raw IEEE-754 float, not 10 - silently losing one
+    whole step every time. A tiny epsilon before truncating fixes that
+    without meaningfully affecting genuine non-boundary quantities.
+    """
+    return int(qty / step + 1e-9)
+
+
 def load_candles(path: Path, date_from: str | None = None, date_till: str | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, sep=None, engine="python")
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -224,13 +235,21 @@ def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
     shares=lot_size*lot_count
     risk_per_trade_pct=float(params.get("risk_per_trade_pct",0) or 0)
     if trades.empty:
-        return {"trades":0,"wins":0,"losses":0,"win_rate":0,"profit_factor":0,"average_trade_pct":0,"compounded_return_pct":0,"max_drawdown_pct":0,"starting_capital_rub":starting_capital,"final_capital_rub":starting_capital,"lot_size":lot_size,"lot_count":lot_count,"shares_per_trade":shares,"rejected_for_capital":0}
+        return {"trades":0,"wins":0,"losses":0,"win_rate":0,"profit_factor":0,"average_trade_pct":0,"compounded_return_pct":0,"max_drawdown_pct":0,"starting_capital_rub":starting_capital,"final_capital_rub":starting_capital,"lot_size":lot_size,"lot_count":lot_count,"shares_per_trade":shares,"rejected_for_capital":0,"_position_shares":{}}
     winners=trades.loc[trades["net_return"]>0,"net_return"]; losers=trades.loc[trades["net_return"]<=0,"net_return"]
     gross_loss=-losers.sum(); pf=float(winners.sum()/gross_loss) if gross_loss>0 else None
     equity_full=(1+trades["net_return"]).cumprod(); drawdown=equity_full/equity_full.cummax()-1
     capital=starting_capital; rejected=0; money_rows=[]
     has_stop=risk_per_trade_pct>0 and "stop_price" in trades.columns
-    for _,row in trades.sort_values("entry_time").iterrows():
+    # Per-trade executed quantity, keyed by the original (pre-sort) trades
+    # index, so any caller building a trade blotter (app.py's per-combo trade
+    # list, portfolio_engine.simulate_portfolio) can price each fill with the
+    # exact size that produced final_capital_rub/money_return_pct below,
+    # instead of separately re-deriving a plain lot_count*lot_size quantity
+    # that silently disagrees with this risk-based number once
+    # risk_per_trade_pct is on.
+    position_shares:dict=dict.fromkeys(trades.index, shares)
+    for idx,row in trades.sort_values("entry_time").iterrows():
         trade_shares=shares
         if has_stop and pd.notna(row.get("stop_price")) and float(row["entry_price"])>0:
             stop_dist_pct=abs(float(row["entry_price"])-float(row["stop_price"]))/float(row["entry_price"])
@@ -243,8 +262,9 @@ def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
                 # whole number of stepSize units happens in the next line,
                 # not here.
                 raw_qty=risk_amount/(stop_dist_pct*float(row["entry_price"]))
-                lots=max(1,int(raw_qty//lot_size))
+                lots=max(1,_floor_units(raw_qty,lot_size))
                 trade_shares=lots*lot_size
+        position_shares[idx]=trade_shares
         notional=trade_shares*float(row["entry_price"])
         if notional>capital:
             rejected+=1; continue
@@ -253,7 +273,7 @@ def summarize(trades: pd.DataFrame, params: dict | None=None) -> dict:
     money_dd=0.0
     if money_rows:
         s=pd.Series(money_rows); money_dd=float((s/s.cummax()-1).min())
-    return {"trades":int(len(trades)),"wins":int((trades["net_return"]>0).sum()),"losses":int((trades["net_return"]<=0).sum()),"win_rate":round(float((trades["net_return"]>0).mean())*100,2),"profit_factor":None if pf is None else round(pf,3),"average_trade_pct":round(float(trades["net_return"].mean())*100,4),"compounded_return_pct":round(float(equity_full.iloc[-1]-1)*100,3),"max_drawdown_pct":round(float(drawdown.min())*100,3),"money_max_drawdown_pct":round(money_dd*100,3),"starting_capital_rub":round(starting_capital,2),"final_capital_rub":round(capital,2),"money_return_pct":round((capital/starting_capital-1)*100,3),"lot_size":lot_size,"lot_count":lot_count,"shares_per_trade":shares,"risk_based_sizing":has_stop,"rejected_for_capital":rejected}
+    return {"trades":int(len(trades)),"wins":int((trades["net_return"]>0).sum()),"losses":int((trades["net_return"]<=0).sum()),"win_rate":round(float((trades["net_return"]>0).mean())*100,2),"profit_factor":None if pf is None else round(pf,3),"average_trade_pct":round(float(trades["net_return"].mean())*100,4),"compounded_return_pct":round(float(equity_full.iloc[-1]-1)*100,3),"max_drawdown_pct":round(float(drawdown.min())*100,3),"money_max_drawdown_pct":round(money_dd*100,3),"starting_capital_rub":round(starting_capital,2),"final_capital_rub":round(capital,2),"money_return_pct":round((capital/starting_capital-1)*100,3),"lot_size":lot_size,"lot_count":lot_count,"shares_per_trade":shares,"risk_based_sizing":has_stop,"rejected_for_capital":rejected,"_position_shares":position_shares}
 
 
 def save_run(results_dir: Path,strategy_name: str,source_file: str,params: dict,trades: pd.DataFrame) -> dict:
@@ -267,6 +287,15 @@ def save_run(results_dir: Path,strategy_name: str,source_file: str,params: dict,
     # placeholder header keeps the round trip parseable without inventing
     # any trade data - readers only ever check .empty in this case.
     out=trades if len(trades.columns) else pd.DataFrame(columns=["entry_time"])
+    position_shares=summary.pop("_position_shares",{})
+    if len(out.columns) and position_shares:
+        # Persist the exact per-trade quantity summarize() actually priced
+        # each fill at (risk-based when configured, plain lot_count*lot_size
+        # otherwise) so downstream consumers - the per-combo trade blotter
+        # and the portfolio equity curve - reuse this number instead of
+        # silently re-deriving a different, fixed-lot one.
+        out=out.copy()
+        out["position_shares"]=out.index.map(position_shares).astype(float)
     out.to_csv(run_dir/"trades.csv",index=False)
     (run_dir/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
     return {"run_id":run_id,"summary":summary,"files":["trades.csv","summary.json"]}

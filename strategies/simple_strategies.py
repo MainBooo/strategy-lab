@@ -35,7 +35,13 @@ def _execute(df: pd.DataFrame, signals: list[dict], rr: float, stop_atr: float, 
             continue
         side = signal["side"]
         entry = float(df.at[i, "open"])
-        atr = float(df.at[i, "atr"])
+        # ATR at bar i needs bar i's own high/low, which aren't known yet at
+        # bar i's open (this is the entry bar) - sizing the default
+        # stop/take off it is look-ahead bias. The last fully closed bar
+        # (i-1) is what would actually be available when this order is
+        # placed live, matching the i-1 convention already used elsewhere in
+        # this function (passes_volume_filter, signal_time).
+        atr = float(df.at[i - 1, "atr"]) if i > 0 else float("nan")
         if not np.isfinite(atr) or atr <= 0:
             continue
         if side == "long":

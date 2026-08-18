@@ -381,12 +381,21 @@ def list_events(user_id: str, *, after: float = 0.0, limit: int = 50) -> list[di
     return [dict(r) for r in rows]
 
 
-def mark_delivery(event_id: str, *, channel: str, error: str | None = None) -> None:
+def mark_delivery(event_id: str, *, channel: str | None = None, error: str | None = None) -> None:
+    # delivery_error is one free-text column, not per-channel - a failure
+    # can come from any subset of push/telegram/email (see
+    # notification_delivery.dispatch_event, which aggregates all three into
+    # one call), so this path never trusted `channel` to pick a column.
+    # Naming it here regardless used to make it look attributable when it
+    # wasn't; a caller reporting a single channel's failure (send_web_push
+    # etc.) still passes its own `channel` for clarity, it's just no longer
+    # required to be accurate for the write itself.
+    if error is not None:
+        with _connect() as conn:
+            conn.execute("UPDATE notification_events SET delivery_error=? WHERE id=?", (error[:1000], event_id))
+        return
     column = {"web_push": "web_push_sent", "email": "email_sent", "telegram": "telegram_sent"}.get(channel)
     if not column:
         return
     with _connect() as conn:
-        if error:
-            conn.execute("UPDATE notification_events SET delivery_error=? WHERE id=?", (error[:1000], event_id))
-        else:
-            conn.execute(f"UPDATE notification_events SET {column}=1 WHERE id=?", (event_id,))
+        conn.execute(f"UPDATE notification_events SET {column}=1 WHERE id=?", (event_id,))

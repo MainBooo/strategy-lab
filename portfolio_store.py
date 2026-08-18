@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -10,6 +12,18 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 4
+
+
+def _positive_capital(value, fallback: float) -> float:
+    """`value or fallback` only guards 0/None - a negative starting_capital
+    passed validation and made every backtest reject every trade for
+    insufficient cash, returning a meaningless zero-trade/0%-return summary
+    instead of a clear validation error."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return n if n > 0 else fallback
 
 
 class PortfolioStore:
@@ -32,7 +46,29 @@ class PortfolioStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self.path.write_text("[]", encoding="utf-8")
+        self._lock_path = self.path.with_name(f".{self.path.name}.lock")
         self._migrate_if_needed()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Cross-process mutex around one read-modify-write cycle.
+
+        Gunicorn runs multiple worker *processes*; every mutator here reads
+        the whole file, mutates in memory, then overwrites it - with no
+        locking, two near-simultaneous requests (a background job's
+        mark_backtested() landing right after a user's replace(), say) can
+        both read the same snapshot and whichever _write() lands second
+        silently discards the other's change. flock() on a lock file that's
+        never itself replaced (unlike self.path, which os.replace() swaps
+        the inode of) is a real mutex across processes, not just threads.
+        """
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _read_raw(self) -> list[dict]:
         try:
@@ -133,96 +169,102 @@ class PortfolioStore:
         return next((x for x in self._read() if x.get("id") == portfolio_id), None)
 
     def create(self, payload: dict, user_id: str | None = None) -> dict:
-        items = self._read()
-        now = time.time()
-        default_strategy = str(payload.get("default_strategy_id") or payload.get("strategy") or "false_breakout")
-        portfolio = {
-            "id": uuid.uuid4().hex[:12],
-            "name": str(payload.get("name") or "Новый портфель"),
-            "starting_capital": float(payload.get("starting_capital") or 10_000),
-            "strategy": default_strategy,
-            "default_strategy_id": default_strategy,
-            "ticker_strategies": payload.get("ticker_strategies") or {},
-            "params": payload.get("params") or {},
-            "instruments": payload.get("instruments") or [],
-            "created_at": now,
-            "updated_at": now,
-            "last_backtest_at": None,
-            "schema_version": SCHEMA_VERSION,
-            # None = unowned/shared, same as every portfolio created before
-            # accounts existed - only set when a logged-in user's session
-            # created this portfolio (see app.py's create_portfolio route).
-            "user_id": user_id,
-        }
-        items.append(portfolio)
-        self._write(items)
-        return portfolio
+        with self._locked():
+            items = self._read()
+            now = time.time()
+            default_strategy = str(payload.get("default_strategy_id") or payload.get("strategy") or "false_breakout")
+            portfolio = {
+                "id": uuid.uuid4().hex[:12],
+                "name": str(payload.get("name") or "Новый портфель"),
+                "starting_capital": _positive_capital(payload.get("starting_capital"), 10_000),
+                "strategy": default_strategy,
+                "default_strategy_id": default_strategy,
+                "ticker_strategies": payload.get("ticker_strategies") or {},
+                "params": payload.get("params") or {},
+                "instruments": payload.get("instruments") or [],
+                "created_at": now,
+                "updated_at": now,
+                "last_backtest_at": None,
+                "schema_version": SCHEMA_VERSION,
+                # None = unowned/shared, same as every portfolio created before
+                # accounts existed - only set when a logged-in user's session
+                # created this portfolio (see app.py's create_portfolio route).
+                "user_id": user_id,
+            }
+            items.append(portfolio)
+            self._write(items)
+            return portfolio
 
     def update(self, portfolio_id: str, **fields) -> dict | None:
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                p.update(fields)
-                p["updated_at"] = time.time()
-                self._write(items)
-                return p
-        return None
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    p.update(fields)
+                    p["updated_at"] = time.time()
+                    self._write(items)
+                    return p
+            return None
 
     def add_instruments(self, portfolio_id: str, instruments: list[dict]) -> dict | None:
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                existing = {str(i["ticker"]): i for i in p.get("instruments", [])}
-                for inst in instruments:
-                    existing[str(inst["ticker"])] = inst
-                p["instruments"] = list(existing.values())
-                p["updated_at"] = time.time()
-                self._write(items)
-                return p
-        return None
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    existing = {str(i["ticker"]): i for i in p.get("instruments", [])}
+                    for inst in instruments:
+                        existing[str(inst["ticker"])] = inst
+                    p["instruments"] = list(existing.values())
+                    p["updated_at"] = time.time()
+                    self._write(items)
+                    return p
+            return None
 
     def update_instrument_file(self, portfolio_id: str, ticker: str, filename: str) -> dict | None:
         """Point one existing instrument at a freshly-downloaded data file,
         leaving its lot_count/lot_size and every other field untouched -
         unlike add_instruments, which replaces the whole instrument dict."""
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                for inst in p.get("instruments", []):
-                    if str(inst.get("ticker")) == str(ticker):
-                        inst["file"] = filename
-                        p["updated_at"] = time.time()
-                        self._write(items)
-                        return p
-                return None
-        return None
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    for inst in p.get("instruments", []):
+                        if str(inst.get("ticker")) == str(ticker):
+                            inst["file"] = filename
+                            p["updated_at"] = time.time()
+                            self._write(items)
+                            return p
+                    return None
+            return None
 
     def remove_instruments(self, portfolio_id: str, tickers: list[str]) -> dict | None:
-        items = self._read()
-        remove_set = {str(t).upper() for t in tickers}
-        for p in items:
-            if p.get("id") == portfolio_id:
-                p["instruments"] = [i for i in p.get("instruments", []) if str(i["ticker"]).upper() not in remove_set]
-                for t in remove_set:
-                    p.get("ticker_strategies", {}).pop(t, None)
-                p["updated_at"] = time.time()
-                self._write(items)
-                return p
-        return None
+        with self._locked():
+            items = self._read()
+            remove_set = {str(t).upper() for t in tickers}
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    p["instruments"] = [i for i in p.get("instruments", []) if str(i["ticker"]).upper() not in remove_set]
+                    for t in remove_set:
+                        p.get("ticker_strategies", {}).pop(t, None)
+                    p["updated_at"] = time.time()
+                    self._write(items)
+                    return p
+            return None
 
     def set_ticker_strategies(self, portfolio_id: str, default_strategy_id: str | None, ticker_strategies: dict | None) -> dict | None:
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                if default_strategy_id:
-                    p["default_strategy_id"] = default_strategy_id
-                    p["strategy"] = default_strategy_id
-                if ticker_strategies is not None:
-                    p["ticker_strategies"] = ticker_strategies
-                p["updated_at"] = time.time()
-                self._write(items)
-                return p
-        return None
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    if default_strategy_id:
+                        p["default_strategy_id"] = default_strategy_id
+                        p["strategy"] = default_strategy_id
+                    if ticker_strategies is not None:
+                        p["ticker_strategies"] = ticker_strategies
+                    p["updated_at"] = time.time()
+                    self._write(items)
+                    return p
+            return None
 
     def replace(self, portfolio_id: str, payload: dict) -> dict | None:
         """Full-portfolio save used by the editor's explicit "Сохранить
@@ -230,39 +272,42 @@ class PortfolioStore:
         write instead of several piecemeal PATCH calls, so there is one
         well-defined moment the portfolio changes rather than a sequence of
         partial autosaves."""
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                if "name" in payload:
-                    p["name"] = str(payload["name"] or p["name"])
-                if "starting_capital" in payload:
-                    p["starting_capital"] = float(payload["starting_capital"] or p["starting_capital"])
-                if "instruments" in payload:
-                    p["instruments"] = payload["instruments"] or []
-                if "default_strategy_id" in payload and payload["default_strategy_id"]:
-                    p["default_strategy_id"] = payload["default_strategy_id"]
-                    p["strategy"] = payload["default_strategy_id"]
-                if "ticker_strategies" in payload:
-                    p["ticker_strategies"] = payload["ticker_strategies"] or {}
-                if "params" in payload:
-                    p["params"] = payload["params"] or {}
-                p["updated_at"] = time.time()
-                self._write(items)
-                return p
-        return None
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    if "name" in payload:
+                        p["name"] = str(payload["name"] or p["name"])
+                    if "starting_capital" in payload:
+                        p["starting_capital"] = _positive_capital(payload["starting_capital"], p["starting_capital"])
+                    if "instruments" in payload:
+                        p["instruments"] = payload["instruments"] or []
+                    if "default_strategy_id" in payload and payload["default_strategy_id"]:
+                        p["default_strategy_id"] = payload["default_strategy_id"]
+                        p["strategy"] = payload["default_strategy_id"]
+                    if "ticker_strategies" in payload:
+                        p["ticker_strategies"] = payload["ticker_strategies"] or {}
+                    if "params" in payload:
+                        p["params"] = payload["params"] or {}
+                    p["updated_at"] = time.time()
+                    self._write(items)
+                    return p
+            return None
 
     def mark_backtested(self, portfolio_id: str) -> None:
-        items = self._read()
-        for p in items:
-            if p.get("id") == portfolio_id:
-                p["last_backtest_at"] = time.time()
-                self._write(items)
-                return
+        with self._locked():
+            items = self._read()
+            for p in items:
+                if p.get("id") == portfolio_id:
+                    p["last_backtest_at"] = time.time()
+                    self._write(items)
+                    return
 
     def delete(self, portfolio_id: str) -> bool:
-        items = self._read()
-        filtered = [x for x in items if x.get("id") != portfolio_id]
-        if len(filtered) == len(items):
-            return False
-        self._write(filtered)
-        return True
+        with self._locked():
+            items = self._read()
+            filtered = [x for x in items if x.get("id") != portfolio_id]
+            if len(filtered) == len(items):
+                return False
+            self._write(filtered)
+            return True

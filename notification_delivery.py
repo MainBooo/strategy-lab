@@ -202,5 +202,8 @@ def dispatch_event(event: dict) -> dict:
     except Exception as exc:
         errors.append(f"email: {exc}"); log.exception("Email dispatch failed")
     if errors:
-        ndb.mark_delivery(event["id"], channel="web_push", error="; ".join(errors))
+        # Each error string above is already channel-prefixed ("push: ...",
+        # "telegram: ...") - no single `channel=` here would be accurate
+        # since any subset of the three can have failed.
+        ndb.mark_delivery(event["id"], error="; ".join(errors))
     return result

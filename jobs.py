@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import threading
@@ -102,6 +104,29 @@ class JobStore:
             data.update(fields)
             data["updated_at"] = time.time()
             self._write(self._path(job_id), data)
+
+    @contextlib.contextmanager
+    def portfolio_lock(self, portfolio_id: str | None, kind: str):
+        """Serialize find-active-then-create for one portfolio+kind across processes.
+
+        Gunicorn runs multiple worker *processes*, so an in-memory
+        threading.Lock can't stop two near-simultaneous requests (double
+        click, two tabs) from both seeing "no active job" and both creating
+        one. flock() on a per-portfolio lock file is a real cross-process
+        mutex; hold it around the whole find-then-create sequence at the
+        call site, not just around ``create``.
+        """
+        if not portfolio_id:
+            yield
+            return
+        lock_path = self.dir / f".lock_{portfolio_id}_{kind}"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def find_active_for_portfolio(self, portfolio_id: str, kind: str | None = None) -> dict | None:
         candidates = []

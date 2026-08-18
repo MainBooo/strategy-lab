@@ -48,9 +48,19 @@
     const d = new Date(unixSeconds * 1000);
     return d.toLocaleString("ru-RU", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
-  function fmtMoney(n) {
+  function fmtMoney(n, cur) {
+    // A fixed 2-decimal, hardcoded-USDT format rounds sub-cent instruments
+    // to "0.00" and mislabels any session traded against a non-USDT quote
+    // asset - scale precision to magnitude and take the real quote asset
+    // from the caller (see MarketReplay._quoteAsset below).
     if (n == null || Number.isNaN(n)) return "—";
-    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n) + " USDT";
+    const digits = Math.abs(n) >= 1 ? 2 : Math.abs(n) >= 0.01 ? 4 : 8;
+    return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: digits }).format(n) + " " + (cur || "USDT");
+  }
+  function fmtPrice(n) {
+    if (n == null || Number.isNaN(n)) return "—";
+    const digits = Math.abs(n) >= 1 ? 2 : Math.abs(n) >= 0.01 ? 4 : 8;
+    return Number(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: digits });
   }
   function pnlClass(n) { return n > 0 ? "pnl-pos" : n < 0 ? "pnl-neg" : ""; }
   function fmtPercent(n) {
@@ -78,6 +88,11 @@
     markersHandle: null,
     fsCtrl: null,
     playing: false,
+
+    _quoteAsset(symbol) {
+      const sec = (this.securities || []).find((s) => s.symbol === symbol);
+      return (sec && sec.quoteAsset) || "USDT";
+    },
     _playTimer: null,
     _busy: false,
     _orderBusy: false,
@@ -445,15 +460,16 @@
       this.root.querySelector("#mrPercent").textContent = `${state.percent}% · ${state.reveal_index}/${state.total_available}`;
       this.root.querySelector("#mrStatusPill").textContent = this.playing ? "Воспроизведение" : "Пауза";
       this.root.querySelector("#mrStatusPill").className = `pill ${this.playing ? "status-running" : "status-queued"}`;
-      this.root.querySelector("#mrCash").textContent = fmtMoney(state.equity.cash);
-      this.root.querySelector("#mrPosValue").textContent = fmtMoney(state.equity.position_value);
+      const cur = this._quoteAsset(state.session.symbol);
+      this.root.querySelector("#mrCash").textContent = fmtMoney(state.equity.cash, cur);
+      this.root.querySelector("#mrPosValue").textContent = fmtMoney(state.equity.position_value, cur);
       const unrealizedEl = this.root.querySelector("#mrUnrealized");
-      unrealizedEl.textContent = fmtMoney(state.equity.unrealized_pnl);
+      unrealizedEl.textContent = fmtMoney(state.equity.unrealized_pnl, cur);
       unrealizedEl.className = pnlClass(state.equity.unrealized_pnl);
       const realizedEl = this.root.querySelector("#mrRealized");
-      realizedEl.textContent = fmtMoney(state.equity.realized_pnl);
+      realizedEl.textContent = fmtMoney(state.equity.realized_pnl, cur);
       realizedEl.className = pnlClass(state.equity.realized_pnl);
-      this.root.querySelector("#mrTotal").textContent = fmtMoney(state.equity.total);
+      this.root.querySelector("#mrTotal").textContent = fmtMoney(state.equity.total, cur);
       this.root.querySelector("#mrStepBack").disabled = !state.can_step_back;
 
       this._renderPositionStatus(state);
@@ -467,6 +483,7 @@
         el.innerHTML = `<div class="mr-no-position">Нет открытой позиции</div>`;
         return;
       }
+      const cur = this._quoteAsset(s.symbol);
       const long = s.position_side === "long";
       const unrealized = state.equity.unrealized_pnl;
       const costBasis = s.position_avg_price != null ? s.position_avg_price * s.position_qty_shares : 0;
@@ -476,9 +493,9 @@
           <span class="mr-trade-side ${long ? "mr-side-long" : "mr-side-short"}">${long ? "Long" : "Short"}</span>
           <span>${s.position_qty_lots} ${pluralLots(s.position_qty_lots)}</span>
         </div>
-        <div class="mr-account-row"><span>Средняя цена</span><strong>${s.position_avg_price != null ? s.position_avg_price.toFixed(2) : "—"}</strong></div>
-        <div class="mr-account-row"><span>Стоимость позиции</span><strong>${fmtMoney(state.equity.position_value)}</strong></div>
-        <div class="mr-account-row"><span>P&amp;L</span><strong class="${pnlClass(unrealized)}">${fmtMoney(unrealized)} · ${fmtPercent(pct)}</strong></div>
+        <div class="mr-account-row"><span>Средняя цена</span><strong>${s.position_avg_price != null ? fmtPrice(s.position_avg_price) : "—"}</strong></div>
+        <div class="mr-account-row"><span>Стоимость позиции</span><strong>${fmtMoney(state.equity.position_value, cur)}</strong></div>
+        <div class="mr-account-row"><span>P&amp;L</span><strong class="${pnlClass(unrealized)}">${fmtMoney(unrealized, cur)} · ${fmtPercent(pct)}</strong></div>
         ${s.position_stop_loss != null ? `<div class="mr-account-row"><span>Stop Loss</span><strong>${s.position_stop_loss}</strong></div>` : ""}
         ${s.position_take_profit != null ? `<div class="mr-account-row"><span>Take Profit</span><strong>${s.position_take_profit}</strong></div>` : ""}
       `;
@@ -506,6 +523,7 @@
     _renderTrades(trades) {
       const box = this.root.querySelector("#mrTradesList");
       if (!trades.length) { box.innerHTML = `<div class="muted-note">Сделок пока нет</div>`; return; }
+      const cur = this._quoteAsset(this.state && this.state.session && this.state.session.symbol);
       box.innerHTML = trades.slice().reverse().map((t) => {
         const isBuy = this._isBuyFill(t);
         return `
@@ -513,11 +531,11 @@
           <div class="mr-trade-main">
             <span class="mr-trade-action">${isBuy ? "🟢 Buy" : "🔴 Sell"}</span>
             <span class="mr-trade-qty">${t.qty_lots} ${pluralLots(t.qty_lots)}</span>
-            <span class="mr-trade-price">${t.fill_price.toFixed(2)}</span>
+            <span class="mr-trade-price">${fmtPrice(t.fill_price)}</span>
           </div>
           <div class="mr-trade-meta">
             <span class="mr-trade-time">${fmtDateTime(t.bar_ts)}</span>
-            ${t.realized_pnl != null ? `<span class="mr-trade-pnl ${pnlClass(t.realized_pnl)}">P&amp;L ${fmtMoney(t.realized_pnl)}</span>` : ""}
+            ${t.realized_pnl != null ? `<span class="mr-trade-pnl ${pnlClass(t.realized_pnl)}">P&amp;L ${fmtMoney(t.realized_pnl, cur)}</span>` : ""}
             ${t.exit_reason && t.exit_reason !== "manual" ? `<span class="mr-exit-reason">${t.exit_reason === "stop" ? "SL" : t.exit_reason === "take" ? "TP" : t.exit_reason}</span>` : ""}
           </div>
         </div>`;

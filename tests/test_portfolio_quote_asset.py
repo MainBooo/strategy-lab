@@ -64,3 +64,19 @@ def test_put_portfolio_accepts_same_quote_asset_instruments(client):
         ]},
     )
     assert resp.status_code == 200
+
+
+def test_create_portfolio_with_null_json_body_does_not_500(client):
+    # request.get_json(force=True) parses a literal `null` body to Python
+    # None; without an `or {}` fallback, .get(...) on it raised AttributeError
+    # before the route's own try/except even started, surfacing as a bare 500
+    # instead of creating a default-valued portfolio like an empty {} body does.
+    resp = client.post("/api/portfolios", data="null", content_type="application/json")
+    assert resp.status_code == 200
+    assert resp.get_json()["starting_capital"] == 10_000
+
+
+def test_batch_backtest_with_null_json_body_does_not_500(client):
+    resp = client.post("/api/batch-backtest", data="null", content_type="application/json")
+    assert resp.status_code == 200
+    assert resp.get_json()["rows"] == []

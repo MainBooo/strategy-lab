@@ -81,7 +81,20 @@ def run_optimizer(source: Path, ranges: dict, results_dir: Path) -> dict:
         summary = result["summary"]
         trades = int(summary.get("trades", 0))
         pf = summary.get("profit_factor")
-        pf_value = float(pf) if pf is not None else 0.0
+        if pf is not None:
+            pf_value = float(pf)
+        elif trades > 0:
+            # summarize() returns profit_factor=None specifically when there
+            # are zero losing trades (gross_loss<=0) - a flawless outcome,
+            # not an undefined/bad one. Scoring that as 0 (the worst a real
+            # profit factor could be) buried a genuinely excellent small
+            # sample at the bottom of the ranking. Treat it as a strong,
+            # capped profit factor instead; sample_penalty below still keeps
+            # a tiny all-winners run from unfairly beating a large, proven
+            # one on trade count alone.
+            pf_value = 5.0
+        else:
+            pf_value = 0.0
         expectancy = float(summary.get("average_trade_pct", 0.0))
         drawdown = abs(float(summary.get("max_drawdown_pct", 0.0)))
         compounded = float(summary.get("compounded_return_pct", 0.0))

@@ -7,10 +7,11 @@ This module is registered as a child of the existing auth blueprint from
 CSRF stack instead of introducing a second web framework or SPA.
 """
 
+import hmac
 import time
 from datetime import datetime
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, session
 
 import auth
 import auth_db
@@ -186,15 +187,14 @@ def strategy_preset_with_private(strategy_id):
     if request.method == "GET":
         preset = spdb.get_preset(user_key, storage_key)
         return jsonify(preset or {"strategy_id": storage_key, "parameters": None, "updated_at": None})
-    # Existing app routes historically did not use CSRF here. For the new
-    # private surface we require the same token used by account routes.
-    if private:
-        sent = request.headers.get("X-CSRF-Token", "")
-        from flask import session
-        import hmac
-        expected = session.get("csrf_token", "")
-        if not expected or not sent or not hmac.compare_digest(sent, expected):
-            return jsonify({"error": "Сессия устарела. Обновите страницу и попробуйте снова."}), 403
+    # State-changing (PUT/DELETE) from here on - require the same token used
+    # by every other account/portfolio route, for public and private presets
+    # alike (previously only checked when `private`, leaving public-strategy
+    # preset saves without the check every sibling route has).
+    sent = request.headers.get("X-CSRF-Token", "")
+    expected = session.get("csrf_token", "")
+    if not expected or not sent or not hmac.compare_digest(sent, expected):
+        return jsonify({"error": "Сессия устарела. Обновите страницу и попробуйте снова."}), 403
     if request.method == "DELETE":
         spdb.delete_preset(user_key, storage_key)
         return jsonify({"ok": True})
@@ -206,6 +206,7 @@ def strategy_preset_with_private(strategy_id):
 
 
 @commerce_bp.patch("/api/portfolios/<portfolio_id>/strategies")
+@csrf_protect
 def portfolio_strategies_with_private(portfolio_id):
     portfolio = _PORTFOLIOS.get(portfolio_id) if _PORTFOLIOS else None
     if not _portfolio_accessible(portfolio):
@@ -249,6 +250,7 @@ def portfolio_strategies_with_private(portfolio_id):
 
 
 @commerce_bp.post("/api/portfolios/<portfolio_id>/backtest")
+@csrf_protect
 def portfolio_backtest_with_private(portfolio_id):
     """Translate owner-visible private aliases to their registered runner.
 

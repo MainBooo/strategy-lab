@@ -4,7 +4,22 @@ function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;",
 
 const DATA_STATUS_LABEL={fresh:"Данные актуальны",stale:"Требуют обновления",none:"Данных нет"};
 const DATA_STATUS_CLASS={fresh:"status-fresh",stale:"status-stale",none:"status-none"};
-const money=n=>Number(n||0).toLocaleString("ru-RU",{maximumFractionDigits:2});
+// A fixed 2-decimal cap made sense for RUB kopecks but silently rounds
+// sub-cent Binance instruments (SHIB, PEPE, ...) to "0" - scale precision to
+// the magnitude instead, same idea as realtime-indicator.js's price formatter.
+const money=n=>{
+  const v=Number(n||0);
+  const digits=Math.abs(v)>=1?2:Math.abs(v)>=0.01?4:8;
+  return v.toLocaleString("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:digits});
+};
+// Portfolios are validated single-quote-asset (see _quote_asset_conflict) -
+// resolve the real one from the catalog instead of assuming USDT.
+function csrfToken(){return(document.querySelector('meta[name="csrf-token"]')||{}).content||"";}
+function quoteAssetFor(instruments){
+  const first=(instruments||[]).map(i=>i&&i.ticker).find(Boolean);
+  const sec=first&&securities.find(s=>s.symbol===first);
+  return (sec&&sec.quoteAsset)||"USDT";
+}
 const fmtDateTime=ts=>ts?new Date(ts*1000).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 
 let securities=[];
@@ -149,12 +164,23 @@ async function loadSecurities(refresh=false){
     const r=await fetch(`/api/securities${refresh?"?refresh=1":""}`,{signal:ctrl.signal});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось загрузить справочник");
-    securities=d;renderCatalog();
+    securities=d;renderCatalogSectorOptions();renderCatalog();
     setStatus(`Инструментов Binance: ${d.length}`,"success");
   }catch(e){
     const msg=e.name==="AbortError"?"Справочник Binance не ответил вовремя.":`Ошибка справочника: ${e.message}`;
     setStatus(msg,"error");throw e;
   }finally{clearTimeout(t)}
+}
+function renderCatalogSectorOptions(){
+  // SECTOR is the instrument's quote asset (USDT/BTC/USDC/...), not a MOEX
+  // equity industry - built from whatever is actually present in the loaded
+  // catalog instead of a fixed list, so the filter can never target a value
+  // no row will ever have.
+  const sel=$("catalogSector");if(!sel)return;
+  const current=sel.value;
+  const sectors=[...new Set(securities.map(s=>s.SECTOR).filter(Boolean))].sort();
+  sel.innerHTML=`<option value="">Все котируемые активы</option>`+sectors.map(s=>`<option value="${s}">${s}</option>`).join("");
+  if(sectors.includes(current))sel.value=current;
 }
 function catalogFilters(){
   return{q:$("catalogSearch").value.toLowerCase().trim(),sector:$("catalogSector").value,dataStatus:$("catalogDataStatus").value,
@@ -592,19 +618,21 @@ function computeEditorTotals(draft){
 }
 function renderEditorSummary(totals,draft){
   const over=totals.free<0;
+  const cur=quoteAssetFor(draft.instruments);
   return `<div class="summary-grid">
-      <div><span>Стартовый капитал</span><strong>${money(totals.starting)} USDT</strong></div>
-      <div><span>Предварительная стоимость позиций</span><strong>${money(totals.positions)} USDT</strong></div>
-      <div><span>${over?"Превышение":"Свободный капитал"}</span><strong class="${over?'over-budget':''}">${money(Math.abs(totals.free))} USDT</strong></div>
+      <div><span>Стартовый капитал</span><strong>${money(totals.starting)} ${cur}</strong></div>
+      <div><span>Предварительная стоимость позиций</span><strong>${money(totals.positions)} ${cur}</strong></div>
+      <div><span>${over?"Превышение":"Свободный капитал"}</span><strong class="${over?'over-budget':''}">${money(Math.abs(totals.free))} ${cur}</strong></div>
       <div><span>Использовано</span><strong>${totals.usedPct.toFixed(2)}%</strong></div>
     </div>
-    ${over?`<div class="budget-warning">Стоимость выбранных позиций превышает стартовый капитал на ${money(Math.abs(totals.free))} USDT.</div>`:""}`;
+    ${over?`<div class="budget-warning">Стоимость выбранных позиций превышает стартовый капитал на ${money(Math.abs(totals.free))} ${cur}.</div>`:""}`;
 }
 
 function renderInstrumentRow(portfolioId,inst){
   const sec=securities.find(s=>s.symbol===inst.ticker);
+  const cur=(sec&&sec.quoteAsset)||"USDT";
   const q=priceCache[inst.ticker];
-  const priceText=q&&q.last!=null?`${money(q.last)} USDT`:"Цена недоступна";
+  const priceText=q&&q.last!=null?`${money(q.last)} ${cur}`:"Цена недоступна";
   const value=instrumentPositionValue(inst);
   const shares=(inst.lot_size||1)*(inst.lot_count||1);
   const draft=draftOf(portfolioId);
@@ -621,7 +649,7 @@ function renderInstrumentRow(portfolioId,inst){
       <button type="button" class="lot-btn" data-ed-lot-plus="${inst.ticker}">+</button>
     </td>
     <td>${shares}</td>
-    <td>${value!=null?money(value)+" USDT":"—"}</td>
+    <td>${value!=null?money(value)+" "+cur:"—"}</td>
     <td>${share}</td>
   </tr>`;
 }
@@ -918,7 +946,7 @@ async function saveLibraryPreset(strategyId){
   const btn=document.querySelector(`[data-param-save="${strategyId}"]`);
   if(btn){btn.disabled=true;btn.textContent="Сохраняем…"}
   try{
-    const r=await fetch(`/api/strategy-presets/${strategyId}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({parameters:st.values})});
+    const r=await fetch(`/api/strategy-presets/${strategyId}`,{method:"PUT",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken()},body:JSON.stringify({parameters:st.values})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось сохранить настройки");
     strategyUserPresets[strategyId]=d;
@@ -1290,7 +1318,7 @@ async function saveAssignmentModal(){
   const original=btn.textContent;
   btn.disabled=true;btn.textContent="Сохраняем…";
   try{
-    const r=await fetch(`/api/portfolios/${btPortfolio.id}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json"},
+    const r=await fetch(`/api/portfolios/${btPortfolio.id}/strategies`,{method:"PATCH",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken()},
       body:JSON.stringify({ticker_strategies:assignModalDraft})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||"Не удалось сохранить назначения стратегий");
@@ -1450,7 +1478,7 @@ async function startBacktest(){
   $("backtestMessage").textContent="";
   const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),15000);
   try{
-    const r=await fetch(`/api/portfolios/${btPortfolio.id}/backtest`,{method:"POST",headers:{"Content-Type":"application/json"},signal:ctrl.signal,
+    const r=await fetch(`/api/portfolios/${btPortfolio.id}/backtest`,{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken()},signal:ctrl.signal,
       body:JSON.stringify({tickers:[...btIncluded],date_from:$("backtestFrom").value||undefined,date_to:$("backtestTill").value||undefined,
         timeframe:$("backtestTimeframe").value||"10m"})});
     clearTimeout(t);
@@ -1534,11 +1562,12 @@ function resumeBacktestJobIfAny(){
 function renderMetrics(s,target){
   const pnl=(s.final_capital_rub||0)-(s.starting_capital_rub||0);
   const signClass=(n)=>n>0?"pos":n<0?"neg":"";
+  const cur=quoteAssetFor(btPortfolio&&btPortfolio.instruments);
   const fields=[
-    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} USDT`,signClass(pnl)],
+    ["Доходность",`${s.return_pct??0}%`,signClass(s.return_pct)],["Прибыль/убыток",`${money(pnl)} ${cur}`,signClass(pnl)],
     ["Просадка",`${s.max_drawdown_pct??0}%`,""],["Сделок",s.trades??0,""],["Win Rate",`${s.win_rate??0}%`,""],
     ["Profit Factor",s.profit_factor??"—",""],["Sharpe (оценка)",s.sharpe_ratio??"—",""],
-    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} USDT`,""],
+    ["Использование капитала",`${s.capital_utilization_pct??0}%`,""],["Капитал",`${money(s.final_capital_rub)} ${cur}`,""],
   ];
   $(target).innerHTML=fields.map(([a,b,c])=>`<div class="metric"><span>${a}</span><strong class="${c}">${b}</strong></div>`).join("");
 }
@@ -1551,16 +1580,17 @@ function renderBacktestResult(result){
   renderByTickerTable();
   renderByStrategyTable(result.by_strategy||[]);
 }
-const BY_TICKER_COLUMNS=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub","Прибыль USDT"],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
 const BY_TICKER_NUM_KEYS=new Set(["trades","pnl_rub","win_rate","max_drawdown_pct"]);
 function renderByTickerTable(){
   if(!lastBacktestResult)return;
+  const cur=quoteAssetFor(btPortfolio&&btPortfolio.instruments);
+  const columns=[["ticker","Тикер"],["strategy_name","Стратегия"],["trades","Сделок"],["pnl_rub",`Прибыль ${cur}`],["win_rate","Win Rate"],["max_drawdown_pct","Просадка"]];
   const rows=[...(lastBacktestResult.by_ticker||[])].sort((a,b)=>{
     const k=byTickerSort.key,av=a[k],bv=b[k];
     const cmp=typeof av==="number"&&typeof bv==="number"?av-bv:String(av).localeCompare(String(bv));
     return cmp*byTickerSort.dir;
   });
-  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${BY_TICKER_COLUMNS.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${BY_TICKER_NUM_KEYS.has(k)?'num':''} ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
+  $("byTickerTable").innerHTML=`<div class="table-scroll"><table><thead><tr>${columns.map(([k,l])=>`<th data-sort-key="${k}" class="sortable ${BY_TICKER_NUM_KEYS.has(k)?'num':''} ${byTickerSort.key===k?'sorted':''}">${l}${byTickerSort.key===k?(byTickerSort.dir>0?' ↑':' ↓'):''}</th>`).join("")}<th></th></tr></thead><tbody>${
     rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy_name||"—"}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.win_rate}%</td><td class="num">${r.max_drawdown_pct}%</td><td>${r.run_id?`<button class="link-btn" data-open-run="${r.run_id}">Подробнее</button>`:"—"}</td></tr>`).join("")
   }</tbody></table></div>`;
   document.querySelectorAll("[data-sort-key]").forEach(th=>th.onclick=()=>{
@@ -1572,7 +1602,8 @@ function renderByTickerTable(){
 }
 function renderByStrategyTable(rows){
   if(!rows.length){$("byStrategyTable").innerHTML="";return}
-  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль USDT</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
+  const cur=quoteAssetFor(btPortfolio&&btPortfolio.instruments);
+  $("byStrategyTable").innerHTML=`<h3 style="margin-top:22px">По стратегиям</h3><div class="table-scroll"><table><thead><tr><th>Стратегия</th><th class="num">Тикеров</th><th class="num">Сделок</th><th class="num">Прибыль ${cur}</th><th class="num">Средний Win Rate</th></tr></thead><tbody>${
     rows.map(r=>`<tr><td>${r.strategy_name}</td><td class="num">${r.tickers}</td><td class="num">${r.trades}</td><td class="num ${r.pnl_rub>0?'pnl-pos':r.pnl_rub<0?'pnl-neg':''}">${r.pnl_rub}</td><td class="num">${r.avg_win_rate}%</td></tr>`).join("")
   }</tbody></table></div>`;
 }

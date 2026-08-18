@@ -63,9 +63,18 @@ def simulate_portfolio(portfolio: dict, run_results: list[dict], results_dir: Pa
         label=f"{ticker}::{strategy_id}" if strategy_id else ticker
         lot_count=max(1,int(item.get("lots") if item.get("lots") is not None else lot_map.get(ticker,1)))
         lot_size=max(1e-12,float(item.get("lot_size") if item.get("lot_size") is not None else size_map.get(ticker,1)))
-        shares=lot_count*lot_size
+        fixed_shares=lot_count*lot_size
+        # strategies.common.save_run persists the *actual* per-trade quantity
+        # it priced each fill at (risk-based sizing when the strategy has
+        # risk_per_trade_pct set, else the same fixed_shares below) as a
+        # "position_shares" column. Reusing it here keeps this equity curve
+        # consistent with the per-trade blotter and the per-instrument
+        # summary card instead of silently re-flattening every trade back to
+        # one fixed lot count when risk-based sizing was actually used.
+        has_position_shares="position_shares" in trades.columns
         for idx,row in trades.iterrows():
             trade_id=f"{label}_{idx}_{uuid.uuid4().hex[:5]}"
+            shares=float(row["position_shares"]) if has_position_shares and pd.notna(row["position_shares"]) else fixed_shares
             events.append((pd.to_datetime(row["entry_time"]),1,"entry",trade_id,ticker,strategy_id,shares,row.to_dict()))
             events.append((pd.to_datetime(row["exit_time"]),0,"exit",trade_id,ticker,strategy_id,shares,row.to_dict()))
 
