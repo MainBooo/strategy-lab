@@ -37,7 +37,7 @@
     ["fib","Фибоначчи",icon("fib"),[["fib_retracement","Коррекция Фибоначчи"],["fib_extension","Расширение Фибоначчи"]]],
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],
-    ["measure","Измерения",icon("measure"),[["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время"]]],
+    ["measure","Измерения",icon("measure"),[["measure","Линейка (временная)"],["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время"]]],
     ["brush","Кисть",icon("brush"),[["freehand","Кисть / freehand"]]],
     ["position","Позиции",icon("position"),[["long_position","Long Position"],["short_position","Short Position"]]]
   ];

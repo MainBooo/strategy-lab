@@ -64,6 +64,14 @@
     short_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Short позиция" },
     triangle: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Треугольник" },
     price_date_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Цена и время" },
+    // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
+    // temporary ruler overlay showing the same price-delta/%/bars/duration
+    // math as price_date_range, but which never becomes a persistent drawing
+    // object - see the `ephemeral` flag, read by _finishDraft() below, which
+    // skips addDrawing() entirely and re-arms the tool instead. Unlike
+    // price_range/time_range/price_date_range (kept as-is - TradingView has
+    // those too, as ordinary persistent line tools), this one is additive.
+    measure: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", ephemeral: true, label: "Измерение" },
     // Unlike every other tool, points aren't placed one anchor per tap/drag -
     // they're continuously sampled from pointer position while the button is
     // held (see the "drag-release" branches in _onPointerMove/
@@ -1404,6 +1412,21 @@
       if ((def.completion === "explicit" || def.completion === "drag-release") && this.draft.points.length < 2) return null;
       if (def.anchorCount > 0 && this.draft.points.length < def.anchorCount) return null;
 
+      // An ephemeral tool (currently only "measure") never creates a
+      // drawing object or a history entry - the whole point is a
+      // TradingView-style ruler that vanishes on release. Re-arm the same
+      // tool immediately (ignoring keepDrawing, which doesn't apply here)
+      // so the next drag can measure again without reselecting it.
+      if (def.ephemeral) {
+        const type = this.draft.type;
+        this.draft = null;
+        this._draftPreviewPoint = null;
+        this.activeTool = type;
+        this._syncInteractionMode();
+        this._emit({ measured: true });
+        return null;
+      }
+
       const points = this.draft.points.map((point) => ({ time: point.time, price: point.price }));
       const type = this.draft.type;
       let properties;
@@ -1694,6 +1717,14 @@
         case "price_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
+        // Ephemeral ruler tool (TOOL_DEFS.measure) - only ever seen here as
+        // the "__draft__" op (it never becomes a real entry in
+        // this.drawings, see _finishDraft's `ephemeral` branch), so pix[1]
+        // is missing until the pointer has actually moved past the first
+        // anchor; skip the op rather than draw a zero-size box.
+        case "measure":
+          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure_tool", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha });
+          break;
         case "price_date_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "price_date_range", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
@@ -1920,6 +1951,36 @@
           this._text(ctx, priceLabel, midX, midY - 8 * rv, up ? theme.up : theme.down);
           this._text(ctx, timeLabel, midX, midY + 10 * rv, up ? theme.up : theme.down);
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        // TradingView-style ephemeral Measure/ruler: same price+date combo
+        // math as price_date_range above, but dashed (not the solid border
+        // every persistent drawing uses) and no drag handles - it's gone on
+        // pointerup, never a selectable object.
+        case "measure_tool": {
+          const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
+          const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
+          const priceA = op.d.points[0].price, priceB = op.d.points[1].price;
+          const up = priceB >= priceA;
+          const col = up ? theme.up : theme.down;
+          ctx.save();
+          ctx.setLineDash([5 * r, 4 * r]);
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.14;
+          ctx.fillStyle = col;
+          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.globalAlpha = op.alpha ?? 1;
+          ctx.strokeStyle = col;
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.restore();
+          const pct = priceA ? ((priceB - priceA) / priceA * 100) : 0;
+          const priceLabel = `${(priceB - priceA) >= 0 ? "+" : ""}${(priceB - priceA).toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+          const t1 = op.d.points[0].time, t2 = op.d.points[1].time;
+          const seconds = Math.abs(t2 - t1);
+          const bars = this.manager.core.candles.filter((c) => c.time >= Math.min(t1, t2) && c.time <= Math.max(t1, t2)).length;
+          const timeLabel = `${fmtDuration(seconds)} · ${bars} бар.`;
+          const midX = (x1 + x2) / 2 - 44 * r, midY = (y1 + y2) / 2;
+          this._text(ctx, priceLabel, midX, midY - 8 * rv, col);
+          this._text(ctx, timeLabel, midX, midY + 10 * rv, col);
           break;
         }
         case "text":

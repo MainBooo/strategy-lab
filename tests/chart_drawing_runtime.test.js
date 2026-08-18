@@ -244,9 +244,14 @@ const allTools = [
   "trend_line", "ray", "extended_line", "horizontal_line", "horizontal_ray", "vertical_line",
   "parallel_channel", "fib_retracement", "fib_extension", "rectangle", "circle",
   "polyline", "text", "note", "price_range", "time_range", "long_position", "short_position",
-  "triangle", "price_date_range", "freehand",
+  "triangle", "price_date_range", "freehand", "measure",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
+// "measure" is the one ephemeral tool - it never becomes a real entry in
+// env.manager.drawings (see its own dedicated test below), so every loop
+// below that does env.manager.addDrawing(tool, ...) to exercise persisted-
+// object editing/hit-testing/boundary behavior must skip it.
+const persistentTools = allTools.filter((tool) => tool !== "measure");
 for (const tool of allTools) {
   assert.ok(TOOL_DEFS[tool].creationGesture, `${tool} missing creationGesture`);
   assert.ok(TOOL_DEFS[tool].completion, `${tool} missing completion`);
@@ -254,6 +259,7 @@ for (const tool of allTools) {
 }
 assert.strictEqual(TOOL_DEFS.circle.semanticShape, "ellipse");
 assert.strictEqual(TOOL_DEFS.circle.label, "Эллипс");
+assert.strictEqual(TOOL_DEFS.measure.ephemeral, true);
 
 // Fixed two-point tools: first touch-drag-release is a complete object.
 for (const pointerType of ["touch", "mouse", "pen"]) {
@@ -362,6 +368,36 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
   assert.ok(strokeOp, "freehand: no render op produced for the stroke");
   assert.strictEqual(strokeOp.kind, "polyline", "freehand should reuse polyline's paint/hit-test op kind");
+}
+
+// Measure: TradingView-style ephemeral ruler (TOOL_DEFS.measure). Unlike
+// every persistent two-point tool above, a completed drag must NOT create a
+// drawing - it should render a live preview mid-drag, then vanish on
+// release while the tool stays armed for another measurement right away.
+{
+  const env = makeManager();
+  env.manager.setTool("measure");
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.TOOL_ARMED);
+
+  const down = send(env.container, "pointerdown", 40, 40, 1000);
+  assert.ok(down.defaultPrevented, "measure: drawing did not own pointerdown");
+  send(windowTarget, "pointermove", 140, 120, 1040);
+  const midDragOps = renderOps(env);
+  const liveOp = midDragOps.find((op) => op.kind === "measure_tool");
+  assert.ok(liveOp, "measure: no live preview op while dragging");
+  assert.strictEqual(env.manager.drawings.length, 0, "measure: must not persist mid-drag");
+
+  send(windowTarget, "pointerup", 140, 120, 1080);
+  assert.strictEqual(env.manager.drawings.length, 0, "measure: drag-release must not create a drawing");
+  assert.strictEqual(env.manager.draft, null, "measure: stale draft after release");
+  assert.strictEqual(env.manager.activeTool, "measure", "measure: tool must re-arm itself for the next measurement");
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.TOOL_ARMED);
+  assert.strictEqual(renderOps(env).some((op) => op.kind === "measure_tool"), false, "measure: overlay must disappear on release");
+
+  // Re-armed tool measures again without reselecting it from the toolbar.
+  drag(env, 200, 60, 260, 200, 2000);
+  assert.strictEqual(env.manager.drawings.length, 0, "measure: second drag must also stay ephemeral");
+  assert.strictEqual(env.manager.activeTool, "measure");
 }
 
 // Tool A -> Tool B cancels an unfinished draft rather than inheriting anchors.
@@ -541,7 +577,7 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
 
 // Outside tap is a byte-for-byte geometry/properties no-op for every editable drawing type.
 {
-  for (const tool of allTools) {
+  for (const tool of persistentTools) {
     const env = makeManager();
     const d = env.manager.addDrawing(tool, pointsFor(tool));
     env.manager.select(d.id);
@@ -591,7 +627,7 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
 
 // Safari touch guard suppresses native scrolling for body hits across every
 // drawing type, while Pointer Events remain the only geometry state machine.
-for (const tool of allTools) {
+for (const tool of persistentTools) {
   const env = makeManager();
   const d = env.manager.addDrawing(tool, pointsFor(tool));
   const start = findBodyPoint(env, d);
@@ -819,7 +855,7 @@ function runBoundaryBodyCase(tool, edge, pointerType, serial) {
 // and stylus/pen so there is no platform-specific geometry path.
 {
   let serial = 0;
-  for (const tool of allTools) {
+  for (const tool of persistentTools) {
     for (const edge of ["right", "left", "top", "bottom"]) runBoundaryBodyCase(tool, edge, "touch", serial++);
     for (const pointerType of ["mouse", "pen"]) runBoundaryBodyCase(tool, "right", pointerType, serial++);
   }
