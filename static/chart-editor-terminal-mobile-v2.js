@@ -42,8 +42,60 @@
     ["position","Позиции",icon("position"),[["long_position","Long Position"],["short_position","Short Position"]]]
   ];
   const drawingManager = () => Page.activeTile && Page.activeTile.drawingMgr;
+  const indicatorManager = () => Page.activeTile && Page.activeTile.indicatorMgr;
   const MAGNET_CYCLE = ["off", "weak", "strong"];
   const MAGNET_LABEL = { off: "выкл", weak: "слабый", strong: "сильный" };
+
+  // TradingView's rail "eye"/"trash" open a family menu (Drawings/
+  // Indicators/Positions/All), not a single flat toggle - Positions
+  // (long_position/short_position) are DrawingManager entries like any
+  // other drawing, so they're split out here rather than in drawings.js.
+  const POSITION_TYPES = new Set(["long_position", "short_position"]);
+  const bucketDrawings = (dm) => dm.drawings.filter((d) => !POSITION_TYPES.has(d.type));
+  const bucketPositions = (dm) => dm.drawings.filter((d) => POSITION_TYPES.has(d.type));
+  const allHiddenOf = (arr) => arr.length > 0 && arr.every((d) => d.hidden);
+
+  function familyMenuItems(mode, dm, ind) {
+    const drawings = bucketDrawings(dm), positions = bucketPositions(dm);
+    const indicators = ind ? ind.list() : [];
+    const anything = drawings.length || positions.length || indicators.length;
+    if (mode === "hide") {
+      return [
+        { key: "drawings", label: allHiddenOf(drawings) ? "Показать рисунки" : "Скрыть рисунки", disabled: !drawings.length },
+        { key: "positions", label: allHiddenOf(positions) ? "Показать позиции" : "Скрыть позиции", disabled: !positions.length },
+        { key: "indicators", label: (ind && ind.allHidden()) ? "Показать индикаторы" : "Скрыть индикаторы", disabled: !indicators.length },
+        { key: "all", label: "Скрыть/показать всё", disabled: !anything },
+      ];
+    }
+    return [
+      { key: "drawings", label: "Удалить рисунки", disabled: !drawings.length },
+      { key: "positions", label: "Удалить позиции", disabled: !positions.length },
+      { key: "indicators", label: "Удалить индикаторы", disabled: !indicators.length },
+      { key: "all", label: "Удалить всё", disabled: !anything },
+    ];
+  }
+
+  function runFamilyAction(mode, key, dm, ind) {
+    const toggle = (arr) => { if (!arr.length) return; const hide = !allHiddenOf(arr); arr.forEach((d) => dm.updateDrawing(d.id, { hidden: hide })); };
+    if (mode === "hide") {
+      if (key === "drawings") toggle(bucketDrawings(dm));
+      else if (key === "positions") toggle(bucketPositions(dm));
+      else if (key === "indicators") { if (ind && ind.list().length) ind.setAllVisible(ind.allHidden()); }
+      else if (key === "all") {
+        const allHidden = dm.drawings.every((d) => d.hidden) && (!ind || !ind.list().length || ind.allHidden());
+        dm.drawings.slice().forEach((d) => dm.updateDrawing(d.id, { hidden: !allHidden }));
+        if (ind) ind.setAllVisible(allHidden);
+      }
+      return;
+    }
+    if (key === "drawings") { const arr = bucketDrawings(dm); if (arr.length && g.confirm("Удалить все рисунки (без позиций)?")) arr.forEach((d) => dm.removeDrawing(d.id)); }
+    else if (key === "positions") { const arr = bucketPositions(dm); if (arr.length && g.confirm("Удалить все позиции?")) arr.forEach((d) => dm.removeDrawing(d.id)); }
+    else if (key === "indicators") { const arr = ind ? ind.list() : []; if (arr.length && g.confirm("Удалить все индикаторы?")) arr.forEach((i) => ind.remove(i.id)); }
+    else if (key === "all" && dm.drawings.length + (ind ? ind.list().length : 0) > 0 && g.confirm("Удалить все объекты разметки и индикаторы?")) {
+      dm.drawings.slice().forEach((d) => dm.removeDrawing(d.id));
+      if (ind) ind.list().forEach((i) => ind.remove(i.id));
+    }
+  }
 
   function buildRail() {
     if (!Page.root) return;
@@ -56,9 +108,9 @@
       <button class="sl-rail-action" data-sl-act="magnet" title="Магнит: выкл" aria-label="Магнит" aria-pressed="false">${icon("magnet")}<b class="sl-magnet-badge"></b></button>
       <button class="sl-rail-action" data-sl-act="keep" title="Оставаться в режиме рисования" aria-label="Оставаться в режиме рисования" aria-pressed="false">✎</button>
       <button class="sl-rail-action" data-sl-act="lock" title="Блокировка разметки" aria-label="Блокировка разметки" aria-pressed="false">${icon("lock")}</button>
-      <button class="sl-rail-action" data-sl-act="hide" title="Показать/скрыть разметку" aria-label="Показать/скрыть разметку" aria-pressed="false">${icon("eye")}</button>
+      <button class="sl-rail-action" data-sl-act="hide" title="Скрыть/показать: рисунки, позиции, индикаторы" aria-label="Скрыть/показать" aria-pressed="false">${icon("eye")}</button>
       <button class="sl-rail-action" data-sl-act="objects" data-tv-action="objects" title="Объекты" aria-label="Объекты" aria-pressed="false">${icon("list")}</button>
-      <button class="sl-rail-action" data-sl-act="delete" title="Удалить разметку" aria-label="Удалить разметку">${icon("trash")}</button>
+      <button class="sl-rail-action" data-sl-act="delete" title="Удалить: рисунки, позиции, индикаторы" aria-label="Удалить">${icon("trash")}</button>
       <div class="sl-draw-picker hidden" role="menu"></div>`;
     const picker = rail.querySelector(".sl-draw-picker");
     rail.onclick = (event) => {
@@ -67,20 +119,38 @@
         event.stopPropagation(); const gp = groups.find(x => x[0] === groupButton.dataset.slGroup); if (!gp) return;
         if (gp[3].length === 1) { g.ChartDrawingUI?.deactivateEveryTool(Page, { deselectActive: true }); drawingManager()?.setTool(gp[3][0][0] || null); picker.classList.add("hidden"); refreshRail(); return; }
         const same = picker.dataset.group === gp[0] && !picker.classList.contains("hidden");
-        picker.dataset.group = gp[0];
+        picker.dataset.group = gp[0]; delete picker.dataset.family;
         picker.innerHTML = `<strong>${esc(gp[1])}</strong>` + gp[3].map(t => `<button type="button" data-sl-tool="${t[0] || ""}">${esc(t[1])}</button>`).join("");
         picker.classList.toggle("hidden", same); return;
       }
       const tool = event.target.closest("[data-sl-tool]");
       if (tool) { g.ChartDrawingUI?.deactivateEveryTool(Page, { deselectActive: true }); drawingManager()?.setTool(tool.dataset.slTool || null); picker.classList.add("hidden"); refreshRail(); return; }
+      const familyItem = event.target.closest("[data-sl-family-item]");
+      if (familyItem) {
+        event.stopPropagation();
+        if (familyItem.disabled) return;
+        const dm = drawingManager(); if (!dm) return;
+        runFamilyAction(picker.dataset.family, familyItem.dataset.slFamilyItem, dm, indicatorManager());
+        picker.classList.add("hidden");
+        refreshRail();
+        return;
+      }
+      const openFamilyMenu = (mode, dm) => {
+        const same = picker.dataset.family === mode && !picker.classList.contains("hidden");
+        picker.dataset.family = mode; delete picker.dataset.group;
+        const items = familyMenuItems(mode, dm, indicatorManager());
+        const title = mode === "hide" ? "Скрыть/показать" : "Удалить";
+        picker.innerHTML = `<strong>${title}</strong>` + items.map(it => `<button type="button" data-sl-family-item="${it.key}" ${it.disabled ? "disabled" : ""}>${esc(it.label)}</button>`).join("");
+        picker.classList.toggle("hidden", same);
+      };
       const action = event.target.closest("[data-sl-act]"); if (!action) return;
       const dm = drawingManager(); if (!dm) return;
       if (action.dataset.slAct === "magnet") dm.magnetMode = MAGNET_CYCLE[(MAGNET_CYCLE.indexOf(dm.magnetMode) + 1) % MAGNET_CYCLE.length];
       else if (action.dataset.slAct === "keep") dm.keepDrawing = !dm.keepDrawing;
       else if (action.dataset.slAct === "lock") { const lock = !(dm.drawings.length && dm.drawings.every(x => x.locked)); dm.drawings.slice().forEach(x => dm.updateDrawing(x.id, { locked:lock })); }
-      else if (action.dataset.slAct === "hide") { const hide = !(dm.drawings.length && dm.drawings.every(x => x.hidden)); dm.drawings.slice().forEach(x => dm.updateDrawing(x.id, { hidden:hide })); }
+      else if (action.dataset.slAct === "hide") { event.stopPropagation(); openFamilyMenu("hide", dm); return; }
       else if (action.dataset.slAct === "objects") { const opening = Page._bottomCollapsed !== false; Page._setBottomCollapsed(!opening); if (opening) Page.root.querySelector('.ca-side-tab[data-side="objects"]')?.click(); }
-      else if (action.dataset.slAct === "delete" && dm.drawings.length && g.confirm("Удалить все объекты разметки?")) dm.drawings.slice().forEach(x => dm.removeDrawing(x.id));
+      else if (action.dataset.slAct === "delete") { event.stopPropagation(); openFamilyMenu("delete", dm); return; }
       refreshRail();
     };
     document.addEventListener("pointerdown", (event) => {
@@ -125,7 +195,9 @@
     }
     setPressed("keep", dm && dm.keepDrawing);
     setPressed("lock", dm && dm.drawings.length && dm.drawings.every((x) => x.locked));
-    setPressed("hide", dm && dm.drawings.length && dm.drawings.every((x) => x.hidden));
+    const ind = indicatorManager();
+    const anythingToHide = dm && (dm.drawings.length || (ind && ind.list().length));
+    setPressed("hide", anythingToHide && dm.drawings.every((x) => x.hidden) && (!ind || !ind.list().length || ind.allHidden()));
     setPressed("objects", Page._bottomCollapsed === false);
   }
 

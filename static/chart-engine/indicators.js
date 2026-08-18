@@ -278,6 +278,31 @@
       this.instances.delete(id);
     }
 
+    /** Hide/show family menu (chart rail "eye" action, see chart-editor-
+     * terminal-mobile-v2.js): unlike drawings, indicator instances never had
+     * a persistent hidden flag - series.applyOptions({visible}) already
+     * exists per-type (volume's own toggle above), this just generalizes it
+     * to every series kind and tracks the flag so allHidden() can drive the
+     * rail's pressed state. */
+    setVisible(id, visible) {
+      const inst = this.instances.get(id);
+      if (!inst) return;
+      inst.hidden = !visible;
+      if (inst.def.id === "volume") {
+        if (this.core.volumeSeries) this.core.volumeSeries.applyOptions({ visible });
+      } else {
+        inst.series.forEach((s) => s.applyOptions({ visible }));
+      }
+    }
+
+    setAllVisible(visible) {
+      this.instances.forEach((inst, id) => this.setVisible(id, visible));
+    }
+
+    allHidden() {
+      return this.instances.size > 0 && [...this.instances.values()].every((inst) => inst.hidden);
+    }
+
     updateParams(id, params) {
       const inst = this.instances.get(id);
       if (!inst) return;
