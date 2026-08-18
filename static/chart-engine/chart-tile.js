@@ -30,6 +30,7 @@
     { id: "candles", label: "Свечи" }, { id: "bars", label: "Бары" },
     { id: "line", label: "Линия" }, { id: "area", label: "Область" },
     { id: "baseline", label: "Базовая линия" }, { id: "heikin_ashi", label: "Heikin Ashi" },
+    { id: "hollow_candles", label: "Полые свечи" },
   ];
   /* Live-ticking the current candle (see _onRealtimeUpdate below) only
    * covers timeframes with a fixed bucket width in seconds. A calendar day

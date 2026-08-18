@@ -104,9 +104,39 @@
           lineWidth: 2,
         });
       }
-      // Heikin Ashi renders as candlesticks - only the plotted OHLC values differ
-      // (computed by _computeHeikinAshi/_haPoint below), not the series kind.
+      // Heikin Ashi and Hollow Candles both render as candlesticks - only the
+      // plotted OHLC values (Heikin Ashi) or per-point color overrides
+      // (Hollow Candles, see _hollowPoint) differ, not the series kind.
       return this.chart.addSeries(LWC.CandlestickSeries, global.ChartEngine.candlestickOptions());
+    }
+
+    /** Hollow Candles (ТЗ chart-types list, item 7/7): unlike plain
+     * candlesticks, direction color compares this bar's close against the
+     * *previous* bar's close (not its own open), and the body is hollow
+     * (drawn in the chart's own background color, leaving just the
+     * border/wick visible) when the bar closed above its own open, filled
+     * solid otherwise - the two dimensions are independent, exactly as in
+     * TradingView's "Hollow Candles" style. First bar has no previous close
+     * to compare against, so it falls back to its own open. */
+    _hollowColor(direction) {
+      const o = this.displayOptions || {};
+      return direction === "up" ? o.upColor || theme.up : o.downColor || theme.down;
+    }
+
+    _hollowPoint(candle, prevClose) {
+      const pc = prevClose == null ? candle.open : prevClose;
+      const color = this._hollowColor(candle.close >= pc ? "up" : "down");
+      const filled = candle.close < candle.open;
+      return {
+        time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close,
+        color: filled ? color : theme.bg,
+        borderColor: color,
+        wickColor: color,
+      };
+    }
+
+    _computeHollowCandles(candles) {
+      return candles.map((c, i) => this._hollowPoint(c, i > 0 ? candles[i - 1].close : null));
     }
 
     /** Candles/bars/Heikin-Ashi keep full OHLC; line/area/baseline only ever
@@ -182,7 +212,7 @@
      * pan position and drawings' own stored price/time coordinates are
      * untouched - only the series object identity changes. */
     setSeriesType(type) {
-      if (type === this.seriesType || !["candles", "line", "bars", "area", "baseline", "heikin_ashi"].includes(type)) return;
+      if (type === this.seriesType || !["candles", "line", "bars", "area", "baseline", "heikin_ashi", "hollow_candles"].includes(type)) return;
       this.chart.removeSeries(this.candleSeries);
       this.seriesType = type;
       this.candleSeries = this._createPriceSeries(type);
@@ -191,6 +221,8 @@
         this._haLast = ha.length ? ha[ha.length - 1] : null;
         this._haPrev = ha.length > 1 ? { open: ha[ha.length - 2].open, close: ha[ha.length - 2].close } : null;
         this.candleSeries.setData(ha);
+      } else if (type === "hollow_candles") {
+        this.candleSeries.setData(this._computeHollowCandles(this._candles));
       } else {
         this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, type)));
       }
@@ -221,6 +253,15 @@
         if (o.showBorders != null) opts.borderVisible = !!o.showBorders;
         if (o.showWicks != null) opts.wickVisible = !!o.showWicks;
         if (Object.keys(opts).length) this.candleSeries.applyOptions(opts);
+      } else if (this.seriesType === "hollow_candles") {
+        const opts = {};
+        if (o.showBorders != null) opts.borderVisible = !!o.showBorders;
+        if (o.showWicks != null) opts.wickVisible = !!o.showWicks;
+        if (Object.keys(opts).length) this.candleSeries.applyOptions(opts);
+        // upColor/downColor feed _hollowColor() per-point, not a series-level
+        // option lightweight-charts can apply in place - re-derive every
+        // point so a mid-session color change actually shows up.
+        if (o.upColor || o.downColor) this.candleSeries.setData(this._computeHollowCandles(this._candles));
       }
       const commonOpts = {};
       if (o.priceLineVisible != null) commonOpts.priceLineVisible = !!o.priceLineVisible;
@@ -387,6 +428,9 @@
         const haPoint = this._haPoint(candle);
         this._haLast = haPoint;
         this.candleSeries.update(haPoint);
+      } else if (this.seriesType === "hollow_candles") {
+        const prevClose = this._candles.length >= 2 ? this._candles[this._candles.length - 2].close : null;
+        this.candleSeries.update(this._hollowPoint(candle, prevClose));
       } else {
         this.candleSeries.update(this._seriesPoint(candle, this.seriesType));
       }
@@ -495,6 +539,8 @@
         this._haLast = ha.length ? ha[ha.length - 1] : null;
         this._haPrev = ha.length > 1 ? { open: ha[ha.length - 2].open, close: ha[ha.length - 2].close } : null;
         this.candleSeries.setData(ha);
+      } else if (this.seriesType === "hollow_candles") {
+        this.candleSeries.setData(this._computeHollowCandles(this._candles));
       } else {
         this.candleSeries.setData(this._candles.map((c) => this._seriesPoint(c, this.seriesType)));
       }
