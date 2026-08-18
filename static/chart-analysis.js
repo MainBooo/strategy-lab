@@ -79,6 +79,10 @@
     { id: "triangle_pattern", label: "Паттерн треугольник", icon: "◺" },
     { id: "three_drives_pattern", label: "Паттерн «Три драйва»", icon: "◮" },
     { id: "head_shoulders_pattern", label: "Паттерн «Голова и плечи»", icon: "⛰" },
+    { id: "elliott_impulse_wave", label: "Волна Эллиотта (импульс)", icon: "⚡" },
+    { id: "elliott_correction_wave", label: "Волна Эллиотта (коррекция)", icon: "↝" },
+    { id: "cyclic_lines", label: "Циклические линии", icon: "❘❘❘" },
+    { id: "sine_line", label: "Синусоида", icon: "∿" },
   ];
 
   const LAYOUTS = [

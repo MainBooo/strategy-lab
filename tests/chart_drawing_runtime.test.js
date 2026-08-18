@@ -253,6 +253,7 @@ const allTools = [
   "triangle", "price_date_range", "freehand", "measure", "pitchfork", "gann_fan", "xabcd_pattern",
   "pitchfork_schiff", "pitchfork_modified_schiff", "abcd_pattern", "triangle_pattern",
   "three_drives_pattern", "head_shoulders_pattern",
+  "elliott_impulse_wave", "elliott_correction_wave", "cyclic_lines", "sine_line",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -274,7 +275,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
   for (const tool of [
     "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
     "circle", "price_range", "time_range", "long_position", "short_position",
-    "price_date_range", "gann_fan",
+    "price_date_range", "gann_fan", "cyclic_lines", "sine_line",
   ]) {
     const env = makeManager();
     env.manager.setTool(tool);
@@ -360,11 +361,12 @@ for (const tool of ["xabcd_pattern", "triangle_pattern", "head_shoulders_pattern
   assertFiniteDrawing(env.manager.drawings[0]);
 }
 
-// ABCD is the one 4-anchor tool: same mechanics, one shorter tail (drag
-// places A+B, two more taps place C, D).
-{
+// ABCD and Elliott Correction are the two 4-anchor tools: same mechanics,
+// one shorter tail (drag places the first two anchors, two more taps
+// place the rest).
+for (const tool of ["abcd_pattern", "elliott_correction_wave"]) {
   const env = makeManager();
-  env.manager.setTool("abcd_pattern");
+  env.manager.setTool(tool);
   drag(env, 20, 60, 60, 180, 1000);
   assert.strictEqual(env.manager.drawings.length, 0);
   assert.strictEqual(env.manager.draft.points.length, 2);
@@ -378,11 +380,12 @@ for (const tool of ["xabcd_pattern", "triangle_pattern", "head_shoulders_pattern
   assertFiniteDrawing(env.manager.drawings[0]);
 }
 
-// Three Drives is the one 6-anchor tool: same mechanics, one longer tail
-// (drag places 0+1, four more taps place A, 2, B, 3).
-{
+// Three Drives and Elliott Impulse are the two 6-anchor tools: same
+// mechanics, one longer tail (drag places the first two anchors, four
+// more taps place the rest).
+for (const tool of ["three_drives_pattern", "elliott_impulse_wave"]) {
   const env = makeManager();
-  env.manager.setTool("three_drives_pattern");
+  env.manager.setTool(tool);
   drag(env, 20, 60, 60, 180, 1000);
   assert.strictEqual(env.manager.drawings.length, 0);
   assert.strictEqual(env.manager.draft.points.length, 2);
@@ -439,6 +442,35 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
   assert.ok(strokeOp, "freehand: no render op produced for the stroke");
   assert.strictEqual(strokeOp.kind, "polyline", "freehand should reuse polyline's paint/hit-test op kind");
+}
+
+// Cyclic Lines regression: unlike every other 2-anchor tool, its render
+// path (cyclicLineTimes) reads both anchors' *time* fields directly
+// rather than going through toPixels() first - a naive implementation
+// crashed reading points[1].time in the exact window between pointerdown
+// and the *first* pointermove, before DrawingManager._draftPreviewPoint
+// exists at all (draft.points is length 1 and there is no synthesized
+// preview point yet for DrawingPaneView.update() to append - see its own
+// `preview ? draft.points.concat([preview]) : draft.points` branch).
+// On production this window is real: lightweight-charts repaints
+// independent of pointer movement (live ticks, crosshair-following
+// redraws), so a render frame genuinely lands there; the unit-test
+// helpers don't hit it unless a render is forced with no pointermove
+// yet, which is exactly what this test does. Confirmed live on
+// production before this test existed.
+{
+  const env = makeManager();
+  env.manager.setTool("cyclic_lines");
+  send(env.container, "pointerdown", 40, 40, 1000);
+  assert.strictEqual(env.manager.draft.points.length, 1, "cyclic_lines: expected single point right after pointerdown");
+  assert.strictEqual(env.manager._draftPreviewPoint, null, "cyclic_lines: no preview point should exist before the first pointermove");
+  assert.doesNotThrow(() => renderOps(env), "cyclic_lines: render must not throw with only one anchor placed and no preview yet");
+
+  send(windowTarget, "pointermove", 100, 40, 1040);
+  send(windowTarget, "pointerup", 100, 40, 1060);
+  assert.strictEqual(env.manager.drawings.length, 1);
+  const xs = renderOps(env).find((op) => op.kind === "cyclic_lines" && op.d.type === "cyclic_lines").xs;
+  assert.ok(Array.isArray(xs) && xs.length > 0, "cyclic_lines: expected at least one repeated line");
 }
 
 // Measure: TradingView-style ephemeral ruler (TOOL_DEFS.measure). Unlike
@@ -921,7 +953,7 @@ function runBoundaryBodyCase(tool, edge, pointerType, serial) {
   assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.SELECTED, `${tool}/${edge}/${pointerType}: did not finish SELECTED`);
 }
 
-// TEST 5 — all 30 tools use the same boundary-safe body translation. Every
+// TEST 5 — all 34 tools use the same boundary-safe body translation. Every
 // edge is covered on touch; right-edge ownership is also verified for mouse
 // and stylus/pen so there is no platform-specific geometry path.
 {

@@ -108,6 +108,26 @@
     // triangle_pattern, but exactly one boundary line (the neckline,
     // through the two troughs at anchor1/anchor3) instead of two.
     head_shoulders_pattern: { pointsNeeded: 5, anchorCount: 5, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Паттерн голова и плечи" },
+    // 6 anchors placed 0-1-2-3-4-5 (the classic 5-wave impulse, numbered
+    // from its own starting point) - same labeled-zigzag-with-leg-ratios
+    // rendering as three_drives_pattern, just different labels.
+    elliott_impulse_wave: { pointsNeeded: 6, anchorCount: 6, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Волна Эллиотта (импульс)" },
+    // 4 anchors placed 0-A-B-C (the 3-wave ABC correction) - same family
+    // as elliott_impulse_wave, just a shorter point count/label set.
+    elliott_correction_wave: { pointsNeeded: 4, anchorCount: 4, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Волна Эллиотта (коррекция)" },
+    // 2 anchors define one cycle: anchor1.time - anchor0.time is the
+    // repeat interval, redrawn as a series of vertical lines spanning the
+    // whole visible pane (both directions from anchor0) - see
+    // cyclicLineTimes() below. Unlike every other 2-anchor tool here, the
+    // rendered object isn't "the segment between the two points" at all.
+    cyclic_lines: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Циклические линии" },
+    // 2 anchors, one full sine period drawn between them, oscillating
+    // perpendicular to the anchor0->anchor1 baseline (pane-pixel space) -
+    // see sineLineSamples() below. TradingView's own amplitude convention
+    // for this tool isn't independently documented anywhere verifiable;
+    // this uses a fixed fraction of the baseline length so the wave scales
+    // naturally with how far apart the two anchors are placed.
+    sine_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Синусоида" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -232,16 +252,23 @@
   }
 
   /** Vertex labels for the labeled-zigzag pattern tools (xabcd_pattern/
-   * abcd_pattern/three_drives_pattern) - the render/hit-test code itself is
-   * identical for all three (see the "xabcd" op kind), only the label text
+   * abcd_pattern/three_drives_pattern/elliott_impulse_wave/
+   * elliott_correction_wave) - the render/hit-test code itself is
+   * identical for all five (see the "xabcd" op kind), only the label text
    * and point count differ. Three Drives' 0/1/A/2/B/3 is the classic
    * labeling (drives 0->1->2->3, corrective retracements A/B between
    * them) - same "labeled zigzag + per-leg ratio" reading as XABCD/ABCD,
-   * just without the harmonic-pattern auto-classification either. */
+   * just without the harmonic-pattern auto-classification either. Elliott
+   * impulse (0-1-2-3-4-5) and correction (0-A-B-C) are the same reading
+   * again, just Elliott's own numbering/lettering convention - no wave-
+   * rule validation (alternation, Wave 3 never shortest, etc.), just the
+   * labeled skeleton and leg ratios like every other tool in this family. */
   const PATTERN_LABELS = {
     xabcd_pattern: ["X", "A", "B", "C", "D"],
     abcd_pattern: ["A", "B", "C", "D"],
     three_drives_pattern: ["0", "1", "A", "2", "B", "3"],
+    elliott_impulse_wave: ["0", "1", "2", "3", "4", "5"],
+    elliott_correction_wave: ["0", "A", "B", "C"],
   };
 
   /** Vertex labels + boundary-line anchor pairs for the "zigzag plus
@@ -275,6 +302,82 @@
    * points themselves. */
   function patternBoundarySegments(core, pix, type) {
     return (PATTERN_BOUNDARY_PAIRS[type] || []).map(([i, j]) => extendedRaySegment(core, pix, i, j)).filter(Boolean);
+  }
+
+  // Hard cap on repeated cyclic-line count - only matters as a safety net
+  // against a pathological near-zero interval (anchors placed almost on
+  // the same bar), never hit by an ordinary placement.
+  const CYCLIC_LINES_MAX = 300;
+
+  /** Every repeat-time (real time, not pixels) of a Cyclic Lines drawing's
+   * interval (anchor1.time - anchor0.time) that falls within the pane's
+   * *currently visible* time span, extended one interval past each edge so
+   * a partially-visible line at the boundary still renders. Recomputed
+   * every frame from the live visible range (via coordinateToLogicalSafe
+   * at the pane's two edges) rather than cached, so panning/zooming always
+   * shows the right set of lines - the interval itself is the only thing
+   * anchored to the drawing's own model points. */
+  function cyclicLineTimes(core, d) {
+    // Draft preview mid-drag only has anchor0 placed (no preview point yet,
+    // or the preview point failed its own finite-time/price check in
+    // DrawingPaneView.update()) - points[1] is genuinely absent then, not
+    // just an edge case to special-case away.
+    if (!d.points[0] || !d.points[1]) return [];
+    const dt = d.points[1].time - d.points[0].time;
+    if (!dt) return [];
+    const w = paneWidth(core);
+    const l0 = coordinateToLogicalSafe(core, 0);
+    const l1 = coordinateToLogicalSafe(core, w);
+    if (!finite(l0) || !finite(l1)) return [];
+    const t0 = logicalToTime(core, l0), t1 = logicalToTime(core, l1);
+    if (!finite(t0) || !finite(t1)) return [];
+    const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
+    let kMin = Math.floor((lo - d.points[0].time) / dt) - 1;
+    let kMax = Math.ceil((hi - d.points[0].time) / dt) + 1;
+    if (kMax - kMin > CYCLIC_LINES_MAX) kMax = kMin + CYCLIC_LINES_MAX;
+    const times = [];
+    for (let k = kMin; k <= kMax; k++) times.push(d.points[0].time + k * dt);
+    return times;
+  }
+
+  /** Cyclic Lines' pixel x-coordinates, ready to draw or hit-test - every
+   * repeat that actually lands inside the pane (some of cyclicLineTimes'
+   * candidates round to just outside it, at the edges). */
+  function cyclicLineXs(core, d) {
+    const w = paneWidth(core);
+    return cyclicLineTimes(core, d)
+      .map((t) => timeToCoordinateSafe(core, t))
+      .filter((x) => finite(x) && x >= 0 && x <= w);
+  }
+
+  // Sine Line's amplitude as a fraction of the anchor0->anchor1 baseline's
+  // own pixel length, so the wave scales with how far apart the two
+  // anchors are placed rather than a fixed pixel constant that would look
+  // proportionally tiny or huge depending on placement.
+  const SINE_LINE_AMPLITUDE_RATIO = 0.12;
+  const SINE_LINE_SAMPLES = 64;
+
+  /** One full sine period's sampled polyline (pane-pixel space) from
+   * anchor0 to anchor1, oscillating perpendicular to the anchor0->anchor1
+   * baseline - the general shape a "Sine Line" tool is expected to draw
+   * (a wave riding along the trend the two anchors define), not something
+   * verified pixel-for-pixel against a live TradingView instance. Returns
+   * null for a degenerate zero-length baseline. */
+  function sineLineSamples(pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return null;
+    const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
+    const len = Math.hypot(dx, dy);
+    if (!len) return null;
+    const ux = dx / len, uy = dy / len;
+    const nx = -uy, ny = ux; // perpendicular unit vector
+    const amplitude = len * SINE_LINE_AMPLITUDE_RATIO;
+    const points = [];
+    for (let i = 0; i <= SINE_LINE_SAMPLES; i++) {
+      const t = i / SINE_LINE_SAMPLES;
+      const offset = amplitude * Math.sin(2 * Math.PI * t);
+      points.push({ x: pix[0].x + dx * t + nx * offset, y: pix[0].y + dy * t + ny * offset });
+    }
+    return points;
   }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
@@ -968,13 +1071,15 @@
         }
         case "polyline":
         case "freehand":
-        // XABCD/ABCD/Three Drives' anchors are a plain zigzag for
-        // hit-testing purposes - same "handle at any vertex, else distance
-        // to any leg" test as polyline/freehand, just always a fixed point
-        // count (5, 4, or 6).
+        // XABCD/ABCD/Three Drives/Elliott Wave anchors are a plain zigzag
+        // for hit-testing purposes - same "handle at any vertex, else
+        // distance to any leg" test as polyline/freehand, just always a
+        // fixed point count (6, 5, 4, or 6 again for Elliott impulse).
         case "xabcd_pattern":
         case "abcd_pattern":
-        case "three_drives_pattern": {
+        case "three_drives_pattern":
+        case "elliott_impulse_wave":
+        case "elliott_correction_wave": {
           if (pix.length < 2) return null;
           for (let i = 0; i < pix.length; i++) if (handleAt(i)) return { id: d.id, handle: i };
           for (let i = 0; i < pix.length - 1; i++) {
@@ -1018,6 +1123,27 @@
           if (handleAt(1)) return { id: d.id, handle: 1 };
           for (const seg of gannSegments(this.core, d, pix)) {
             if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "cyclic_lines": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const h = paneHeight(this.core);
+          for (const x of cyclicLineXs(this.core, d)) {
+            if (Math.abs(px - x) <= tol && py >= 0 && py <= h) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "sine_line": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const samples = sineLineSamples(pix);
+          if (!samples) return null;
+          for (let i = 0; i < samples.length - 1; i++) {
+            if (pointToSegmentDist(px, py, samples[i].x, samples[i].y, samples[i + 1].x, samples[i + 1].y) <= tol) return { id: d.id, handle: null };
           }
           return null;
         }
@@ -2011,9 +2137,21 @@
           if (segs.length) ops.push({ kind: "gann_fan", segments: segs, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         }
+        case "cyclic_lines": {
+          const xs = cyclicLineXs(this.manager.core, d);
+          if (xs.length) ops.push({ kind: "cyclic_lines", xs, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "sine_line": {
+          const samples = sineLineSamples(pix);
+          if (samples) ops.push({ kind: "sine_line", samples, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
         case "xabcd_pattern":
         case "abcd_pattern":
         case "three_drives_pattern":
+        case "elliott_impulse_wave":
+        case "elliott_correction_wave":
           if (pix.length >= TOOL_DEFS[d.type].anchorCount && pix.every((p) => p.x != null && p.y != null)) {
             ops.push({ kind: "xabcd", points: pix, dpoints: d.points, labels: PATTERN_LABELS[d.type], color, width, alpha, handles: pix });
           }
@@ -2272,6 +2410,17 @@
             ctx.stroke();
             this._text(ctx, seg.label, seg.x1 * r + 4 * r, seg.y1 * rv - 4 * rv, op.color);
           });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "cyclic_lines":
+          op.xs.forEach((x) => { ctx.beginPath(); ctx.moveTo(x * r, 0); ctx.lineTo(x * r, h); ctx.stroke(); });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        case "sine_line": {
+          ctx.beginPath();
+          op.samples.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
