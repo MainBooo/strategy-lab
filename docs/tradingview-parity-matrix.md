@@ -64,7 +64,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
-| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 3 из 8: XABCD `xabcd_pattern` (5-точечный размеченный зигзаг X/A/B/C/D с % отношением ног), ABCD `abcd_pattern` (тот же скелет, 4 точки A/B/C/D — без X), Triangle Pattern `triangle_pattern` (5-точечный зигзаг 1-2-3-4-5 + два расходящихся/сходящихся boundary-луча через 1→3 и 2→4); ни один без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab для XABCD) — отдельный, более крупный кусок работы; Three Drives/H&S/Elliott Wave/Cyclic/Sine отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка (drag+2×tap для ABCD, drag+3×tap для Triangle Pattern), метки A/B/C/D и 1-5, %-отношения ног (ABCD) и boundary-лучи (Triangle Pattern) видны на графике, hit-test/Object Tree подтверждены для обоих новых типов |
+| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 5 из 8: XABCD `xabcd_pattern` (5-точечный размеченный зигзаг X/A/B/C/D с % отношением ног), ABCD `abcd_pattern` (тот же скелет, 4 точки A/B/C/D — без X), Three Drives `three_drives_pattern` (тот же скелет, 6 точек 0/1/A/2/B/3), Triangle Pattern `triangle_pattern` (5-точечный зигзаг 1-2-3-4-5 + два расходящихся/сходящихся boundary-луча через 1→3 и 2→4), Head & Shoulders `head_shoulders_pattern` (5-точечный зигзаг ЛП/1/Г/2/ПП + одна neckline-линия через оба «плеча»-впадины 1→2, extended вправо); ни один без авто-классификации по имени паттерна (Gartley/Bat/Butterfly/Crab для XABCD) — отдельный, более крупный кусок работы; Elliott Wave/Cyclic Lines/Sine Line отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех пяти (drag+2×tap для ABCD, drag+3×tap для Triangle Pattern/Head & Shoulders, drag+4×tap для Three Drives), метки/лейблы и %-отношения (XABCD/ABCD/Three Drives) или boundary-луч(и) (Triangle Pattern/Head & Shoulders) видны на графике, hit-test/Object Tree подтверждены для всех пяти типов |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
 | Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
 | Price Range / Time Range / Price&Time Range | измерение с дельтами (персистентные line tools) | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`) — совпадает с TV, там это тоже отдельные постоянные инструменты, не Measure | да | PARITY | код, унаследовано |
@@ -239,6 +239,41 @@ PARITY там, где нет хотя бы одного из этих подтв
   обоих новых типов программным сканом, Object Tree показал верные русские
   подписи; тестовые drawings удалены, reload с прода подтвердил
   `drawings.length === 0`.
+- **Three Drives Pattern + Head & Shoulders** (продолжение той же линии
+  работы) — из MISSING в PARTIAL. `three_drives_pattern` — 6 анкоров
+  (0-1-A-2-B-3, три «драйва» с двумя корректирующими откатами) —
+  переиспользует ровно тот же `kind:"xabcd"` render/hit-test путь, что
+  XABCD/ABCD (просто добавлен в `PATTERN_LABELS` и в оба case-списка) —
+  ни одной новой строчки рендер-кода не понадобилось.
+  `head_shoulders_pattern` — 5 анкоров (ЛП-впадина-Голова-впадина-ПП, тот
+  же staged drag+3×tap, что у Triangle Pattern), рендерит зигзаг +
+  ОДНУ boundary-линию (neckline через обе впадины, анкор1→анкор3) вместо
+  двух — отрефакторено под общие `PATTERN_BOUNDARY_PAIRS`/
+  `PATTERN_BOUNDARY_LABELS`/`patternBoundarySegments()` вместо копипасты
+  Triangle Pattern-кода (кол-во boundary-линий теперь параметр, не
+  зашитое число, `kind` рендера тоже обобщён в `"pattern_boundary"`
+  вместо `"triangle_pattern"`). Pattern family теперь 5 из 8 (XABCD/ABCD/
+  Triangle Pattern/Three Drives/Head & Shoulders); Elliott Wave/Cyclic
+  Lines/Sine Line остаются MISSING — у каждого своя нестандартная
+  геометрия/лейблинг, не drop-in по этому же рецепту.
+  **Верифицировано** вживую на проде: Three Drives нарисован (drag+4×tap,
+  6 точек) — метки `["0","1","A","2","B","3"]` и все 4 %-отношения
+  (50.0%/220.0%/45.5%/800.0%) видны на скриншоте; Head & Shoulders
+  нарисован (drag+3×tap, 5 точек) — метки `["ЛП","1","Г","2","ПП"]`
+  подтверждены, `patternBoundarySegments()` вернул ровно 1 сегмент
+  (neckline), видимый на скриншоте как горизонтальная линия через обе
+  впадины, продлённая вправо; hit-test подтверждён для обоих новых типов
+  программным сканом, Object Tree показал верные подписи; тестовые
+  drawings удалены, reload с прода подтвердил `drawings.length === 0`.
+  Побочная находка при живой проверке (не баг, просто заметка для
+  следующей сессии): первая попытка нарисовать Three Drives молча не
+  создала объект — координата первой точки (`box.y + 550`) на 13px
+  превышала фактическую высоту тайла графика (537px), т.е. первый
+  pointerdown landing вне canvas'а вообще не был захвачен
+  DrawingManager'ом; drag "ничего не сделал", а затем каждый следующий
+  tap добавлял ровно одну точку (итог: 4 из 6 нужных к моменту, когда
+  тест был прерван) — сам движок отработал корректно, это была ошибка
+  тестовых координат, не баг кода.
 - **Верифицировано** вживую на проде для Schiff/Modified Schiff — все три
   Pitchfork-варианта нарисованы с идентичными анкорами на одном графике для
   прямого сравнения; программно подтверждено, что Schiff и Modified Schiff

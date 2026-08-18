@@ -182,12 +182,16 @@ custom levels закрыты в этой же сессии:
 - ~~**ABCD Pattern + Triangle Pattern**~~ — добавлены той же сессией
   (`abcd_pattern` — тот же скелет, что XABCD, 4 анкора без X;
   `triangle_pattern` — 5-точечный зигзаг + 2 boundary-луча через
-  1→3/2→4 — см. matrix changelog). 3 из 8 паттерн-инструментов ТЗ теперь
-  реализованы (XABCD/ABCD/Triangle Pattern).
-  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, Three
-  Drives/Head&Shoulders/Elliott Wave/Cyclic Lines/Sine Line и авто-
-  классификация XABCD по названию паттерна (Gartley/Bat/Butterfly/Crab) не
-  реализованы — остаются MISSING.
+  1→3/2→4 — см. matrix changelog).
+- ~~**Three Drives + Head & Shoulders**~~ — добавлены той же сессией
+  (`three_drives_pattern` — тот же скелет, что XABCD, 6 анкоров 0-1-A-2-B-3;
+  `head_shoulders_pattern` — тот же зигзаг+boundary семейство, что Triangle
+  Pattern, но 1 boundary-линия (neckline) вместо 2 — см. matrix changelog).
+  5 из 8 паттерн-инструментов ТЗ теперь реализованы (XABCD/ABCD/Triangle
+  Pattern/Three Drives/Head & Shoulders).
+  Остаются PARTIAL, не PARITY: Inside Pitchfork, Gann Square/Box, Elliott
+  Wave/Cyclic Lines/Sine Line и авто-классификация XABCD по названию
+  паттерна (Gartley/Bat/Butterfly/Crab) не реализованы — остаются MISSING.
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time
