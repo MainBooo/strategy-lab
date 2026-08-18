@@ -83,6 +83,7 @@
     { id: "elliott_correction_wave", label: "Волна Эллиотта (коррекция)", icon: "↝" },
     { id: "cyclic_lines", label: "Циклические линии", icon: "❘❘❘" },
     { id: "sine_line", label: "Синусоида", icon: "∿" },
+    { id: "anchored_vwap", label: "Привязанный VWAP", icon: "V" },
   ];
 
   const LAYOUTS = [

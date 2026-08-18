@@ -128,6 +128,16 @@
     // this uses a fixed fraction of the baseline length so the wave scales
     // naturally with how far apart the two anchors are placed.
     sine_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Синусоида" },
+    // Single anchor - unlike every other tool here, this one isn't fixed
+    // geometry at all: it's a computed price series (cumulative
+    // volume-weighted typical price from the anchor bar to the latest
+    // candle, see anchoredVwapSeries() below), recomputed from live
+    // core.candles every frame exactly like cyclic_lines recomputes from
+    // the live visible range - so it stays live as new candles/ticks
+    // arrive with no separate update wiring of its own. Volume Profile
+    // (the other half of this ТЗ line item) is a full histogram sidebar,
+    // a much larger separate piece of work, and isn't implemented.
+    anchored_vwap: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Привязанный VWAP" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -378,6 +388,40 @@
       points.push({ x: pix[0].x + dx * t + nx * offset, y: pix[0].y + dy * t + ny * offset });
     }
     return points;
+  }
+
+  /** Anchored VWAP's price path: cumulative volume-weighted typical price
+   * ((high+low+close)/3) from the anchor bar to the latest candle -
+   * recomputed from the live core.candles array every call (never
+   * cached), so it stays live as new candles/ticks arrive with no
+   * separate update wiring of its own, same principle cyclic_lines uses
+   * for its visible range. Falls back to the bar's own typical price for
+   * a run with zero cumulative volume (no volume data), avoiding a
+   * divide-by-zero rather than producing NaN. */
+  function anchoredVwapSeries(core, d) {
+    const candles = core.candles || [];
+    if (!candles.length) return [];
+    const anchorTime = d.points[0].time;
+    let startIdx = candles.findIndex((c) => c.time >= anchorTime);
+    if (startIdx < 0) startIdx = candles.length - 1;
+    let cumPV = 0, cumV = 0;
+    const series = [];
+    for (let i = startIdx; i < candles.length; i++) {
+      const c = candles[i];
+      const typical = (c.high + c.low + c.close) / 3;
+      const vol = c.volume || 0;
+      cumPV += typical * vol;
+      cumV += vol;
+      series.push({ time: c.time, price: cumV ? cumPV / cumV : typical });
+    }
+    return series;
+  }
+
+  /** Anchored VWAP's price path in pane-pixel space, with any point whose
+   * time/price failed to project (off the edge of what the chart library
+   * can currently resolve) dropped rather than breaking the polyline. */
+  function anchoredVwapPixels(core, d) {
+    return toPixels(core, anchoredVwapSeries(core, d)).filter((p) => p.x != null && p.y != null);
   }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
@@ -1144,6 +1188,15 @@
           if (!samples) return null;
           for (let i = 0; i < samples.length - 1; i++) {
             if (pointToSegmentDist(px, py, samples[i].x, samples[i].y, samples[i + 1].x, samples[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "anchored_vwap": {
+          if (pix[0] == null || pix[0].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          const vwapPix = anchoredVwapPixels(this.core, d);
+          for (let i = 0; i < vwapPix.length - 1; i++) {
+            if (pointToSegmentDist(px, py, vwapPix[i].x, vwapPix[i].y, vwapPix[i + 1].x, vwapPix[i + 1].y) <= tol) return { id: d.id, handle: null };
           }
           return null;
         }
@@ -2147,6 +2200,13 @@
           if (samples) ops.push({ kind: "sine_line", samples, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         }
+        case "anchored_vwap": {
+          const vwapPix = anchoredVwapPixels(this.manager.core, d);
+          if (pix[0]?.x != null && vwapPix.length >= 2) {
+            ops.push({ kind: "anchored_vwap", points: vwapPix, handle: pix[0], color, width, alpha });
+          }
+          break;
+        }
         case "xabcd_pattern":
         case "abcd_pattern":
         case "three_drives_pattern":
@@ -2422,6 +2482,13 @@
           op.samples.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "anchored_vwap": {
+          ctx.beginPath();
+          op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          if (op.handle) drawHandle(ctx, op.handle.x * r, op.handle.y * rv, r);
           break;
         }
         case "xabcd": {

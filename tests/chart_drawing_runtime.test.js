@@ -254,13 +254,20 @@ const allTools = [
   "pitchfork_schiff", "pitchfork_modified_schiff", "abcd_pattern", "triangle_pattern",
   "three_drives_pattern", "head_shoulders_pattern",
   "elliott_impulse_wave", "elliott_correction_wave", "cyclic_lines", "sine_line",
+  "anchored_vwap",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
 // env.manager.drawings (see its own dedicated test below), so every loop
 // below that does env.manager.addDrawing(tool, ...) to exercise persisted-
-// object editing/hit-testing/boundary behavior must skip it.
-const persistentTools = allTools.filter((tool) => tool !== "measure");
+// object editing/hit-testing/boundary behavior must skip it. "anchored_vwap"
+// is skipped for a different reason: its rendered body is a computed price
+// series from core.candles (empty in makeManager's identity-conversion fake
+// environment), so it has no hittable "body" distinct from its handle the
+// way every other tool's fixed geometry does - findBodyPoint() would spin
+// forever looking for one. It gets its own dedicated test with real candle
+// data below instead.
+const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap");
 for (const tool of allTools) {
   assert.ok(TOOL_DEFS[tool].creationGesture, `${tool} missing creationGesture`);
   assert.ok(TOOL_DEFS[tool].completion, `${tool} missing completion`);
@@ -404,7 +411,7 @@ for (const tool of ["three_drives_pattern", "elliott_impulse_wave"]) {
 }
 
 // One-anchor tools commit on release.
-for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
+for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchored_vwap"]) {
   const env = makeManager();
   env.manager.setTool(tool);
   tap(env, 70, 90, 1000);
@@ -442,6 +449,76 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note"]) {
   const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
   assert.ok(strokeOp, "freehand: no render op produced for the stroke");
   assert.strictEqual(strokeOp.kind, "polyline", "freehand should reuse polyline's paint/hit-test op kind");
+}
+
+// Anchored VWAP: the one tool whose rendered body is a computed price
+// series (cumulative volume-weighted typical price from the anchor bar to
+// the latest candle) rather than fixed geometry - needs real candle+volume
+// data to exercise properly, unlike every other tool's identity-conversion
+// fake environment.
+{
+  const container = new FakeTarget();
+  const timeScale = { coordinateToTime: (x) => x, timeToCoordinate: (time) => time };
+  const chart = { timeScale: () => timeScale, applyOptions: () => {} };
+  const series = {
+    attachPrimitive(p) { p.attached({ requestUpdate() {} }); },
+    detachPrimitive() {},
+    coordinateToPrice: (y) => y,
+    priceToCoordinate: (price) => price,
+  };
+  const candles = [
+    { time: 100, open: 10, high: 12, low: 9, close: 11, volume: 100 },
+    { time: 160, open: 11, high: 13, low: 10, close: 12, volume: 200 },
+    { time: 220, open: 12, high: 14, low: 11, close: 13, volume: 300 },
+  ];
+  const core = { container, chart, candleSeries: series, candles };
+  const manager = new DrawingManager(core);
+  const env = { manager, container };
+
+  manager.setTool("anchored_vwap");
+  tap(env, 160, 11, 1000);
+  assert.strictEqual(manager.drawings.length, 1, "anchored_vwap did not commit");
+  const drawing = manager.drawings[0];
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(drawing.points)), [{ time: 160, price: 11 }]);
+
+  // Anchored at candle index 1 (time 160): VWAP over candles[1..2].
+  // candles[1]: typical (13+10+12)/3 = 11.6667, vol 200
+  // candles[2]: typical (14+11+13)/3 = 12.6667, vol 300
+  // cum after [1]: pv=2333.33, v=200 -> 11.6667
+  // cum after [2]: pv=2333.33+3800=6133.33, v=500 -> 12.2667
+  const vwapOp = renderOps(env).find((op) => op.kind === "anchored_vwap");
+  assert.ok(vwapOp, "anchored_vwap: no render op produced");
+  assert.strictEqual(vwapOp.points.length, 2, "anchored_vwap: expected one point per candle from the anchor bar onward");
+  assert.ok(Math.abs(vwapOp.points[0].y - 11.6667) < 0.01, `anchored_vwap: first VWAP value off (${vwapOp.points[0].y})`);
+  assert.ok(Math.abs(vwapOp.points[1].y - 12.2667) < 0.01, `anchored_vwap: second VWAP value off (${vwapOp.points[1].y})`);
+
+  // Hit-testing: the anchor handle, and a point along the computed line
+  // (not one of the raw anchor/candle points) both resolve to this drawing.
+  const handleHit = manager.hitTest(160, 11, { pointerType: "mouse" });
+  assert.strictEqual(handleHit && handleHit.handle, 0, "anchored_vwap: handle hit-test failed");
+  manager.select(drawing.id);
+  const midX = (vwapOp.points[0].x + vwapOp.points[1].x) / 2, midY = (vwapOp.points[0].y + vwapOp.points[1].y) / 2;
+  const bodyHit = manager.hitTest(midX, midY, { pointerType: "mouse" });
+  assert.ok(bodyHit && bodyHit.id === drawing.id && bodyHit.handle == null, "anchored_vwap: body hit-test failed along the computed VWAP line");
+
+  // An anchor placed after every candle has no series to compute - must not
+  // crash and must not render a body.
+  const afterEnv = { manager, container };
+  manager.removeDrawing(drawing.id);
+  manager.setTool("anchored_vwap");
+  tap(afterEnv, 500, 20, 2000);
+  assert.doesNotThrow(() => renderOps(afterEnv), "anchored_vwap: render must not throw for an anchor past the last candle");
+  assert.strictEqual(renderOps(afterEnv).some((op) => op.kind === "anchored_vwap"), false, "anchored_vwap: no body should render past the last candle");
+}
+
+// Anchored VWAP with zero candles (every other tool's makeManager() fake
+// environment) must not throw either - just render nothing.
+{
+  const env = makeManager();
+  env.manager.setTool("anchored_vwap");
+  tap(env, 70, 90, 1000);
+  assert.strictEqual(env.manager.drawings.length, 1);
+  assert.doesNotThrow(() => renderOps(env), "anchored_vwap: render must not throw with zero candles");
 }
 
 // Cyclic Lines regression: unlike every other 2-anchor tool, its render

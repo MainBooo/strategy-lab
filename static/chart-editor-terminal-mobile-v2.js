@@ -31,7 +31,8 @@
     circlePlus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
     gann:'<svg viewBox="0 0 24 24"><path d="M4 20L20 4M4 20L20 12M4 20L20 18M4 20L12 4M4 20L18 4"/></svg>',
     pattern:'<svg viewBox="0 0 24 24"><path d="M4 18l4-10 4 6 4-11 4 9"/><circle cx="4" cy="18" r="1.6"/><circle cx="8" cy="8" r="1.6"/><circle cx="12" cy="14" r="1.6"/><circle cx="16" cy="3" r="1.6"/><circle cx="20" cy="12" r="1.6"/></svg>',
-    cycles:'<svg viewBox="0 0 24 24"><path d="M2 12c2-6 4-6 5.5 0S11 18 12 12s2.5-6 4-6 3.5 0 5.5 0"/><line x1="8" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="16" y2="20"/></svg>'
+    cycles:'<svg viewBox="0 0 24 24"><path d="M2 12c2-6 4-6 5.5 0S11 18 12 12s2.5-6 4-6 3.5 0 5.5 0"/><line x1="8" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="16" y2="20"/></svg>',
+    vwap:'<svg viewBox="0 0 24 24"><line x1="4" y1="20" x2="4" y2="14"/><line x1="9" y1="20" x2="9" y2="9"/><line x1="14" y1="20" x2="14" y2="5"/><line x1="19" y1="20" x2="19" y2="11"/><path d="M2 17c3 0 5-5 8-7s7-1 12 1"/></svg>'
   }[name] || "");
 
   const groups = [
@@ -41,6 +42,7 @@
     ["gann","Ганн и вилы",icon("gann"),[["pitchfork","Вилы Эндрюса"],["pitchfork_schiff","Вилы Шиффа"],["pitchfork_modified_schiff","Модиф. вилы Шиффа"],["gann_fan","Веер Ганна"]]],
     ["pattern","Паттерны",icon("pattern"),[["xabcd_pattern","Паттерн XABCD"],["abcd_pattern","Паттерн ABCD"],["triangle_pattern","Паттерн треугольник"],["three_drives_pattern","Три драйва"],["head_shoulders_pattern","Голова и плечи"],["elliott_impulse_wave","Волна Эллиотта (импульс)"],["elliott_correction_wave","Волна Эллиотта (коррекция)"]]],
     ["cycles","Циклы",icon("cycles"),[["cyclic_lines","Циклические линии"],["sine_line","Синусоида"]]],
+    ["vwap","VWAP",icon("vwap"),[["anchored_vwap","Привязанный VWAP"]]],
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],
     ["measure","Измерения",icon("measure"),[["measure","Линейка (временная)"],["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время"]]],
