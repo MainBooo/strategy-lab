@@ -114,9 +114,16 @@
     });
   }
 
+  // Every one of these lives inside #caToolbar, which clips overflow on
+  // phone (chart-editor-terminal-mobile-v2.js) - position:absolute doesn't
+  // escape an ancestor's overflow:hidden, so left in place these render
+  // completely invisible (though still "open" in the DOM) on narrow
+  // screens. Only gtAlertsPop/gtTemplatesPop used to get this treatment;
+  // gtIndicatorsPop/gtLayoutPop/gtMorePop had the exact same bug and were
+  // just never opened on a narrow-enough phone width to notice.
   function relocatePopovers() {
     if (!Page.root) return;
-    for (const id of ["gtAlertsPop", "gtTemplatesPop"]) {
+    for (const id of ["gtAlertsPop", "gtTemplatesPop", "gtIndicatorsPop", "gtLayoutPop", "gtMorePop"]) {
       const pop = Page.root.querySelector(`#${id}`);
       if (pop && pop.parentElement !== Page.root) Page.root.appendChild(pop);
     }

@@ -888,6 +888,8 @@
       const hidden = [...this.root.querySelectorAll("#gtScroll [data-key].gt-hidden")]
         .sort((a, b) => Number(a.dataset.priority) - Number(b.dataset.priority));
       const overflowRows = hidden.map((el) => `<button class="ca-more-item" data-act="${el.dataset.key}">${el.dataset.icon} ${el.dataset.label}</button>`).join("");
+      let scaleMode = 0;
+      try { scaleMode = tile.core && tile.core.chart.priceScale("right").options().mode || 0; } catch (_) {}
       pop.innerHTML = `
         ${overflowRows ? `<div class="ca-more-group">${overflowRows}</div><div class="ca-more-sep"></div>` : ""}
         <div class="ca-more-group">
@@ -895,6 +897,15 @@
           <div class="ca-range-presets">
             ${tile.listRangePresets().map((p) => `<button class="range-preset" data-range-days="${p.days}">${p.label}</button>`).join("")}
             <button class="range-preset ${tile.rangeMode !== "custom" ? "active" : ""}" data-range-all="1">Все</button>
+          </div>
+        </div>
+        <div class="ca-more-sep"></div>
+        <div class="ca-more-group">
+          <div class="ca-more-heading">Шкала цен</div>
+          <div class="ca-range-presets">
+            <button class="range-preset ${scaleMode === 2 ? "active" : ""}" data-act="scalePercent">%</button>
+            <button class="range-preset ${scaleMode === 1 ? "active" : ""}" data-act="scaleLog">Лог</button>
+            <button class="range-preset" data-act="scaleAuto">Авто</button>
           </div>
         </div>
         <div class="ca-more-sep"></div>
@@ -920,6 +931,13 @@
           if (window.StrategyLabMobileChart && typeof window.StrategyLabMobileChart.refreshRail === "function") window.StrategyLabMobileChart.refreshRail();
         }
         else if (act === "reset") { if (tile.core) tile.core.fitContent(); }
+        else if (act === "scalePercent" || act === "scaleLog") {
+          if (!tile.core) return;
+          const mode = act === "scalePercent" ? 2 : 1;
+          let current = 0; try { current = tile.core.chart.priceScale("right").options().mode || 0; } catch (_) {}
+          try { tile.core.chart.priceScale("right").applyOptions({ mode: current === mode ? 0 : mode }); } catch (_) {}
+        }
+        else if (act === "scaleAuto") { try { tile.core && tile.core.chart.priceScale("right").applyOptions({ autoScale: true }); } catch (_) {} }
       }));
       pop.querySelectorAll(".range-preset[data-range-days]").forEach((b) => (b.onclick = () => {
         tile.applyQuickRange(Number(b.dataset.rangeDays));
