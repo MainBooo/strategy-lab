@@ -1,0 +1,131 @@
+# TradingView parity matrix — «Анализ графиков»
+
+Снято 2026-08-18, после коммита `e1f7afe`. Методология: код `static/chart-engine/*.js`,
+`static/chart-analysis.js`, `static/chart-editor-terminal-*.js` + выборочная
+живая проверка на `strategylab.generationweb.ru` (390×844, Playwright,
+реальные Pointer Events на проде). Колонка **Test** отмечает, была ли
+строка подтверждена вживую в эту сессию, унаследована из предыдущих
+раундов (см. `git log`), или проверена только чтением кода — **не ставим
+PARITY там, где нет хотя бы одного из этих подтверждений** (ТЗ §176/177).
+
+Статусы: `MISSING` / `BROKEN` / `PARTIAL` / `PARITY` / `BLOCKED`.
+
+## Top toolbar / header
+
+| Component | TV reference | Strategy Lab (до сессии) | Required | Status | Test |
+|---|---|---|---|---|---|
+| Symbol pill → search overlay | тап открывает watchlist с поиском/ценами | `#gtTicker` перехватывался на телефоне, открывал `watchlist.openMobileDrawer()` | да | PARITY | код (`wireTickerTap`), не переснято в эту сессию |
+| Timeframe pill | показывает текущий интервал, тап → меню | «Д» — мёртвый `<span>`, `#gtTimeframe` спрятан | да | **PARITY (испр. эта сессия)** | живой Playwright, см. audit BUG 1 |
+| Chart-type selector | иконка свечей → меню | `#gtChartType`, CSS-фон иконка на телефоне, `<select>` на десктопе | да | PARITY | код, унаследовано |
+| Индикаторы | список с поиском по категориям | `_renderIndicatorsInto` — поиск, категории, активные/настройки | да | PARITY | код, унаследовано |
+| Меню (☰) | catch-all drawer | proxy-клик на `#gtMoreBtn` («Ещё») | да (эквивалент) | PARTIAL | нет отдельного global-меню приложения, только chart «Ещё» |
+| Compare/add symbol | наложение второго тикера на график | отсутствует | нет back-end для multi-symbol overlay | MISSING | — |
+| Alerts (🔔) | список + создание | `_renderAlertsInto`, реальный `/api/alerts` backend для авторизованных | да | PARITY | код |
+| Price/change в header | текущая цена, Δ, Δ% | `#gtPrice`/`#gtChange`, обновляются на тик | да | PARITY | код, унаследовано |
+| Bid/Ask | цена продажи/покупки | `sl-market-head` показывает bid/offer, если есть в price feed | да, если данные есть | PARTIAL | зависит от Binance-фида; не для всех тикеров |
+| Volume в header | форматированный объём (K/M/B) | `sl-market-head`, `toLocaleString(..., {notation:"compact"})` | да | PARITY | код |
+
+## Price / time scale, crosshair
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Price scale (labels, drag, autoscale) | стандартное поведение | lightweight-charts встроенный | да | PARITY | библиотека, унаследовано |
+| Current price label | подпись у последней цены | встроено в серию | да | PARITY | библиотека |
+| Crosshair (desktop, мышь) | линии + подписи | lightweight-charts встроенный crosshair | да | PARITY | библиотека |
+| Crosshair (touch) | активация жестом, drag без панорамирования | не найден отдельный mobile-специфичный жест активации; предположительно поведение по умолчанию библиотеки | да | **NOT VERIFIED** | не проверено на реальном touch-устройстве |
+| Price-scale «+» (визуальный, следует за ценой) | плавающая «+» кнопка у шкалы | отсутствует как визуальный элемент | да, high priority (ТЗ §31) | **PARTIAL** | есть функциональный эквивалент — тап по шкале цены (`bindPriceAxisAlertGesture`) открывает алерт с этой ценой; нет самой «+», нет «Add Horizontal Line» из этого меню |
+| Price-scale quick menu | Create Alert / Add H-Line / Create Order | только Create Alert (через тап по шкале или через context-menu «Добавить алерт здесь») | да (Order — только если есть trading backend, которого нет) | PARTIAL | код |
+| Time scale (даты, зум, drag) | стандартное поведение | lightweight-charts встроенный | да | PARITY | библиотека |
+| Timezone | не хардкодить UTC+3 | `theme.js` форматирует явно как UTC (см. docs/chart-engine.md «Тайм-зоны» — намеренно, т.к. свечи хранятся наивно как MSK-время, трактовка как UTC на фронте не искажает часы зрителя) | да | PARITY (по замыслу) | код + существующая документация |
+
+## Chart body
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Chart types | Candles/Bars/Line/Area/Baseline/HollowCandles/HeikinAshi (+опционально Renko/Kagi/PnF/Range) | 6: Candles/Bars/Line/Area/Baseline/HeikinAshi | базовые 7 обязательны | PARTIAL | код — нет Hollow Candles; Renko/Kagi/PnF/Range не реализованы (опционально по ТЗ) |
+| Grid | горизонт+вертикаль, низкая плотность | lightweight-charts встроенный, настроен в `theme.js` | да | PARITY | библиотека |
+| Volume overlay | интегрирован в нижнюю часть pane | `ChartCore` создаёт volume-серию, toggle через индикаторы (`kind:"toggle"`) | да | PARITY | код |
+| Auto-follow / «К последней цене» | компактный контрол, появляется только когда ушли от live-края | `core.js: scrollToRealTime()`, `chart-tile.js: liveBtn` | да | PARITY | код, унаследовано |
+| Live update без сброса состояния | новые свечи не сбрасывают zoom/selection/crosshair | `_onRealtimeUpdate`/polling тика, не трогает viewport/drawings | да | PARITY | код |
+
+## Drawing toolbar / инструменты
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | trend_line/ray/extended_line/horizontal_line/vertical_line реализованы; **Horizontal Ray отдельным типом отсутствует** (только Horizontal Line — на всю ширину, не луч от точки) | да | PARTIAL | код |
+| Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
+| Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
+| Pitchfork family (4 варианта) | | отсутствуют | да | MISSING | — |
+| Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | rectangle/circle(ellipse)/triangle есть; Rotated Rectangle отсутствует | да | PARTIAL | код |
+| Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline, freehand(brush) есть; Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker отсутствуют | да | PARTIAL | код |
+| Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
+| Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | реализован (`fib_retracement`, `FIB_RETRACEMENT_LEVELS`), но без UI для custom-уровней/reverse/extend-lines в панели свойств | да, high priority | PARTIAL | код |
+| Fib Extension | | реализован (`fib_extension`) | да | PARITY (базовая геометрия) | код |
+| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
+| Gann Fan/Square/Box | | отсутствуют | да | MISSING | — |
+| Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | отсутствуют | да | MISSING | — |
+| Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
+| Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
+| Price Range / Time Range / Price&Time Range | измерение с дельтами | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`), не как временный TradingView-style Measure-оверлей | да | PARTIAL | код, см. audit BUG 7 |
+| Anchored VWAP / Volume Profile | | отсутствуют | да, если данные позволяют | MISSING | — |
+| Zoom tool (area-zoom, отдельно от pinch) | | отсутствует | да | MISSING | — |
+
+## Interaction / редактирование объектов
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Object selection (tap/click, deselect на пустом месте) | | `hitTest()`, `select(null)` на пустом тапе | да | PARITY | код |
+| Handle editing (drag anchor) | live preview, no chart pan | `_dragState`, `_applyDrag`, `_setNavigationLocked(true)` на весь drag | да | PARITY | код |
+| Object move (drag body) | модель, не screen-offset | `_translatePoints` через logical/price delta | да | PARITY | код |
+| Floating toolbar при выборе | контекстные стиль/цвет/удалить рядом с объектом | Свойства открываются в нижней панели («Свойства»/«Объекты»), не как плавающий toolbar рядом с объектом | да | PARTIAL | код — функционально эквивалентно, геометрия другая |
+| Object Tree («Объекты») | список, select/hide/lock/rename/delete, sync с canvas | `_renderObjects()` — всё вышеперечисленное, двусторонняя синхронизация | да | PARITY | код |
+| Magnet Off/Weak/Strong | | было boolean (только Strong); теперь 3 режима | да | **PARITY (испр. эта сессия)** | live-проверка snapPoint() против реальных свечей, см. audit |
+| Keep drawing mode | | `dm.keepDrawing`, рейл-кнопка «✎» | да | PARITY | код |
+| Lock (individual + all) | | `updateDrawing({locked})`, рейл-кнопка блокирует все | да | PARITY | код |
+| Hide (drawings/indicators/all) | family-меню | рейл — только «скрыть все рисунки»; family-меню с раздельными Hide Drawings/Indicators/Positions отсутствует | да | PARTIAL | код |
+| Remove (selected/drawings/indicators/all) | family-меню с подтверждением | рейл-кнопка «удалить всё» с `confirm()`; раздельного family-меню нет | да | PARTIAL | код |
+| Undo/Redo | | `_undoStack`/`_redoStack`, 100 записей, один push на operation (не на pointermove) | да | PARITY | код, ТЗ §84 уже соблюдён |
+| Drawing persistence (reload/timeframe/symbol) | | `/api/chart-drawings`, привязка к symbol/pane, `loadDrawings()` при смене тикера | да | PARITY | код |
+| Multiselect (Ctrl/Cmd click) | | отсутствует | да (desktop) | MISSING | — |
+| Grouping | | отсутствует | да | MISSING | — |
+| Per-tool style defaults | «сделать стилем по умолчанию» | реализовано (`saveToolStyleDefault`, `styleOverrides`) | да | PARITY | код |
+| Visibility by timeframe | | реализовано (`properties.visibleTimeframes`, фильтр в `_buildOp`) | да | PARITY | код |
+| Context menu (canvas + drawing) | right-click/long-press | `openContextMenu()` — настройки/дублировать/скрыть/блокировать/удалить на объекте; алерт/сброс масштаба/снимок на пустом месте | да | PARITY | код |
+
+## Alerts
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Create alert из price-scale tap | | `bindPriceAxisAlertGesture` + `_openAlertPopoverWithPrice` | да | PARITY | код |
+| Conditions (Crossing/Up/Down, Greater/Less) | | `AS.CONDITION_LABELS` — нужно свериться с фактическим списком в `alert-service.js` (не вычитано построчно в эту сессию) | да | NOT VERIFIED | — |
+| Persistent backend (не только пока открыта страница) | | `/api/alerts` REST для авторизованных, `/api/alerts/events` для polling триггеров | да | PARITY | код |
+| Anonymous fallback | | localStorage-only режим для неавторизованных | — | PARITY (сознательное решение) | код |
+| Alert line на графике | | не найдено — не подтверждено, что сработавший/активный алерт рисуется как horizontal line с меткой на самом графике | да | **NOT VERIFIED / вероятно MISSING** | требует отдельной проверки `trades.js`/`drawings.js` на предмет alert-рендеринга |
+| Horizontal Line → Create Alert | | context-menu «Добавить алерт здесь» работает от любой точки клика, не именно от существующей Horizontal Line drawing | да | PARTIAL | код |
+
+## Multi-chart / workspace / fullscreen
+
+| Component | TV reference | Strategy Lab | Required | Status | Test |
+|---|---|---|---|---|---|
+| Fullscreen (настоящий API + CSS fallback, Escape) | | `fullscreen.js: FullscreenController` | да | PARITY | код, документировано в `docs/CHART_MODULE.md` |
+| Layouts 1/2/2×2/3×2 | | `LAYOUTS` — 1/2v/2h/3/3b/4/6, архивирование убранных плиток (LIFO) | да | PARITY | код + существующая документация |
+| Sync (ticker/interval/crosshair/scroll/zoom/range) | | `syncFlags`, echo-protection (`_applyingRange`/`_applyingCrosshair`) | да | PARITY | код + существующая документация |
+| Mobile viewport (100dvh, safe-area, no double scroll) | | `env(safe-area-inset-*)`, `100dvh`, единая `overflow:hidden` цепочка | да | PARITY | живой Playwright (визуально, эта и предыдущие сессии) |
+| Replay совместимость | | не проверялось в эту сессию | должен не сломаться | NOT VERIFIED | — |
+| Backtest trade markers | entry/exit/long/short/hover | `trades.js: TradeOverlayPrimitive`, `TradeSelectionManager`, один canvas-примитив на все сделки | да | PARITY | код + существующая документация |
+
+## Известные пробелы этой сессии (честно, не проверялось)
+
+- Полный **reference pack** TradingView (25 состояний, 4 mobile viewport, §4 ТЗ) не
+  собирался — эта сессия использовала предоставленные `Tradingview.PNG` +
+  `Strategy Lab.png` как единственные референсы.
+- **Pixel-diff/overlay сравнение** (§149-150) не проводилось — визуальные
+  оценки в этой матрице основаны на прямом просмотре скриншотов, не на
+  автоматизированном diff.
+- **Real iOS Safari** не тестировался — вся touch-верификация через
+  Chromium DevTools Pointer Events эмуляцию (см. audit, BUG 2-4).
+- **Индикаторные панели** (crosshair sync между panes, resize, drawing
+  tools внутри oscillator pane) не проверялись отдельно.
+- **Keyboard shortcuts** сверх Ctrl+Z/Shift+Z/Delete/Escape (уже
+  подтверждены в `chart-analysis.js`/`drawings.js`) — не сверялись
+  построчно со списком ТЗ §104.
