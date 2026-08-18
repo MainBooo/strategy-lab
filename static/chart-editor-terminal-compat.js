@@ -122,33 +122,11 @@
     }
   }
 
-  function wireScaleControls() {
-    if (!Page.root) return;
-    const strip = Page.root.querySelector(".sl-chart-controls");
-    if (!strip || strip.dataset.slScaleWired) return;
-    strip.dataset.slScaleWired = "1";
-    const buttons = strip.querySelectorAll("button");
-    const percent = buttons[1], log = buttons[2];
-    const apply = (mode, button) => {
-      const tile = Page.activeTile;
-      if (!tile || !tile.core) return;
-      let current = 0;
-      try { current = tile.core.chart.priceScale("right").options().mode || 0; } catch (_) {}
-      const next = current === mode ? 0 : mode;
-      try { tile.core.chart.priceScale("right").applyOptions({ mode: next }); } catch (_) {}
-      percent && percent.classList.toggle("active", next === 2);
-      log && log.classList.toggle("active", next === 1);
-    };
-    if (percent) { percent.title = "Процентная шкала"; percent.onclick = () => apply(2, percent); }
-    if (log) { log.title = "Логарифмическая шкала"; log.onclick = () => apply(1, log); }
-  }
-
   function syncLegacyHooks() {
     if (!Page.root) return;
     const objects = Page.root.querySelector('[data-sl-act="objects"]');
     if (objects) objects.setAttribute("data-tv-action", "objects");
     relocatePopovers();
-    wireScaleControls();
     renderLegend();
   }
 
