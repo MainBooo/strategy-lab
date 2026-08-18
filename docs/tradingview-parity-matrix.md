@@ -78,7 +78,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Object selection (tap/click, deselect на пустом месте) | | `hitTest()`, `select(null)` на пустом тапе | да | PARITY | код |
 | Handle editing (drag anchor) | live preview, no chart pan | `_dragState`, `_applyDrag`, `_setNavigationLocked(true)` на весь drag | да | PARITY | код |
 | Object move (drag body) | модель, не screen-offset | `_translatePoints` через logical/price delta | да | PARITY | код |
-| Floating toolbar при выборе | контекстные стиль/цвет/удалить рядом с объектом | Свойства открываются в нижней панели («Свойства»/«Объекты»), не как плавающий toolbar рядом с объектом | да | PARTIAL | код — функционально эквивалентно, геометрия другая |
+| Floating toolbar при выборе | контекстные стиль/цвет/удалить рядом с объектом | `ChartTile._renderFloatToolbar`/`_positionFloatToolbar` — реальная пилюля у топ-точки выбранного объекта (цвет, толщина/стиль или ✎ для текста, lock, hide, дублировать, "…"→Свойства, удалить), позиция пересчитывается на каждый `onViewUpdate` (пан/зум/live-тик); заменила собой старый `#tvObjectToolbar` (chart-mobile-interactions.js), который был закреплён у верхнего края рабочей области, а не у объекта | да | **PARITY (испр. эта сессия)** | живой Playwright: цвет/толщина/стиль/lock/hide/дублировать/"…"/удалить по одному, синхронизация с нижней панелью «Свойства», не осталось дублирующего верхнего бара; 198 pytest + 2 JS runtime suites зелёные |
 | Object Tree («Объекты») | список, select/hide/lock/rename/delete, sync с canvas | `_renderObjects()` — всё вышеперечисленное, двусторонняя синхронизация | да | PARITY | код |
 | Magnet Off/Weak/Strong | | было boolean (только Strong); теперь 3 режима | да | **PARITY (испр. эта сессия)** | live-проверка snapPoint() против реальных свечей, см. audit |
 | Keep drawing mode | | `dm.keepDrawing`, рейл-кнопка «✎» | да | PARITY | код |
@@ -117,9 +117,29 @@ PARITY там, где нет хотя бы одного из этих подтв
 
 ## Changelog этой сессии (после первого снимка, коммит `e1f7afe`)
 
-Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9`, `8838d00`, `181bc1f` —
-сняты после `6390adb`:
+Коммиты `aa402dc`, `9e61027`, `2e48c41`, `f38b4c9`, `8838d00`, `181bc1f`,
+`8a6160a` — сняты после `6390adb`:
 
+- **Floating toolbar при выборе** — из PARTIAL в PARITY.
+  `ChartTile._renderFloatToolbar`/`_positionFloatToolbar`
+  (`chart-engine/chart-tile.js`) рисуют реальную пилюлю у топ-точки
+  выбранного объекта (`DrawingManager.selectionAnchor()`/`paneSize()`,
+  новые в `drawings.js`): цвет, толщина+стиль линии (или ✎ «редактировать
+  текст» для text/note), lock, hide, дублировать, «…»→открывает нижнюю
+  панель «Свойства», удалить. Позиция пересчитывается на каждый
+  `onViewUpdate` (реальная перерисовка пейна — пан/зум/live-тик), не
+  повторяет `_renderFloatToolbar`. По ходу найдено и устранено: DrawingManager
+  ничего не знал про DOM-оверлеи поверх канваса — клик по кнопке пилюли,
+  сидящей прямо на точке объекта, попадал в тот же pixel-hit-test, что и
+  сам объект, и мог заодно захватить pointer для drag/edit-сессии; добавлен
+  точечный guard в `_onPointerDown`/`_onDblClick` на `.ca-float-toolbar`.
+  Также обнаружился и устранён дублирующий, уже существовавший
+  fixed-position `#tvObjectToolbar` (`chart-mobile-interactions.js`,
+  закреплён у верхнего края рабочей области, не следил за объектом) —
+  показывался одновременно с новой пилюлей на любом selection; удалён
+  целиком (функция `renderObjectToolbar`, все вызовы, CSS), его
+  width/dash/edit-text функциональность перенесена в новую пилюлю, чтобы
+  ничего не регрессировало.
 - **Hollow Candles** (`8838d00`) — из PARTIAL (6/7 обязательных типов) в
   PARITY. Цвет по сравнению с *предыдущим* close (не своим open, как у
   обычной свечи), тело hollow (цвет фона графика, виден только

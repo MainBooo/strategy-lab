@@ -176,8 +176,8 @@ custom levels закрыты в этой же сессии:
   ценой/%/барами/временем без создания персистентного объекта) — вместо
   него есть три персистентных drawing-инструмента с той же математикой
   (Price Range/Time Range/Price&Time Range).
-- **Floating toolbar** при выборе объекта — реализовано как нижняя панель
-  «Свойства», не как плавающий toolbar рядом с объектом.
+- ~~**Floating toolbar** при выборе объекта~~ — закрыто коммитом `8a6160a`
+  (см. matrix changelog).
 - ~~**Hide/Remove family-меню** (раздельно Drawings/Indicators/Positions)~~ —
   закрыто коммитом `181bc1f`.
 - ~~**Chart types**: 6 из 7 обязательных (нет Hollow Candles)~~ — закрыто
