@@ -156,7 +156,7 @@
      * make it the active one). The close button is always rendered - the
      * workspace hides it via CSS (`.ca-tile-grid.layout-1 .ca-tile-close`)
      * when only one tile exists, rather than us tracking tile count here. */
-    mount(container, { onActivate, onClose } = {}) {
+    mount(container, { onActivate, onClose, onScalePlusTap } = {}) {
       this.el = container;
       container.className = "ca-tile";
       container.innerHTML = `
@@ -169,6 +169,7 @@
         </div>
         <div class="ca-tile-chart-host" data-role="chartHost">
           <button class="ca-tile-live-btn hidden" data-role="live" type="button">К последней цене</button>
+          <button class="ca-scale-plus hidden" data-role="scalePlus" type="button" title="Действие по цене" aria-label="Действие по цене">+</button>
         </div>
       `;
 
@@ -189,6 +190,45 @@
         liveBtn.textContent = count > 0 ? `К последней цене · +${count}` : "К последней цене";
       });
 
+      // Price-scale "+": TradingView's own gesture for "act on this exact
+      // price" - follows the crosshair vertically along the price-scale
+      // gutter while hovering the pane, tap opens a small menu (alert /
+      // horizontal line) pre-filled with the hovered price. Deliberately a
+      // *sibling* of chartHost's canvas rather than absolutely positioned
+      // some other way that would still leave it a DOM descendant of
+      // core.container - DrawingManager's pointerdown capture listener is
+      // bound to core.container itself, so any element inside it still gets
+      // routed through the drawing state machine first; this follows the
+      // exact same pattern already proven by the "live" button above
+      // (stopPropagation in the button's own handlers, nothing new).
+      const scalePlusBtn = container.querySelector('[data-role="scalePlus"]');
+      this._scalePlusPoint = null;
+      // Freeze position/visibility the instant the pointer is actually over
+      // the button, so a live crosshair sample never repositions it out
+      // from under a pointer that's already arrived.
+      this._scalePlusHovered = false;
+      scalePlusBtn.addEventListener("pointerenter", () => { this._scalePlusHovered = true; });
+      scalePlusBtn.addEventListener("pointerleave", () => { this._scalePlusHovered = false; });
+      // Acts on pointerdown, not click. Directly verified (event-target
+      // logging, not guesswork): pointerdown on this button consistently
+      // targets the button itself, but the *matching* pointerup/click can
+      // land back on the chart's own canvas instead - lightweight-charts
+      // reserves an interaction margin around the price scale for its own
+      // manual-scale-drag gesture wider than the scale's visible pixels,
+      // which can re-target the release side of a press that started on an
+      // overlay button sitting inside that margin. Nothing here needs the
+      // release half of a click at all - acting immediately on the down
+      // event, the one half that's never been observed to mistarget, sidesteps
+      // the problem entirely instead of trying to out-guess the margin's exact width.
+      scalePlusBtn.onpointerdown = (e) => {
+        e.stopPropagation();
+        if (this._scalePlusPoint && onScalePlusTap) onScalePlusTap(this, this._scalePlusPoint.price, this._scalePlusPoint.time);
+      };
+      // Swallow the follow-up click (fires after pointerup, whichever
+      // element it lands on, since the interaction already completed above)
+      // so it can't bubble into a dm.select(null) or a chart click handler.
+      scalePlusBtn.onclick = (e) => e.stopPropagation();
+
       this.core.chart.subscribeCrosshairMove((param) => {
         const bar = param && param.time != null ? this.core.candleAt(param.time) : null;
         this._updatePriceHeader(bar);
@@ -196,7 +236,18 @@
           const price = param && param.seriesData && param.seriesData.get(this.core.candleSeries);
           this._crosshairCbs.forEach((cb) => cb(param && param.time, price && price.close));
         }
+        this._updateScalePlus(param, scalePlusBtn);
       });
+      // subscribeCrosshairMove's `param.point` is only set while the pointer
+      // is over the *plot* area - never while over the price-scale gutter
+      // itself (confirmed by direct testing: moving toward a right-edge-
+      // anchored button made it vanish the instant the cursor reached it,
+      // because arriving there exits the zone that keeps it visible in the
+      // first place - a real bug, not a fixture of the library). Keeping
+      // the button flush against the *inside* of the gutter (updated below
+      // from the live price-scale width, not a fixed offset - the gutter's
+      // width itself changes with price precision) keeps it inside the
+      // hoverable pane the whole time a real pointer travels toward it.
       this.core.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (!this._applyingRange) this._rangeChangeCbs.forEach((cb) => cb(range));
       });
@@ -253,6 +304,51 @@
       const diff = prev ? target.close - prev.close : null;
       const pct = prev && prev.close ? (diff / prev.close) * 100 : null;
       this._priceUpdateCbs.forEach((cb) => cb(this, { price: target.close, diff, pct }));
+    }
+
+    /** Positions/shows/hides the price-scale "+" button for the current
+     * crosshair sample. Hidden whenever: the setting is off
+     * (displayOptions.scalePlusEnabled, see Chart Settings), the pointer
+     * isn't over the plot area (param.point is only set there by
+     * lightweight-charts - never while over the price/time scale gutter
+     * itself), or a drawing tool is currently armed (placing a point under
+     * a button the user is trying to tap would be exactly the kind of
+     * accidental geometry TradingView's own plus never risks).
+     *
+     * Positioned flush against the *inside* of the price-scale gutter
+     * (right: <live gutter width>px, not a fixed offset) rather than
+     * inside the gutter itself - the gutter's width changes with price
+     * precision, and a fixed offset can either overlap the axis label or
+     * leave a gap. More importantly: since visibility itself depends on
+     * being over the plot area, anchoring inside the gutter would make the
+     * button vanish the instant a real pointer reached it (confirmed by
+     * direct testing - a fixed-offset version disappeared right as the
+     * mouse arrived, because arriving there exits the only zone that keeps
+     * it shown). Staying just inside the plot boundary keeps it reachable
+     * by an actual continuous pointer approach, not just by teleporting a
+     * test cursor onto its coordinates. */
+    _updateScalePlus(param, btn) {
+      if (!btn || this._scalePlusHovered) return;
+      const enabled = !this.core.displayOptions || this.core.displayOptions.scalePlusEnabled !== false;
+      const toolArmed = !!(this.drawingMgr && this.drawingMgr.activeTool);
+      if (!enabled || toolArmed || !param || !param.point || param.time == null) {
+        btn.classList.add("hidden");
+        this._scalePlusPoint = null;
+        return;
+      }
+      let price = null;
+      try { price = this.core.candleSeries.coordinateToPrice(param.point.y); } catch (err) { price = null; }
+      if (!Number.isFinite(price)) {
+        btn.classList.add("hidden");
+        this._scalePlusPoint = null;
+        return;
+      }
+      let gutterWidth = 56;
+      try { gutterWidth = this.core.chart.priceScale("right").width() || gutterWidth; } catch (err) { /* fallback above */ }
+      this._scalePlusPoint = { price, time: param.time };
+      btn.classList.remove("hidden");
+      btn.style.top = `${Math.round(param.point.y)}px`;
+      btn.style.right = `${Math.round(gutterWidth) + 4}px`;
     }
 
     setActiveVisual(active) {

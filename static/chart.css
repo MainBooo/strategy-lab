@@ -523,6 +523,16 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 }
 .ca-tile-live-btn:hover { transform: translateY(-1px); }
 .ca-tile-live-btn.hidden { display: none; }
+.ca-scale-plus {
+  position: absolute; right: 60px; z-index: 4; transform: translateY(-50%);
+  width: 22px !important; height: 22px !important; min-width: 22px !important; min-height: 22px !important;
+  padding: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 6px; font-size: 15px; line-height: 1; font-weight: 700; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35); pointer-events: auto;
+}
+.ca-scale-plus:hover, .ca-scale-plus:active { background: var(--accent); color: #fff; }
+.ca-scale-plus.hidden { display: none; }
 
 @media (max-width: 980px) {
   .ca-tile-grid.layout-2h,

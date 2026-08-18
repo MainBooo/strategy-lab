@@ -873,6 +873,44 @@
       }, 0);
     },
 
+    /** Price-scale "+" quick menu (see ChartTile._updateScalePlus /
+     * onScalePlusTap): a tiny two-item menu anchored to the "+" button
+     * itself, using the exact {price,time} ChartTile sampled from the
+     * crosshair - not re-derived from the click position, so it stays
+     * correct even though the button sits in the price-scale gutter rather
+     * than over the point it represents. Reuses the same .ca-context-menu/
+     * .ca-context-item chrome as the canvas right-click menu (ТЗ §95: one
+     * menu system, not a bespoke popup per feature) instead of building a
+     * new visual language for one more menu. */
+    _openScalePlusMenu(tile, price, time) {
+      closeContextMenu();
+      if (!tile || !tile.el || !Number.isFinite(price)) return;
+      const btn = tile.el.querySelector('[data-role="scalePlus"]');
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const items = [
+        { label: "Создать алерт", onClick: () => this._openAlertPopoverWithPrice(tile, price) },
+        { label: "Добавить горизонтальную линию", onClick: () => { if (tile.drawingMgr) tile.drawingMgr.addDrawing("horizontal_line", [{ time, price }]); } },
+      ];
+      const menu = document.createElement("div");
+      menu.id = "caContextMenu";
+      menu.className = "ca-context-menu";
+      menu.innerHTML = items.map((item, i) => `<button type="button" class="ca-context-item" data-idx="${i}">${item.label}</button>`).join("");
+      document.body.appendChild(menu);
+      const menuRect = menu.getBoundingClientRect();
+      const left = Math.max(4, Math.min(rect.left - menuRect.width - 6, window.innerWidth - menuRect.width - 8));
+      const top = Math.max(4, Math.min(rect.top - menuRect.height / 2, window.innerHeight - menuRect.height - 8));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      menu.querySelectorAll("[data-idx]").forEach((b) => (b.onclick = () => { items[Number(b.dataset.idx)].onClick(); closeContextMenu(); }));
+      const closeOnOutside = (e) => {
+        if (menu.contains(e.target) || e.target === btn) return;
+        closeContextMenu();
+        document.removeEventListener("pointerdown", closeOnOutside, true);
+      };
+      setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
+    },
+
     _refreshAlertBadge() {
       const badge = this.root.querySelector("#gtAlertBadge");
       if (!badge) return;
@@ -1122,6 +1160,7 @@
           tile.mount(el, {
             onActivate: (t) => this._setActiveTile(t.id),
             onClose: (t) => this._closeTile(t.id),
+            onScalePlusTap: (t, price, time) => this._openScalePlusMenu(t, price, time),
           });
           tile.setSecurities(this.securities);
           tile.drawingMgr.onChange((mgr, detail) => {
@@ -1343,6 +1382,7 @@
             <label class="toggle"><input type="checkbox" id="csGrid" ${o.showGrid !== false ? "checked" : ""}><span>Сетка</span></label>
             <label class="toggle"><input type="checkbox" id="csVolume" ${o.showVolume !== false ? "checked" : ""}><span>Объёмы</span></label>
             <label class="toggle"><input type="checkbox" id="csAutoScale" ${o.autoScale !== false ? "checked" : ""}><span>Автомасштаб</span></label>
+            <label class="toggle"><input type="checkbox" id="csScalePlus" ${o.scalePlusEnabled !== false ? "checked" : ""}><span>«+» на шкале цены</span></label>
             <label>Фон <input type="color" id="csBg" value="${toHex(o.background || "#0c1019")}"></label>
             <label>Точность цены <input type="number" id="csPrecision" min="0" max="8" value="${o.priceFormatPrecision != null ? o.priceFormatPrecision : autoPrecision}"></label>
             <label>Часовой пояс
@@ -1369,6 +1409,7 @@
       overlay.querySelector("#csGrid").onchange = (e) => apply({ showGrid: e.target.checked });
       overlay.querySelector("#csVolume").onchange = (e) => apply({ showVolume: e.target.checked });
       overlay.querySelector("#csAutoScale").onchange = (e) => apply({ autoScale: e.target.checked });
+      overlay.querySelector("#csScalePlus").onchange = (e) => apply({ scalePlusEnabled: e.target.checked });
       overlay.querySelector("#csBg").oninput = (e) => apply({ background: e.target.value });
       overlay.querySelector("#csPrecision").onchange = (e) => apply({ priceFormatPrecision: Number(e.target.value) });
       overlay.querySelector("#csTz").onchange = (e) => tile.core.setTimezoneOffset(Number(e.target.value));
@@ -1588,6 +1629,7 @@
     }
     return [
       { label: "Добавить алерт здесь", onClick: () => { if (coordPoint && Number.isFinite(coordPoint.price)) Page._openAlertPopoverWithPrice(tile, coordPoint.price); } },
+      { label: "Добавить горизонтальную линию", onClick: () => { if (dm && coordPoint && Number.isFinite(coordPoint.price)) dm.addDrawing("horizontal_line", [{ time: coordPoint.time, price: coordPoint.price }]); } },
       { separator: true },
       { label: "Сбросить масштаб", onClick: () => tile.core && tile.core.fitContent() },
       { label: "Снимок графика", onClick: () => Page._downloadSnapshot && Page._downloadSnapshot() },
