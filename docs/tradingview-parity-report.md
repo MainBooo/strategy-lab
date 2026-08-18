@@ -172,10 +172,11 @@ custom levels закрыты в этой же сессии:
   Rotated Rectangle, Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/
   ArrowMarker, Multiselect, Grouping — не реализованы (P2/P3 по ТЗ, самый
   крупный оставшийся кусок работы).
-- **Measure tool** в TradingView-смысле (временный оверлей с
-  ценой/%/барами/временем без создания персистентного объекта) — вместо
-  него есть три персистентных drawing-инструмента с той же математикой
-  (Price Range/Time Range/Price&Time Range).
+- ~~**Measure tool** в TradingView-смысле (временный оверлей с
+  ценой/%/барами/временем без создания персистентного объекта)~~ —
+  закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time
+  Range/Price&Time Range оставлены как отдельные персистентные
+  инструменты (совпадает с реальным TradingView).
 - ~~**Floating toolbar** при выборе объекта~~ — закрыто коммитом `8a6160a`
   (см. matrix changelog).
 - ~~**Hide/Remove family-меню** (раздельно Drawings/Indicators/Positions)~~ —

@@ -67,7 +67,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | отсутствуют | да | MISSING | — |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
 | Long/Short Position | Entry/Target/Stop/P&L/R:R, редактируемые handles | `long_position`/`short_position` реализованы с `editHandles: ["start","end","stop","take"]`, hit-test на handles | да | PARITY | код |
-| Price Range / Time Range / Price&Time Range | измерение с дельтами | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`), не как временный TradingView-style Measure-оверлей | да | PARTIAL | код, см. audit BUG 7 |
+| Price Range / Time Range / Price&Time Range | измерение с дельтами (персистентные line tools) | реализованы как персистентные drawing-объекты (`price_range`/`time_range`/`price_date_range`) — совпадает с TV, там это тоже отдельные постоянные инструменты, не Measure | да | PARITY | код, унаследовано |
+| Measure (Ruler) — временный оверлей | Alt/удержание, live дельта цены/%/баров/времени, исчезает на pointerup, не создаёт объект | новый `measure` tool (`TOOL_DEFS.measure`, `ephemeral: true`) — `_finishDraft()` не вызывает `addDrawing()`, переармирует tool; рендер `kind:"measure_tool"` (пунктир, та же математика что у price_date_range); кнопка в обоих рейлах (десктоп/мобильный) | да | **PARITY (испр. эта сессия)** | живой Playwright — drag показал живой пунктирный box "-1,37 (-1,78%) / 7.5 ч. · 451 бар.", на pointerup исчез, `drawings.length` остался 0, `activeTool` переармировался в "measure", второй drag сразу сработал без повторного выбора кнопки; только через явную кнопку — Alt+drag в режиме Cursor не реализован (см. audit BUG 7) |
 | Anchored VWAP / Volume Profile | | отсутствуют | да, если данные позволяют | MISSING | — |
 | Zoom tool (area-zoom, отдельно от pinch) | | отсутствует | да | MISSING | — |
 
@@ -170,6 +171,18 @@ PARITY там, где нет хотя бы одного из этих подтв
   (не «пряталась» под шкалой — canvas обрезает контент по своим
   границам). Исправлено централизованно (`paneWidth()`/`paneHeight()`
   хелперы) во всех 9 местах разом, не по одному инструменту.
+
+- **Measure (Ruler)** (`58dcc8d` — см. `git log`) — из PARTIAL в PARITY. Новый
+  `measure` tool в `TOOL_DEFS` с `ephemeral: true` — единственный tool, чей
+  `_finishDraft()` не создаёт drawing-объект: вместо `addDrawing()` он
+  очищает draft и сразу переармирует тот же tool, так что drag за drag
+  измеряет подряд без повторного клика по кнопке. Рендер — новый op
+  `kind: "measure_tool"` (пунктирный box, та же price+date-математика, что
+  у `price_date_range`, но без drag-handles). Кнопка: `chart-analysis.js`
+  TOOL_BUTTONS ("Измерение") на десктопе, первый пункт группы "Измерения"
+  в мобильном рейле ("Линейка (временная)"). `price_range`/`time_range`/
+  `price_date_range` не тронуты — в реальном TradingView это отдельные
+  персистентные line tools, существующие наравне с Measure, не вместо него.
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
