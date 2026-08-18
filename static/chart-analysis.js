@@ -53,6 +53,7 @@
     { id: null, label: "Курсор", icon: "⇖" },
     { id: "trend_line", label: "Линия тренда", icon: "╱" },
     { id: "horizontal_line", label: "Горизонтальная линия", icon: "—" },
+    { id: "horizontal_ray", label: "Горизонтальный луч", icon: "―→" },
     { id: "vertical_line", label: "Вертикальная линия", icon: "❘" },
     { id: "ray", label: "Луч", icon: "↗" },
     { id: "extended_line", label: "Расширенная линия", icon: "⟷" },

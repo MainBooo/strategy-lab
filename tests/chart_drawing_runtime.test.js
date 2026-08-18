@@ -241,7 +241,7 @@ function touchDragDrawing(env, drawing, start, dx = 30, dy = 25, touchId = 41, p
 }
 
 const allTools = [
-  "trend_line", "ray", "extended_line", "horizontal_line", "vertical_line",
+  "trend_line", "ray", "extended_line", "horizontal_line", "horizontal_ray", "vertical_line",
   "parallel_channel", "fib_retracement", "fib_extension", "rectangle", "circle",
   "polyline", "text", "note", "price_range", "time_range", "long_position", "short_position",
   "triangle", "price_date_range", "freehand",

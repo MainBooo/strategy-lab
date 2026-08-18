@@ -41,6 +41,11 @@
   // previewed.  Persistence remains the same {time, price} points model.
   const TOOL_DEFS = {
     horizontal_line: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", editAxis: "price", label: "Горизонтальный уровень" },
+    // Unlike horizontal_line (infinite both directions, x is irrelevant to
+    // rendering), the ray's anchor time genuinely matters - it's where the
+    // line *starts*, extending only rightward - so a whole-object drag must
+    // translate both axes (no editAxis restriction), not just price.
+    horizontal_ray: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Горизонтальный луч" },
     vertical_line: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", editAxis: "time", label: "Вертикальная линия" },
     trend_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Линия тренда" },
     ray: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Луч" },
@@ -364,6 +369,33 @@
     }));
   }
 
+  /** The DrawingLayerPrimitive paints on the *main pane's own canvas* -
+   * which does not extend under the price-scale gutter (right) or
+   * time-scale strip (bottom) - even though core.container.clientWidth/
+   * clientHeight cover the whole chart host, gutter and strip included.
+   * Any drawing that "extends to the edge" (ray, extended_line, the
+   * Fibonacci tools' level lines, a time_range's full-height box, a
+   * horizontal_ray) needs to clip against *this*, not the container's raw
+   * size - clipping against the container silently draws part of the
+   * shape past the pane canvas's own boundary, which is simply never
+   * rendered there (confirmed directly: a ray anchored near the right
+   * edge measurably extended past the pane canvas's actual pixel width).
+   * Whatever anchor sits well inside the pane still looks fine either way,
+   * which is why this went unnoticed - only the portion reaching toward
+   * the gutter/strip was ever affected. */
+  function paneWidth(core) {
+    const total = (core.container && core.container.clientWidth) || 0;
+    let gutter = 0;
+    try { gutter = core.chart.priceScale("right").width() || 0; } catch (err) { /* use 0 */ }
+    return Math.max(0, total - gutter);
+  }
+  function paneHeight(core) {
+    const total = (core.container && core.container.clientHeight) || 0;
+    let timeAxis = 0;
+    try { timeAxis = core.chart.timeScale().height() || 0; } catch (err) { /* use 0 */ }
+    return Math.max(0, total - timeAxis);
+  }
+
   /** Liang-Barsky clipping for a segment, ray or infinite line. Model geometry is never clamped. */
   function clipParametricLineToRect(p0, p1, width, height, mode) {
     if (!p0 || !p1 || !finite(p0.x) || !finite(p0.y) || !finite(p1.x) || !finite(p1.y)
@@ -628,6 +660,11 @@
           if (handleAt(0)) return { id: d.id, handle: 0 };
           return Math.abs(py - pix[0].y) <= tol ? { id: d.id, handle: null } : null;
         }
+        case "horizontal_ray": {
+          if (pix[0] == null || pix[0].x == null || pix[0].y == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          return px >= pix[0].x - tol && Math.abs(py - pix[0].y) <= tol ? { id: d.id, handle: null } : null;
+        }
         case "vertical_line": {
           if (pix[0] == null || pix[0].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
@@ -642,7 +679,7 @@
           let segment = { x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y };
           if (d.type === "ray" || d.type === "extended_line") {
             segment = clipParametricLineToRect(
-              pix[0], pix[1], this.core.container.clientWidth, this.core.container.clientHeight,
+              pix[0], pix[1], paneWidth(this.core), paneHeight(this.core),
               d.type === "ray" ? "ray" : "line",
             );
             if (!segment) return null;
@@ -671,7 +708,7 @@
           if (handleAt(1)) return { id: d.id, handle: 1 };
           const x1 = Math.min(pix[0].x, pix[1].x), x2 = Math.max(pix[0].x, pix[1].x);
           const y1 = d.type === "time_range" ? 0 : Math.min(pix[0].y, pix[1].y);
-          const y2 = d.type === "time_range" ? this.core.container.clientHeight : Math.max(pix[0].y, pix[1].y);
+          const y2 = d.type === "time_range" ? paneHeight(this.core) : Math.max(pix[0].y, pix[1].y);
           return px >= x1 - tol && px <= x2 + tol && py >= y1 - tol && py <= y2 + tol ? { id: d.id, handle: null } : null;
         }
         case "triangle": {
@@ -720,7 +757,7 @@
           if (handleAt(0)) return { id: d.id, handle: 0 };
           if (handleAt(1)) return { id: d.id, handle: 1 };
           const x1 = Math.min(pix[0].x, pix[1].x);
-          const x2 = this.core.container.clientWidth;
+          const x2 = paneWidth(this.core);
           for (const level of FIB_RETRACEMENT_LEVELS) {
             const price = d.points[0].price + (d.points[1].price - d.points[0].price) * level;
             const y = priceToCoordinateSafe(this.core, price);
@@ -734,7 +771,7 @@
           if (handleAt(1)) return { id: d.id, handle: 1 };
           if (handleAt(2)) return { id: d.id, handle: 2 };
           const x1 = pix[2].x;
-          const x2 = this.core.container.clientWidth;
+          const x2 = paneWidth(this.core);
           const base = d.points[1].price - d.points[0].price;
           for (const level of FIB_EXTENSION_LEVELS) {
             const price = d.points[2].price + base * level;
@@ -1524,6 +1561,11 @@
         case "horizontal_line":
           if (pix[0]?.y != null) ops.push({ kind: "hline", y: pix[0].y, color, width, alpha, handle: pix[0], label: d.properties.label });
           break;
+        case "horizontal_ray":
+          if (pix[0]?.x != null && pix[0]?.y != null) {
+            ops.push({ kind: "segment", x1: pix[0].x, y1: pix[0].y, x2: paneWidth(this.manager.core), y2: pix[0].y, color, width, alpha, handles: [pix[0]] });
+          }
+          break;
         case "vertical_line":
           if (pix[0]?.x != null) ops.push({ kind: "vline", x: pix[0].x, color, width, alpha, handle: pix[0] });
           break;
@@ -1534,7 +1576,7 @@
         case "extended_line":
           if (pix[0]?.x != null && pix[1]?.x != null) {
             const clipped = clipParametricLineToRect(
-              pix[0], pix[1], this.manager.core.container.clientWidth, this.manager.core.container.clientHeight,
+              pix[0], pix[1], paneWidth(this.manager.core), paneHeight(this.manager.core),
               d.type === "ray" ? "ray" : "line",
             );
             if (clipped) ops.push({ kind: "segment", ...clipped, color, width, alpha, handles: [pix[0], pix[1]] });
@@ -1581,7 +1623,7 @@
           if (pix[0]?.x != null && pix[1]?.x != null) {
             ops.push({
               kind: "timerange", d, x1: pix[0].x, x2: pix[1].x, color, width, alpha,
-              handles: [pix[0], pix[1]], h: this.manager.core.container.clientHeight,
+              handles: [pix[0], pix[1]], h: paneHeight(this.manager.core),
             });
           }
           break;
@@ -1597,7 +1639,7 @@
               kind: "fib", d, x1: Math.min(pix[0].x, pix[1].x), color, width, alpha,
               handles: [pix[0], pix[1]], levels: FIB_RETRACEMENT_LEVELS,
               priceAt: (level) => d.points[0].price + (d.points[1].price - d.points[0].price) * level,
-              w: this.manager.core.container.clientWidth,
+              w: paneWidth(this.manager.core),
             });
           }
           break;
@@ -1608,7 +1650,7 @@
               kind: "fib", d, x1: pix[2].x, color, width, alpha,
               handles: [pix[0], pix[1], pix[2]], levels: FIB_EXTENSION_LEVELS,
               priceAt: (level) => d.points[2].price + base * level,
-              w: this.manager.core.container.clientWidth,
+              w: paneWidth(this.manager.core),
             });
           }
           break;

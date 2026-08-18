@@ -61,7 +61,7 @@ def test_explicit_interaction_states_and_tool_metadata_cover_all_17_tools():
         "long_position", "short_position",
     )
     for tool in tools:
-        match = re.search(rf"{tool}:\s*\{{([^}}]+)\}}", js)
+        match = re.search(rf"\b{tool}:\s*\{{([^}}]+)\}}", js)
         assert match, tool
         body = match.group(1)
         assert "anchorCount:" in body
@@ -76,7 +76,7 @@ def test_two_point_tools_support_drag_release_via_metadata_not_tool_specific_if_
         "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
         "circle", "price_range", "time_range", "long_position", "short_position",
     ):
-        match = re.search(rf"{tool}:\s*\{{([^}}]+)\}}", js)
+        match = re.search(rf"\b{tool}:\s*\{{([^}}]+)\}}", js)
         assert match and 'creationGesture: "tap-or-drag"' in match.group(1)
         assert "dragStagePoints: 2" in match.group(1)
 

@@ -33,7 +33,7 @@
 
   const groups = [
     ["cursor","Курсор",icon("cursor"),[[null,"Курсор / выбор"]]],
-    ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"]]],
+    ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["horizontal_ray","Горизонтальный луч"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"]]],
     ["fib","Фибоначчи",icon("fib"),[["fib_retracement","Коррекция Фибоначчи"],["fib_extension","Расширение Фибоначчи"]]],
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],
