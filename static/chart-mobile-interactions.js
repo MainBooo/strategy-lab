@@ -2,8 +2,11 @@
  * Pointer ownership, creation/edit state transitions, drafts, gesture
  * thresholds and capture live in chart-engine/drawings.js. The tool rail
  * itself lives in chart-editor-terminal-mobile-v2.js; this module owns the
- * floating per-selection object toolbar, "Ещё" submenu drill-down, and
- * cross-tile tool-state bookkeeping. */
+ * "Ещё" submenu drill-down and cross-tile tool-state bookkeeping. (The
+ * per-selection object toolbar this file used to render as a bar pinned to
+ * a fixed spot at the top of the workspace has been replaced by a pill that
+ * actually tracks the selected object - see ChartTile._renderFloatToolbar/
+ * _positionFloatToolbar in chart-engine/chart-tile.js.) */
 (function (global) {
   "use strict";
 
@@ -17,9 +20,9 @@
   // users (it loads later and explicitly tears this one down - see its own
   // buildRail()), so building a second, invisible one was dead weight and a
   // source of confusion. This file now owns only what v2 doesn't: the
-  // floating object toolbar, the "Ещё" submenu drill-down, and per-tile
-  // lifecycle bookkeeping (deselecting/cancelling an in-progress tool when
-  // switching tiles or leaving the Charts tab).
+  // "Ещё" submenu drill-down and per-tile lifecycle bookkeeping (deselecting/
+  // cancelling an in-progress tool when switching tiles or leaving the
+  // Charts tab).
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -81,92 +84,6 @@
       refreshRail();
     }
   }, true);
-
-  // ------------------------------------------------------ object toolbar --
-  function drawingLabel(drawing) {
-    const def = Drawings.TOOL_DEFS && Drawings.TOOL_DEFS[drawing.type];
-    return (drawing.properties && drawing.properties.label) || (def && def.label) || drawing.type;
-  }
-
-  function renderObjectToolbar(page) {
-    const workspace = page.root && page.root.querySelector("#caWorkspace");
-    if (!workspace) return;
-    let bar = workspace.querySelector("#tvObjectToolbar");
-    if (!bar) {
-      bar = document.createElement("div");
-      bar.id = "tvObjectToolbar";
-      bar.className = "tv-object-toolbar hidden";
-      workspace.appendChild(bar);
-    }
-
-    const picker = page.root.querySelector(".sl-draw-picker");
-    if (picker && !picker.classList.contains("hidden")) {
-      bar.classList.add("hidden");
-      bar.innerHTML = "";
-      return;
-    }
-
-    const dm = activeManager(page);
-    const drawing = dm && dm.drawings.find((item) => item.id === dm.selectedId);
-    if (!drawing) {
-      bar.classList.add("hidden");
-      bar.innerHTML = "";
-      return;
-    }
-
-    const color = /^#[0-9a-f]{6}$/i.test(drawing.properties.color || "") ? drawing.properties.color : "#7c8cff";
-    const width = Number(drawing.properties.width || 1);
-    const dash = drawing.properties.dash || "solid";
-    const isTextual = drawing.type === "text" || drawing.type === "note";
-    bar.innerHTML = `
-      <span class="tv-object-name" title="${escapeHtml(drawingLabel(drawing))}">${escapeHtml(drawingLabel(drawing))}</span>
-      <input class="tv-obj-control tv-color" data-tv-prop-color type="color" value="${color}" title="Цвет">
-      ${isTextual ? `
-        <button class="tv-obj-btn" data-tv-obj-edit-text title="Редактировать текст" aria-label="Редактировать текст">✎</button>
-      ` : `
-        <select class="tv-obj-control" data-tv-prop-width title="Толщина">${[1,2,3,4].map((n) => `<option value="${n}" ${width === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
-        <select class="tv-obj-control" data-tv-prop-dash title="Стиль линии">
-          <option value="solid" ${dash === "solid" ? "selected" : ""}>—</option>
-          <option value="dashed" ${dash === "dashed" ? "selected" : ""}>– –</option>
-          <option value="dotted" ${dash === "dotted" ? "selected" : ""}>···</option>
-        </select>
-      `}
-      <button class="tv-obj-btn ${drawing.locked ? "active" : ""}" data-tv-obj-lock title="${drawing.locked ? "Разблокировать" : "Заблокировать"}">${drawing.locked ? "🔒" : "🔓"}</button>
-      <button class="tv-obj-btn" data-tv-obj-duplicate title="Дублировать">⧉</button>
-      <button class="tv-obj-btn" data-tv-obj-more title="Свойства">⚙</button>
-      <button class="tv-obj-btn danger" data-tv-obj-delete title="Удалить">⌫</button>
-    `;
-    bar.classList.remove("hidden");
-
-    const colorInput = bar.querySelector("[data-tv-prop-color]");
-    if (colorInput) colorInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { color: e.target.value } });
-    const widthInput = bar.querySelector("[data-tv-prop-width]");
-    if (widthInput) widthInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { width: Number(e.target.value) } });
-    const dashInput = bar.querySelector("[data-tv-prop-dash]");
-    if (dashInput) dashInput.onchange = (e) => dm.updateDrawing(drawing.id, { properties: { dash: e.target.value } });
-    const editTextButton = bar.querySelector("[data-tv-obj-edit-text]");
-    if (editTextButton) editTextButton.onclick = () => {
-      if (typeof page._setBottomCollapsed === "function") page._setBottomCollapsed(false);
-      const tab = page.root.querySelector('.ca-side-tab[data-side="props"]');
-      if (tab) tab.click();
-      if (typeof page._renderProps === "function") page._renderProps();
-      requestAnimationFrame(() => {
-        const field = page.root.querySelector("#propText");
-        if (!field) return;
-        field.focus();
-        if (typeof field.setSelectionRange === "function") field.setSelectionRange(field.value.length, field.value.length);
-        if (typeof field.scrollIntoView === "function") field.scrollIntoView({ block: "nearest" });
-      });
-    };
-    bar.querySelector("[data-tv-obj-lock]").onclick = () => dm.updateDrawing(drawing.id, { locked: !drawing.locked });
-    bar.querySelector("[data-tv-obj-duplicate]").onclick = () => dm.duplicateDrawing(drawing.id);
-    bar.querySelector("[data-tv-obj-delete]").onclick = () => dm.removeDrawing(drawing.id);
-    bar.querySelector("[data-tv-obj-more]").onclick = () => {
-      if (typeof page._setBottomCollapsed === "function") page._setBottomCollapsed(false);
-      const tab = page.root.querySelector('.ca-side-tab[data-side="props"]');
-      if (tab) tab.click();
-    };
-  }
 
   // ---------------------------------------------------------- overflow UI --
   if (typeof Page._renderMorePopover === "function") {
@@ -248,21 +165,6 @@
         width: 50px; min-width: 50px; padding: 5px 4px; gap: 2px; overflow: visible;
         border-right: 1px solid var(--line); background: rgba(13,18,30,.98);
       }
-      #chartsRoot .tv-object-toolbar {
-        position:absolute; z-index:82; top:58px; left:50%; transform:translateX(-50%);
-        display:flex; align-items:center; gap:5px; width:max-content; max-width:calc(100% - 130px);
-        min-height:42px; padding:5px 7px; box-sizing:border-box; border:1px solid rgba(140,154,186,.25);
-        border-radius:10px; background:rgba(20,26,42,.97); box-shadow:0 14px 42px rgba(0,0,0,.40);
-        overflow-x:auto; scrollbar-width:none;
-      }
-      #chartsRoot .tv-object-toolbar::-webkit-scrollbar { display:none; }
-      #chartsRoot .tv-object-toolbar.hidden { display:none; }
-      #chartsRoot .tv-object-name { flex:0 0 auto; max-width:150px; padding:0 5px; color:#dfe5f2; font-size:12px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      #chartsRoot .tv-obj-control, #chartsRoot .tv-obj-btn { flex:0 0 auto; width:auto !important; min-width:34px; height:30px; border:1px solid rgba(140,154,186,.18); border-radius:6px; background:rgba(255,255,255,.025); color:#dbe1ed; font:600 12px/1 system-ui,sans-serif; }
-      #chartsRoot .tv-obj-control[data-tv-prop-width] { width:58px !important; }
-      #chartsRoot .tv-obj-control[data-tv-prop-dash] { width:54px !important; }
-      #chartsRoot .tv-obj-btn { cursor:pointer; padding:0 8px; }
-      #chartsRoot .tv-color { width:32px !important; min-width:32px; padding:3px; cursor:pointer; }
       #chartsRoot .tv-indicator-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
       #chartsRoot .tv-indicator-title { font-size:13px; font-weight:700; color:#edf1fa; }
       #chartsRoot .tv-indicator-count { color:#7f8aa1; font-size:11px; }
@@ -275,9 +177,6 @@
       #chartsRoot .tv-indicator-tab.active { color:#dfe5f5; background:rgba(124,140,255,.13); }
       @media (max-width:620px) {
         #chartsRoot .ca-tools.tv-rail { width:46px; min-width:46px; padding-left:2px; padding-right:2px; }
-        #chartsRoot .tv-object-toolbar { top:58px; left:53px; right:auto; transform:none; width:max-content; max-width:calc(100vw - 72px); min-height:38px; gap:4px; padding:4px 5px; }
-        #chartsRoot .tv-object-name { display:none; }
-        #chartsRoot .tv-obj-control, #chartsRoot .tv-obj-btn { height:30px; min-width:32px; }
       }
     `;
     document.head.appendChild(style);
@@ -309,13 +208,6 @@
   }
 
   // ------------------------------------------------------------ page hooks --
-  const originalBuild = Page._build;
-  Page._build = function () {
-    const result = originalBuild.apply(this, arguments);
-    renderObjectToolbar(this);
-    return result;
-  };
-
   if (typeof Page._setBottomCollapsed === "function") {
     const originalSetBottomCollapsed = Page._setBottomCollapsed;
     Page._setBottomCollapsed = function () {
@@ -330,7 +222,6 @@
     Page._renderProps = function () {
       const result = originalRenderProps.apply(this, arguments);
       refreshRail();
-      renderObjectToolbar(this);
       return result;
     };
   }
@@ -342,7 +233,6 @@
       deactivateEveryTool(this, { deselectActive: false });
       const result = originalSetActiveTile.apply(this, arguments);
       refreshRail();
-      renderObjectToolbar(this);
       return result;
     };
   }

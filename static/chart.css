@@ -533,6 +533,31 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 }
 .ca-scale-plus:hover, .ca-scale-plus:active { background: var(--accent); color: #fff; }
 .ca-scale-plus.hidden { display: none; }
+/* Floating toolbar over a selected drawing (ТЗ "Floating toolbar при
+ * выборе") - position (left/top) is set from JS per-frame, see
+ * ChartTile._positionFloatToolbar. */
+.ca-float-toolbar {
+  position: absolute; z-index: 5; display: flex; align-items: center; gap: 2px;
+  padding: 3px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.4); pointer-events: auto;
+}
+.ca-float-toolbar.hidden { display: none; }
+.ca-ft-btn {
+  width: 26px; height: 26px; padding: 0; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 6px; color: var(--text-dim, #9ca8bd); cursor: pointer;
+}
+.ca-ft-btn:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.ca-ft-btn.active { background: var(--accent); color: #fff; }
+.ca-ft-btn.ca-ft-danger:hover { background: rgba(255,112,129,.15); color: #ff7081; }
+.ca-ft-color {
+  width: 20px; height: 20px; margin: 0 2px; padding: 0; border: 1px solid var(--line); border-radius: 5px;
+  background: none; cursor: pointer;
+}
+.ca-ft-sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+.ca-ft-select {
+  height: 26px; padding: 0 3px; font-size: 11px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel-2); color: var(--text);
+}
 
 @media (max-width: 980px) {
   .ca-tile-grid.layout-2h,

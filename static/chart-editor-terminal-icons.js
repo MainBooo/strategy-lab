@@ -33,11 +33,6 @@
     root.querySelectorAll("#gtAlertsPop [data-al-del]").forEach((b) => put(b, "trash"));
     root.querySelectorAll("#gtTemplatesPop [data-del], #gtTemplatesPop [data-ws-del]").forEach((b) => put(b, "trash"));
     root.querySelectorAll("#gtTemplatesPop [data-ws-rename]").forEach((b) => put(b, "pencil"));
-    root.querySelectorAll("[data-tv-obj-edit-text]").forEach((b) => put(b, "pencil"));
-    root.querySelectorAll("[data-tv-obj-lock]").forEach((b) => put(b, "lock"));
-    root.querySelectorAll("[data-tv-obj-duplicate]").forEach((b) => put(b, "copy"));
-    root.querySelectorAll("[data-tv-obj-more]").forEach((b) => put(b, "gear"));
-    root.querySelectorAll("[data-tv-obj-delete]").forEach((b) => put(b, "trash"));
     root.querySelectorAll('.ca-tile-btn[data-role="close"]').forEach((b) => put(b, "close"));
     root.querySelectorAll('.ca-tile-btn[data-role="fs"]').forEach((b) => put(b, b.closest(".ca-tile")?.classList.contains("is-fullscreen") ? "contract" : "expand"));
     put(root.querySelector?.("#caUndoBtn"), "undo");

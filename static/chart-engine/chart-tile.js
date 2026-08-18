@@ -63,6 +63,29 @@
     { label: "6М", days: 182 }, { label: "1Г", days: 365 }, { label: "5Л", days: 365 * 5 },
   ];
 
+  // Icons for the floating toolbar (see ChartTile._renderFloatToolbar below).
+  // lock/eye/trash paths match the ones already used by the mobile drawing
+  // rail (chart-editor-terminal-mobile-v2.js) so the same action reads as
+  // the same glyph everywhere in the app, even though that file's icon() is
+  // a separate closure this engine-level file has no business depending on.
+  const FT_ICONS = {
+    lock: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12s3-6 9-6 9 6 9 6-3 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="2.5"/></svg>',
+    duplicate: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="13" height="13" rx="2"/><path d="M9 20h9a2 2 0 002-2V9"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>',
+    edittext: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2 2 0 000-2.8l-1.2-1.2a2 2 0 00-2.8 0L4 15.5V20z"/><path d="M12.5 6.5l3 3"/></svg>',
+  };
+  // Same conversion as chart-analysis.js's toHex() (Properties panel's own
+  // color input) - duplicated rather than shared because that file is a
+  // page-level module this engine-level one has no business depending on.
+  function ftColorHex(color) {
+    if (!color || color[0] === "#") return color || "#7c8cff";
+    const m = color.match(/rgba?\((\d+),(\d+),(\d+)/);
+    if (!m) return "#7c8cff";
+    return "#" + m.slice(1, 4).map((x) => Number(x).toString(16).padStart(2, "0")).join("");
+  }
+
   let _seq = 0;
 
   function fmtPrice(n) {
@@ -157,8 +180,9 @@
      * make it the active one). The close button is always rendered - the
      * workspace hides it via CSS (`.ca-tile-grid.layout-1 .ca-tile-close`)
      * when only one tile exists, rather than us tracking tile count here. */
-    mount(container, { onActivate, onClose, onScalePlusTap } = {}) {
+    mount(container, { onActivate, onClose, onScalePlusTap, onFloatToolbarMore } = {}) {
       this.el = container;
+      this._onFloatToolbarMore = onFloatToolbarMore || null;
       container.className = "ca-tile";
       container.innerHTML = `
         <div class="ca-tile-header" data-role="header">
@@ -171,6 +195,7 @@
         <div class="ca-tile-chart-host" data-role="chartHost">
           <button class="ca-tile-live-btn hidden" data-role="live" type="button">К последней цене</button>
           <button class="ca-scale-plus hidden" data-role="scalePlus" type="button" title="Действие по цене" aria-label="Действие по цене">+</button>
+          <div class="ca-float-toolbar hidden" data-role="floatToolbar"></div>
         </div>
       `;
 
@@ -252,6 +277,17 @@
       this.core.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (!this._applyingRange) this._rangeChangeCbs.forEach((cb) => cb(range));
       });
+
+      // Floating toolbar (ТЗ "Floating toolbar при выборе"): a small pill of
+      // quick style/lock/hide/duplicate/delete controls that tracks the
+      // selected drawing's own topmost point, instead of the object's only
+      // editing surface being the bottom "Свойства" panel. Content rebuilds
+      // on selection change (onChange); position alone updates on every
+      // real pane redraw (onViewUpdate, see drawings.js) so it tracks
+      // through pan/zoom/live ticks without its own polling loop.
+      const floatToolbar = container.querySelector('[data-role="floatToolbar"]');
+      this.drawingMgr.onChange(() => this._renderFloatToolbar(floatToolbar));
+      this.drawingMgr.onViewUpdate(() => this._positionFloatToolbar(floatToolbar));
 
       // Alert lines (ТЗ §93): an enabled alert for this tile's symbol shows
       // as a real horizontal price line on the chart, not just a row in the
@@ -366,6 +402,97 @@
       btn.classList.remove("hidden");
       btn.style.top = `${Math.round(param.point.y)}px`;
       btn.style.right = `${Math.round(gutterWidth) + 4}px`;
+    }
+
+    /** Floating toolbar content (ТЗ "Floating toolbar при выборе"): a
+     * TradingView-style pill of quick actions for the selected drawing,
+     * rebuilt on every DrawingManager change (selection changed, or any
+     * property/lock/hidden flip on the drawing this pill already belongs
+     * to - same "just re-render, onchange not oninput keeps focus sane"
+     * approach as chart-analysis.js's own _renderProps). Actions duplicate
+     * what the bottom "Свойства" panel and right-click menu already offer -
+     * this is a shortcut for the common ones, not a new source of truth. */
+    _renderFloatToolbar(el) {
+      if (!el) return;
+      const dm = this.drawingMgr;
+      const d = dm && dm.drawings.find((x) => x.id === dm.selectedId);
+      if (!d) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+      el.classList.remove("hidden");
+      const isTextual = d.type === "text" || d.type === "note";
+      const width = Number(d.properties.width || 1);
+      const dash = d.properties.dash || "solid";
+      // Width/dash selects and the text-edit shortcut match the old fixed-
+      // position #tvObjectToolbar bar this pill replaces (chart-mobile-
+      // interactions.js's renderObjectToolbar, now removed) exactly, so
+      // nothing already-shipped regresses by switching to a pill that
+      // actually tracks the selected object instead of sitting pinned to a
+      // fixed spot at the top of the workspace.
+      el.innerHTML = `
+        <input type="color" class="ca-ft-color" data-role="color" value="${ftColorHex(d.properties.color)}" title="Цвет" aria-label="Цвет">
+        ${isTextual ? `
+        <button type="button" class="ca-ft-btn" data-act="edittext" title="Редактировать текст" aria-label="Редактировать текст">${FT_ICONS.edittext}</button>
+        ` : `
+        <select class="ca-ft-select" data-role="width" title="Толщина" aria-label="Толщина">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${width === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
+        <select class="ca-ft-select" data-role="dash" title="Стиль линии" aria-label="Стиль линии">
+          <option value="solid" ${dash === "solid" ? "selected" : ""}>—</option>
+          <option value="dashed" ${dash === "dashed" ? "selected" : ""}>– –</option>
+          <option value="dotted" ${dash === "dotted" ? "selected" : ""}>···</option>
+        </select>
+        `}
+        <span class="ca-ft-sep"></span>
+        <button type="button" class="ca-ft-btn ${d.locked ? "active" : ""}" data-act="lock" title="${d.locked ? "Разблокировать" : "Заблокировать"}" aria-label="Заблокировать">${FT_ICONS.lock}</button>
+        <button type="button" class="ca-ft-btn ${d.hidden ? "active" : ""}" data-act="hide" title="${d.hidden ? "Показать" : "Скрыть"}" aria-label="Скрыть">${FT_ICONS.eye}</button>
+        <button type="button" class="ca-ft-btn" data-act="dup" title="Дублировать (Ctrl+D)" aria-label="Дублировать">${FT_ICONS.duplicate}</button>
+        <button type="button" class="ca-ft-btn" data-act="more" title="Настройки" aria-label="Настройки">${FT_ICONS.more}</button>
+        <span class="ca-ft-sep"></span>
+        <button type="button" class="ca-ft-btn ca-ft-danger" data-act="trash" title="Удалить" aria-label="Удалить">${FT_ICONS.trash}</button>
+      `;
+      // pointerdown (not click): the pill sits right on top of the
+      // drawing's own hit region by design (see the .ca-float-toolbar guard
+      // in DrawingManager._onPointerDown/_onDblClick) - stopping here keeps
+      // a stray pointerdown from also reaching the tile-activate/pan
+      // listeners bound higher up the same container, matching the
+      // scalePlus/live-button pattern already used in this file.
+      el.onpointerdown = (e) => e.stopPropagation();
+      const colorInput = el.querySelector('[data-role="color"]');
+      colorInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { color: e.target.value } });
+      const widthInput = el.querySelector('[data-role="width"]');
+      if (widthInput) widthInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { width: Number(e.target.value) } });
+      const dashInput = el.querySelector('[data-role="dash"]');
+      if (dashInput) dashInput.onchange = (e) => dm.updateDrawing(d.id, { properties: { dash: e.target.value } });
+      const editTextBtn = el.querySelector('[data-act="edittext"]');
+      if (editTextBtn) editTextBtn.onclick = () => { if (this._onFloatToolbarMore) this._onFloatToolbarMore(this, { focusText: true }); };
+      el.querySelector('[data-act="lock"]').onclick = () => dm.updateDrawing(d.id, { locked: !d.locked });
+      el.querySelector('[data-act="hide"]').onclick = () => dm.updateDrawing(d.id, { hidden: !d.hidden });
+      el.querySelector('[data-act="dup"]').onclick = () => dm.duplicateDrawing(d.id);
+      el.querySelector('[data-act="trash"]').onclick = () => dm.removeDrawing(d.id);
+      el.querySelector('[data-act="more"]').onclick = () => { if (this._onFloatToolbarMore) this._onFloatToolbarMore(this); };
+      this._positionFloatToolbar(el);
+    }
+
+    /** Anchors the toolbar just above the selected drawing's topmost point
+     * (DrawingManager.selectionAnchor()), flipping below it and clamping
+     * horizontally when that would push it off the pane - same pane-pixel
+     * space as selectionAnchor() itself (DrawingManager.paneSize()), not
+     * core.container's full size (see paneWidth/paneHeight's doc comment:
+     * the gutter/time-strip live outside that space). Runs on every real
+     * pane redraw (onViewUpdate) so it tracks pan/zoom/live ticks without
+     * its own polling loop. */
+    _positionFloatToolbar(el) {
+      if (!el || el.classList.contains("hidden")) return;
+      const dm = this.drawingMgr;
+      const anchor = dm && dm.selectionAnchor();
+      if (!anchor) { el.classList.add("hidden"); return; }
+      const { width: paneW, height: paneH } = dm.paneSize();
+      const w = el.offsetWidth || 160;
+      const h = el.offsetHeight || 30;
+      const margin = 6;
+      let left = anchor.x - w / 2;
+      left = Math.max(margin, Math.min(left, paneW - w - margin));
+      const above = anchor.y - h - 12;
+      const top = above >= margin ? above : Math.min(anchor.y + 12, paneH - h - margin);
+      el.style.left = `${Math.round(left)}px`;
+      el.style.top = `${Math.round(top)}px`;
     }
 
     /** Adds/updates/removes this tile's price lines to exactly match its

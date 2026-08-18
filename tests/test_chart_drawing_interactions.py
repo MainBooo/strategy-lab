@@ -258,7 +258,7 @@ def test_mobile_escape_claims_event_before_delegating_to_engine():
 def test_touch_object_editing_and_textual_editor_contracts():
     drawings = Path("static/chart-engine/drawings.js").read_text()
     analysis = Path("static/chart-analysis.js").read_text()
-    mobile = Path("static/chart-mobile-interactions.js").read_text()
+    tile = Path("static/chart-engine/chart-tile.js").read_text()
 
     assert "TOUCH_HIT_TOLERANCE_PX = 18" in drawings
     assert 'pointerType: e.pointerType || "mouse"' in drawings
@@ -270,8 +270,12 @@ def test_touch_object_editing_and_textual_editor_contracts():
     assert 'textarea id="propText"' in analysis
     assert "textInput.onchange" in analysis
     assert "textInput.oninput" not in analysis
-    assert "data-tv-obj-edit-text" in mobile
-    assert 'const isTextual = drawing.type === "text" || drawing.type === "note"' in mobile
+    # The edit-text shortcut for textual drawings now lives on the floating
+    # per-selection toolbar (ChartTile._renderFloatToolbar), not the old bar
+    # pinned to a fixed spot at the top of the workspace.
+    assert 'data-act="edittext"' in tile
+    assert 'const isTextual = d.type === "text" || d.type === "note"' in tile
+    assert "focusText" in tile
 
 
 def test_boundary_drag_uses_one_continuous_coordinate_pipeline_for_every_tool():

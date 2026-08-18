@@ -629,6 +629,19 @@
       this._listeners.forEach((cb) => cb(this, detail || {}));
     }
 
+    /** Fires every real pane redraw (see DrawingLayerPrimitive.updateAllViews)
+     * - much more frequent than onChange, and deliberately separate from it:
+     * the floating toolbar needs repositioning on pan/zoom/live-tick too,
+     * none of which are a DrawingManager "change". */
+    onViewUpdate(cb) {
+      (this._viewUpdateListeners || (this._viewUpdateListeners = new Set())).add(cb);
+      return () => this._viewUpdateListeners && this._viewUpdateListeners.delete(cb);
+    }
+
+    _notifyViewUpdate() {
+      if (this._viewUpdateListeners) this._viewUpdateListeners.forEach((cb) => cb(this));
+    }
+
     loadDrawings(rows) {
       this.drawings = rows.map((r) => ({
         id: r.id, type: r.type, points: r.points, properties: r.properties,
@@ -872,6 +885,35 @@
       return point ? { time: point.time, price: point.price } : { time: null, price: null };
     }
 
+    /** Screen-pixel anchor for the floating toolbar (ТЗ "Floating toolbar
+     * при выборе"): the topmost model point of the selected drawing,
+     * converted the same way the pane view converts every drawing's points
+     * for painting (toPixels). Good enough for every tool type without
+     * needing per-type bounding-box math - lines/rectangles/ranges/channels
+     * all use their corner/anchor points as model points, so "topmost
+     * point" already sits at or very near the shape's actual visual top.
+     * horizontal_line/vertical_line only have one coordinate (no time or no
+     * price respectively) - falls back to pane-center-x / near-top-y so the
+     * toolbar still lands somewhere sane instead of null. */
+    selectionAnchor() {
+      const d = this.drawings.find((x) => x.id === this.selectedId);
+      if (!d) return null;
+      const pix = toPixels(this.core, d.points);
+      const both = pix.filter((p) => p && p.x != null && p.y != null);
+      if (both.length) return both.reduce((top, p) => (p.y < top.y ? p : top));
+      const withY = pix.find((p) => p && p.y != null);
+      if (withY) return { x: paneWidth(this.core) / 2, y: withY.y };
+      const withX = pix.find((p) => p && p.x != null);
+      if (withX) return { x: withX.x, y: 40 };
+      return null;
+    }
+
+    /** Pane canvas size in the same pixel space as selectionAnchor()/
+     * toPixels() - the floating toolbar clamps itself inside this, not
+     * core.container's full clientWidth/Height (see paneWidth/paneHeight's
+     * own doc comment above: the gutter/strip live outside the pane). */
+    paneSize() { return { width: paneWidth(this.core), height: paneHeight(this.core) }; }
+
     // ---- Pointer Events interaction state machine ----
     _bindDom() {
       const el = this.core.container;
@@ -1092,6 +1134,14 @@
 
     _onPointerDown(e) {
       if (e.isPrimary === false || this._pointerSession) return;
+      // The floating toolbar (chart-tile.js) is deliberately painted right
+      // on top of the selected drawing's own anchor point, so a press on one
+      // of its buttons lands at pixel coordinates that would otherwise
+      // hit-test straight onto that same drawing below it - without this,
+      // clicking e.g. "Удалить" would also claim the pointer for an edit/
+      // drag session on the drawing an instant before the button's own
+      // click handler removes it.
+      if (e.target && e.target.closest && e.target.closest(".ca-float-toolbar")) return;
       const pos = this._relXY(e);
 
       if (this.activeTool) {
@@ -1456,6 +1506,7 @@
     }
 
     _onDblClick(e) {
+      if (e.target && e.target.closest && e.target.closest(".ca-float-toolbar")) return;
       if (this.activeTool && this.draft && TOOL_DEFS[this.draft.type].completion === "explicit") {
         if (e.preventDefault) e.preventDefault();
         this._finishDraft();
@@ -1541,7 +1592,11 @@
     }
     attached(params) { this._requestUpdate = params && params.requestUpdate; }
     requestUpdate() { this._requestUpdate && this._requestUpdate(); }
-    updateAllViews() { this._view.update(); }
+    // Fires on every real pane redraw (pan/zoom/resize/live tick) - the
+    // floating toolbar's position hook (chart-tile.js) piggybacks on this
+    // instead of its own RAF/event-listener loop, so it always matches
+    // exactly what got painted this frame.
+    updateAllViews() { this._view.update(); this.manager._notifyViewUpdate && this.manager._notifyViewUpdate(); }
     paneViews() { return [this._view]; }
   }
 

@@ -1162,6 +1162,19 @@
             onActivate: (t) => this._setActiveTile(t.id),
             onClose: (t) => this._closeTile(t.id),
             onScalePlusTap: (t, price, time) => this._openScalePlusMenu(t, price, time),
+            onFloatToolbarMore: (t, { focusText } = {}) => {
+              if (typeof this._setBottomCollapsed === "function") this._setBottomCollapsed(false);
+              const tab = this.root.querySelector('.ca-side-tab[data-side="props"]');
+              if (tab) tab.click();
+              if (!focusText) return;
+              requestAnimationFrame(() => {
+                const field = this.root.querySelector("#propText");
+                if (!field) return;
+                field.focus();
+                if (typeof field.setSelectionRange === "function") field.setSelectionRange(field.value.length, field.value.length);
+                if (typeof field.scrollIntoView === "function") field.scrollIntoView({ block: "nearest" });
+              });
+            },
           });
           tile.setSecurities(this.securities);
           tile.drawingMgr.onChange((mgr, detail) => {
