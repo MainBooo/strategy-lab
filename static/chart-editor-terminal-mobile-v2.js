@@ -39,7 +39,7 @@
 
   const groups = [
     ["cursor","Курсор",icon("cursor"),[[null,"Курсор / выбор"]]],
-    ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["horizontal_ray","Горизонтальный луч"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"]]],
+    ["trend","Линии",icon("trend"),[["trend_line","Линия тренда"],["ray","Луч"],["horizontal_line","Горизонтальная линия"],["horizontal_ray","Горизонтальный луч"],["vertical_line","Вертикальная линия"],["parallel_channel","Параллельный канал"],["trend_angle","Угол тренда"],["regression_trend","Регрессионный тренд"],["flat_top_bottom","Плоский верх/низ"],["disjoint_channel","Несвязный канал"]]],
     ["fib","Фибоначчи",icon("fib"),[["fib_retracement","Коррекция Фибоначчи"],["fib_extension","Расширение Фибоначчи"],["fib_channel","Канал Фибоначчи"],["fib_wedge","Клин Фибоначчи"],["fib_time_zone","Временные зоны Фибоначчи"],["trend_based_fib_time","Временные зоны по тренду"],["fib_speed_resistance_fan","Веер скорости Фибоначчи"],["fib_pitchfan","Веер Фибоначчи (Pitchfan)"],["fib_circles","Круги Фибоначчи"],["fib_arcs","Дуги Фибоначчи"],["fib_spiral","Спираль Фибоначчи"]]],
     ["gann","Ганн и вилы",icon("gann"),[["pitchfork","Вилы Эндрюса"],["pitchfork_schiff","Вилы Шиффа"],["pitchfork_modified_schiff","Модиф. вилы Шиффа"],["gann_fan","Веер Ганна"]]],
     ["pattern","Паттерны",icon("pattern"),[["xabcd_pattern","Паттерн XABCD"],["abcd_pattern","Паттерн ABCD"],["triangle_pattern","Паттерн треугольник"],["three_drives_pattern","Три драйва"],["head_shoulders_pattern","Голова и плечи"],["elliott_impulse_wave","Волна Эллиотта (импульс)"],["elliott_correction_wave","Волна Эллиотта (коррекция)"]]],

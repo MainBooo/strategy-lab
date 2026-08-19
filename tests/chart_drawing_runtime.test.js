@@ -259,20 +259,21 @@ const allTools = [
   "path", "curve", "arc", "double_curve",
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
   "fib_channel", "fib_wedge", "trend_based_fib_time", "fib_pitchfan", "fib_spiral",
-  "volume_profile",
+  "volume_profile", "trend_angle", "regression_trend", "flat_top_bottom", "disjoint_channel",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
 // env.manager.drawings (see its own dedicated test below), so every loop
 // below that does env.manager.addDrawing(tool, ...) to exercise persisted-
 // object editing/hit-testing/boundary behavior must skip it. "anchored_vwap"
-// and "volume_profile" are skipped for a different reason: both are
-// computed from core.candles (empty in makeManager's identity-conversion
-// fake environment) rather than fixed geometry, so they have no hittable
-// "body" distinct from their handles the way every other tool's fixed
-// geometry does - findBodyPoint() would spin forever looking for one. Both
-// get their own dedicated test with real candle data below instead.
-const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap" && tool !== "volume_profile");
+// "volume_profile" and "regression_trend" are skipped for a different
+// reason: all three are computed from core.candles (empty in makeManager's
+// identity-conversion fake environment) rather than fixed geometry, so
+// they have no hittable "body" distinct from their handles the way every
+// other tool's fixed geometry does - findBodyPoint() would spin forever
+// looking for one. All three get their own dedicated test with real candle
+// data below instead.
+const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap" && tool !== "volume_profile" && tool !== "regression_trend");
 for (const tool of allTools) {
   assert.ok(TOOL_DEFS[tool].creationGesture, `${tool} missing creationGesture`);
   assert.ok(TOOL_DEFS[tool].completion, `${tool} missing completion`);
@@ -607,6 +608,49 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   assert.deepStrictEqual({ x1: op.edge2.x1, y1: op.edge2.y1, x2: op.edge2.x2, y2: op.edge2.y2 }, { x1: 40, y1: 100, x2: 100, y2: 230 }, "fib_wedge: edge2 should be anchor0->anchor2");
 }
 
+// Trend Angle: the label carries the on-screen slope in degrees, computed
+// straight from the two anchors' pixel projection (identity-conversion
+// fake environment, so pixel == {time,price} here) - dx=120, dy=80,
+// angle = -atan2(80,120) in degrees.
+{
+  const env = makeManager();
+  env.manager.addDrawing("trend_angle", [{ time: 40, price: 100 }, { time: 160, price: 180 }]);
+  const op = renderOps(env).find((o) => o.kind === "trend_angle");
+  assert.ok(op, "trend_angle: no render op produced");
+  assert.deepStrictEqual({ x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2 }, { x1: 40, y1: 100, x2: 160, y2: 180 });
+  const expectedAngle = -(Math.atan2(80, 120) * 180) / Math.PI;
+  assert.ok(Math.abs(op.angle - expectedAngle) < 1e-9, `trend_angle: angle off (${op.angle} vs ${expectedAngle})`);
+}
+
+// Flat Top/Bottom: the slanted edge is anchor0->anchor1 exactly (same as
+// parallel_channel's own first edge); the flat edge holds anchor2's price
+// constant across anchor0.time/anchor1.time - not a parallel offset, a
+// literal horizontal line, unlike parallel_channel's own second edge.
+{
+  const env = makeManager();
+  env.manager.addDrawing("flat_top_bottom", [{ time: 40, price: 100 }, { time: 160, price: 180 }, { time: 100, price: 230 }]);
+  const op = renderOps(env).find((o) => o.kind === "channel");
+  assert.ok(op, "flat_top_bottom: no render op produced");
+  assert.deepStrictEqual({ x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2 }, { x1: 40, y1: 100, x2: 160, y2: 180 }, "flat_top_bottom: slanted edge should be anchor0->anchor1 exactly");
+  assert.deepStrictEqual({ x1: op.ox1, y1: op.oy1, x2: op.ox2, y2: op.oy2 }, { x1: 40, y1: 230, x2: 160, y2: 230 }, "flat_top_bottom: flat edge should hold anchor2's price at both anchor0/anchor1 times");
+  assert.strictEqual(op.handles.length, 3);
+}
+
+// Disjoint Channel: both segments are drawn exactly as their own 2 anchors
+// - unlike parallel_channel/flat_top_bottom, line2 is NOT derived from
+// line1 at all (no parallel offset, no flat-price projection), so this
+// locks down that the render path passes anchor2/anchor3 straight through.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("disjoint_channel", [{ time: 20, price: 80 }, { time: 60, price: 200 }, { time: 100, price: 120 }, { time: 140, price: 220 }]);
+  const op = renderOps(env).find((o) => o.kind === "channel");
+  assert.ok(op, "disjoint_channel: no render op produced");
+  assert.deepStrictEqual({ x1: op.x1, y1: op.y1, x2: op.x2, y2: op.y2 }, { x1: 20, y1: 80, x2: 60, y2: 200 }, "disjoint_channel: line1 should be anchor0->anchor1");
+  assert.deepStrictEqual({ x1: op.ox1, y1: op.oy1, x2: op.ox2, y2: op.oy2 }, { x1: 100, y1: 120, x2: 140, y2: 220 }, "disjoint_channel: line2 should be anchor2->anchor3, independent of line1");
+  assert.strictEqual(op.handles.length, 4);
+  assert.strictEqual(d.points.length, 4);
+}
+
 // Trend-Based Fib Time: zones must project from anchor1 (the trend's end),
 // not anchor0 - the one thing distinguishing it from fib_time_zone, whose
 // render op kind it otherwise reuses unchanged.
@@ -733,6 +777,83 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   tap(env, 70, 90, 1000);
   assert.strictEqual(env.manager.drawings.length, 1);
   assert.doesNotThrow(() => renderOps(env), "anchored_vwap: render must not throw with zero candles");
+}
+
+// Regression Trend: like anchored_vwap/volume_profile, a computed line
+// (OLS regression of candle closes in [anchor0.time, anchor1.time]) plus
+// deviation bands rather than fixed geometry - needs real candle data.
+// candles: (100,close=10), (160,close=12), (220,close=17) - deliberately
+// NOT collinear, so both the regression slope/intercept and the deviation
+// (stddev) are exercised, not just the trivial zero-residual case.
+// By hand: sumX=480 sumY=39 sumXY=6660 sumXX=84000, n=3
+// denom = 3*84000 - 480^2 = 21600
+// slope = (3*6660 - 480*39) / 21600 = 1260/21600 = 0.058333...
+// intercept = (39 - slope*480) / 3 = 11/3 = 3.666666...
+// mid@100 = 9.5, mid@220 = 16.5 (predicted); residuals vs actual closes:
+// 10-9.5=0.5, 12-13=-1, 17-16.5=0.5 -> sumSqResid=1.5 -> variance=0.5 ->
+// stddev=sqrt(0.5)=0.7071067811865476 -> offset = 2*stddev = 1.4142135624
+{
+  const container = new FakeTarget();
+  const timeScale = { coordinateToTime: (x) => x, timeToCoordinate: (time) => time };
+  const chart = { timeScale: () => timeScale, applyOptions: () => {} };
+  const series = {
+    attachPrimitive(p) { p.attached({ requestUpdate() {} }); },
+    detachPrimitive() {},
+    coordinateToPrice: (y) => y,
+    priceToCoordinate: (price) => price,
+  };
+  const candles = [
+    { time: 100, open: 9, high: 11, low: 9, close: 10, volume: 100 },
+    { time: 160, open: 10, high: 13, low: 10, close: 12, volume: 100 },
+    { time: 220, open: 12, high: 18, low: 12, close: 17, volume: 100 },
+  ];
+  const core = { container, chart, candleSeries: series, candles };
+  const manager = new DrawingManager(core);
+  const env = { manager, container };
+
+  manager.setTool("regression_trend");
+  drag(env, 100, 9, 220, 17, 1000);
+  assert.strictEqual(manager.drawings.length, 1, "regression_trend did not commit");
+  const drawing = manager.drawings[0];
+
+  const op = renderOps(env).find((o) => o.kind === "regression_trend");
+  assert.ok(op, "regression_trend: no render op produced");
+  assert.strictEqual(op.mid.length, 2);
+  assert.ok(Math.abs(op.mid[0].y - 9.5) < 1e-9, `regression_trend: mid@t0 off (${op.mid[0].y})`);
+  assert.ok(Math.abs(op.mid[1].y - 16.5) < 1e-9, `regression_trend: mid@t1 off (${op.mid[1].y})`);
+  const offset = 2 * Math.sqrt(0.5);
+  assert.ok(Math.abs(op.upper[0].y - (9.5 + offset)) < 1e-9, `regression_trend: upper@t0 off (${op.upper[0].y})`);
+  assert.ok(Math.abs(op.upper[1].y - (16.5 + offset)) < 1e-9, `regression_trend: upper@t1 off (${op.upper[1].y})`);
+  assert.ok(Math.abs(op.lower[0].y - (9.5 - offset)) < 1e-9, `regression_trend: lower@t0 off (${op.lower[0].y})`);
+  assert.ok(Math.abs(op.lower[1].y - (16.5 - offset)) < 1e-9, `regression_trend: lower@t1 off (${op.lower[1].y})`);
+
+  // Hit-testing: an anchor handle, and a point along the computed mid
+  // line (not one of the raw anchor/candle points) both resolve here.
+  const handleHit = manager.hitTest(100, 9, { pointerType: "mouse" });
+  assert.strictEqual(handleHit && handleHit.handle, 0, "regression_trend: handle hit-test failed");
+  manager.select(drawing.id);
+  const midX = (op.mid[0].x + op.mid[1].x) / 2, midY = (op.mid[0].y + op.mid[1].y) / 2;
+  const bodyHit = manager.hitTest(midX, midY, { pointerType: "mouse" });
+  assert.ok(bodyHit && bodyHit.id === drawing.id && bodyHit.handle == null, "regression_trend: body hit-test failed along the computed mid line");
+
+  // Fewer than 2 candles in the anchored range must not crash and must not
+  // render a body - same "no data, no body" contract anchored_vwap uses
+  // for an anchor placed past the last candle.
+  const singleCandleEnv = { manager: new DrawingManager({ container: new FakeTarget(), chart, candleSeries: series, candles: [candles[0]] }), container };
+  singleCandleEnv.manager.setTool("regression_trend");
+  drag(singleCandleEnv, 100, 9, 220, 17, 2000);
+  assert.doesNotThrow(() => renderOps(singleCandleEnv), "regression_trend: render must not throw with under 2 candles in range");
+  assert.strictEqual(renderOps(singleCandleEnv).some((o) => o.kind === "regression_trend"), false, "regression_trend: no body should render with under 2 candles in range");
+}
+
+// Regression Trend with zero candles (every other tool's makeManager()
+// fake environment) must not throw either - just render nothing.
+{
+  const env = makeManager();
+  env.manager.setTool("regression_trend");
+  drag(env, 40, 100, 160, 180, 1000);
+  assert.strictEqual(env.manager.drawings.length, 1);
+  assert.doesNotThrow(() => renderOps(env), "regression_trend: render must not throw with zero candles");
 }
 
 // Volume Profile: like anchored_vwap, a computed histogram rather than

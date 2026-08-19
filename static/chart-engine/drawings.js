@@ -51,6 +51,24 @@
     ray: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Луч" },
     extended_line: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Расширенная линия" },
     parallel_channel: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Параллельный канал" },
+    // Same 2-anchor placement/geometry as trend_line - the only difference
+    // is a screen-angle label at render time (see trendAngleDegrees()).
+    trend_angle: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Угол тренда" },
+    // Same 2-anchor placement as trend_line, but the anchors only pick the
+    // time range - the line itself (and its deviation bands) is computed
+    // live from candle closes in that range (see regressionTrendChannel()),
+    // same "live recompute from core.candles" principle anchored_vwap uses.
+    regression_trend: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Регрессионный тренд" },
+    // Same 3-anchor staged placement as parallel_channel - anchor2 sets a
+    // flat (constant-price) boundary instead of a parallel-offset one (see
+    // flatBoundaryPoints()).
+    flat_top_bottom: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Плоский верх/низ" },
+    // 4 anchors, two independent 2-point segments (anchor0-anchor1,
+    // anchor2-anchor3) - unlike parallel_channel/flat_top_bottom, the
+    // second line isn't derived from the first at all, so it needs its own
+    // full pair of anchors. Same drag+2×tap staged placement as
+    // double_curve (also 4 anchors, 2 placed by drag).
+    disjoint_channel: { pointsNeeded: 4, anchorCount: 4, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Несвязный канал" },
     rectangle: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Прямоугольная зона" },
     circle: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", semanticShape: "ellipse", label: "Эллипс" },
     polyline: { pointsNeeded: -1, anchorCount: -1, creationGesture: "multi-tap", dragStagePoints: 0, completion: "explicit", preview: "next-anchor", label: "Полилиния" },
@@ -958,7 +976,7 @@
 
   function defaultProperties(type) {
     const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "", showPrice: false, visibleTimeframes: null };
-    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range" || type === "rotated_rectangle") return Object.assign(base, { fill: true });
+    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range" || type === "rotated_rectangle" || type === "flat_top_bottom" || type === "disjoint_channel" || type === "regression_trend") return Object.assign(base, { fill: true });
     // Highlighter: thick, translucent, round-capped stroke by default -
     // TradingView's own visual distinction from freehand's thin ink line.
     if (type === "highlighter") return Object.assign(base, { color: "#ffeb3b", width: 14, opacity: 0.35 });
@@ -1029,6 +1047,92 @@
       segs.push({ x1: ax, y1: ay, x2: bx, y2: by, label: `${(level * 100).toFixed(1)}%`, level });
     }
     return segs;
+  }
+
+  /** Flat Top/Bottom's flat boundary endpoints (model space, {time,price}):
+   * same time span as anchor0->anchor1 (parallel_channel's own scope), but
+   * held at a single constant price - anchor2's - rather than
+   * parallel_channel's price-offset line, so this edge is genuinely
+   * horizontal regardless of anchor2's own time. Shared by _hitDrawing and
+   * _buildOp. */
+  function flatBoundaryPoints(d) {
+    return [
+      { time: d.points[0].time, price: d.points[2].price },
+      { time: d.points[1].time, price: d.points[2].price },
+    ];
+  }
+
+  /** Trend Angle's on-screen slope in degrees, in the same pane-pixel
+   * space every other on-screen angle in this file is computed in (arrow's
+   * head orientation, gann_fan's ray ordering) - positive for a line that
+   * rises left-to-right (screen y grows downward, hence the negation),
+   * matching TradingView's own sign convention. Computed fresh from the
+   * CURRENT pixel projection every render, never stored - the same reason
+   * TradingView's own angle reading changes as you zoom/pan: it's a visual
+   * angle on screen, not a fixed geometric property of the two anchors. */
+  function trendAngleDegrees(p0, p1) {
+    return (-Math.atan2(p1.y - p0.y, p1.x - p0.x) * 180) / Math.PI;
+  }
+
+  // TradingView's own default deviation multiplier for Regression Trend's
+  // upper/lower channel bands.
+  const REGRESSION_TREND_DEVIATIONS = 2;
+
+  /** Regression Trend's mid/upper/lower boundary points (model space):
+   * ordinary-least-squares linear regression of every candle's close whose
+   * time falls within [min(anchor0.time,anchor1.time), max(...)] (order-
+   * independent, same range scoping volumeProfileBuckets uses), plus
+   * parallel bands at +-REGRESSION_TREND_DEVIATIONS standard deviations of
+   * the regression residuals - TradingView's own definition of the tool.
+   * Recomputed live from core.candles every call - never cached - the same
+   * "always current, no separate update wiring" principle
+   * anchoredVwapSeries/cyclicLineTimes/volumeProfileBuckets already use.
+   * null if the range holds fewer than 2 candles (no meaningful
+   * regression) or spans a single timestamp (would divide by zero). */
+  function regressionTrendChannel(core, d) {
+    const candles = core.candles || [];
+    if (candles.length < 2) return null;
+    const t0 = Math.min(d.points[0].time, d.points[1].time);
+    const t1 = Math.max(d.points[0].time, d.points[1].time);
+    const inRange = candles.filter((c) => c.time >= t0 && c.time <= t1);
+    if (inRange.length < 2) return null;
+    const n = inRange.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    for (const c of inRange) {
+      sumX += c.time; sumY += c.close; sumXY += c.time * c.close; sumXX += c.time * c.time;
+    }
+    const denom = n * sumXX - sumX * sumX;
+    if (!denom) return null;
+    const slope = (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+    let sumSqResid = 0;
+    for (const c of inRange) {
+      const resid = c.close - (slope * c.time + intercept);
+      sumSqResid += resid * resid;
+    }
+    const stddev = Math.sqrt(sumSqResid / n);
+    const mid = [
+      { time: t0, price: slope * t0 + intercept },
+      { time: t1, price: slope * t1 + intercept },
+    ];
+    const offset = stddev * REGRESSION_TREND_DEVIATIONS;
+    return {
+      mid,
+      upper: mid.map((p) => ({ time: p.time, price: p.price + offset })),
+      lower: mid.map((p) => ({ time: p.time, price: p.price - offset })),
+    };
+  }
+
+  /** regressionTrendChannel()'s three boundaries projected to pane-pixel
+   * space, each a possibly-shorter-than-2 array (a boundary with only one
+   * endpoint currently resolvable isn't drawable) - null propagates
+   * straight through when the underlying regression itself is null (too
+   * little data in range). */
+  function regressionTrendPixels(core, d) {
+    const ch = regressionTrendChannel(core, d);
+    if (!ch) return null;
+    const proj = (pts) => toPixels(core, pts).filter((p) => p.x != null && p.y != null);
+    return { mid: proj(ch.mid), upper: proj(ch.upper), lower: proj(ch.lower) };
   }
 
   function uid() {
@@ -1743,6 +1847,7 @@
           return Math.abs(px - pix[0].x) <= tol ? { id: d.id, handle: null } : null;
         }
         case "trend_line":
+        case "trend_angle":
         case "arrow":
         case "ray":
         case "extended_line": {
@@ -1770,6 +1875,37 @@
           const q1 = { time: d.points[1].time, price: d.points[1].price + offsetPrice };
           const [pq0, pq1] = toPixels(this.core, [q0, q1]);
           if (pq0.x != null && pq1.x != null && pointToSegmentDist(px, py, pq0.x, pq0.y, pq1.x, pq1.y) <= tol) return { id: d.id, handle: null };
+          return null;
+        }
+        case "flat_top_bottom": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          if (pointToSegmentDist(px, py, pix[0].x, pix[0].y, pix[1].x, pix[1].y) <= tol) return { id: d.id, handle: null };
+          const [fq0, fq1] = toPixels(this.core, flatBoundaryPoints(d));
+          if (fq0.x != null && fq1.x != null && pointToSegmentDist(px, py, fq0.x, fq0.y, fq1.x, fq1.y) <= tol) return { id: d.id, handle: null };
+          return null;
+        }
+        case "disjoint_channel": {
+          if (pix.length < 4 || pix[0].x == null || pix[1].x == null || pix[2].x == null || pix[3].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          if (handleAt(3)) return { id: d.id, handle: 3 };
+          if (pointToSegmentDist(px, py, pix[0].x, pix[0].y, pix[1].x, pix[1].y) <= tol) return { id: d.id, handle: null };
+          if (pointToSegmentDist(px, py, pix[2].x, pix[2].y, pix[3].x, pix[3].y) <= tol) return { id: d.id, handle: null };
+          return null;
+        }
+        case "regression_trend": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const ch = regressionTrendPixels(this.core, d);
+          if (!ch) return null;
+          for (const seg of [ch.mid, ch.upper, ch.lower]) {
+            if (seg.length === 2 && pointToSegmentDist(px, py, seg[0].x, seg[0].y, seg[1].x, seg[1].y) <= tol) return { id: d.id, handle: null };
+          }
           return null;
         }
         case "rectangle":
@@ -3000,6 +3136,14 @@
         case "trend_line":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "segment", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
+        case "trend_angle":
+          if (pix[0]?.x != null && pix[1]?.x != null) {
+            ops.push({
+              kind: "trend_angle", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y,
+              angle: trendAngleDegrees(pix[0], pix[1]), color, width, alpha, handles: [pix[0], pix[1]],
+            });
+          }
+          break;
         case "arrow":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "arrow", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
@@ -3032,6 +3176,34 @@
             });
           }
           break;
+        case "flat_top_bottom":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
+            const [fq0, fq1] = toPixels(this.manager.core, flatBoundaryPoints(d));
+            ops.push({
+              kind: "channel", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y,
+              ox1: fq0?.x, oy1: fq0?.y, ox2: fq1?.x, oy2: fq1?.y,
+              color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1], pix[2]],
+            });
+          }
+          break;
+        // Two genuinely independent segments (not derived from each other,
+        // unlike parallel_channel/flat_top_bottom) - reuses the "channel"
+        // render kind directly since its shape (line1, optional line2 +
+        // quad fill between) doesn't assume the two lines are parallel.
+        case "disjoint_channel":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null && pix[3]?.x != null) {
+            ops.push({
+              kind: "channel", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y,
+              ox1: pix[2].x, oy1: pix[2].y, ox2: pix[3].x, oy2: pix[3].y,
+              color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1], pix[2], pix[3]],
+            });
+          }
+          break;
+        case "regression_trend": {
+          const ch = regressionTrendPixels(this.manager.core, d);
+          if (ch) ops.push({ kind: "regression_trend", mid: ch.mid, upper: ch.upper, lower: ch.lower, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
+          break;
+        }
         case "rectangle":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "rect", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1]] });
           break;
@@ -3306,6 +3478,33 @@
           ctx.beginPath(); ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv); ctx.stroke();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
+        case "trend_angle":
+          ctx.beginPath(); ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv); ctx.stroke();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          if (op.angle != null) {
+            this._text(ctx, `${op.angle.toFixed(1)}°`, ((op.x1 + op.x2) / 2) * r, ((op.y1 + op.y2) / 2) * rv - 8 * rv, op.color);
+          }
+          break;
+        case "regression_trend": {
+          const drawBoundary = (seg, dash) => {
+            if (!seg || seg.length < 2) return;
+            ctx.setLineDash((dash || []).map((v) => v * r));
+            ctx.beginPath(); ctx.moveTo(seg[0].x * r, seg[0].y * rv); ctx.lineTo(seg[1].x * r, seg[1].y * rv); ctx.stroke();
+          };
+          if (op.fill && op.upper?.length === 2 && op.lower?.length === 2) {
+            ctx.globalAlpha = (op.alpha ?? 1) * 0.14;
+            ctx.beginPath();
+            ctx.moveTo(op.upper[0].x * r, op.upper[0].y * rv); ctx.lineTo(op.upper[1].x * r, op.upper[1].y * rv);
+            ctx.lineTo(op.lower[1].x * r, op.lower[1].y * rv); ctx.lineTo(op.lower[0].x * r, op.lower[0].y * rv);
+            ctx.closePath(); ctx.fill();
+            ctx.globalAlpha = op.alpha ?? 1;
+          }
+          drawBoundary(op.mid, []);
+          drawBoundary(op.upper, [5, 4]);
+          drawBoundary(op.lower, [5, 4]);
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
         case "arrow": {
           const x1 = op.x1 * r, y1 = op.y1 * rv, x2 = op.x2 * r, y2 = op.y2 * rv;
           ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
