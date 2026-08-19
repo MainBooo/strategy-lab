@@ -180,6 +180,33 @@
     // space, unlike `rectangle` (always axis-aligned). Same 3-anchor staged
     // placement as triangle/pitchfork; see rotatedRectCorners() below.
     rotated_rectangle: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Повёрнутый прямоугольник" },
+    // TradingView's Path: same free-form multi-tap placement/geometry as
+    // polyline (shares its "polyline"/"freehand"/"highlighter"/"path"
+    // render+hit-test case below) - TradingView itself treats Path and
+    // Polyline as near-identical tools (straight segments between clicks),
+    // a distinction this codebase doesn't need to model beyond giving Path
+    // its own rail button/label.
+    path: { pointsNeeded: -1, anchorCount: -1, creationGesture: "multi-tap", dragStagePoints: 0, completion: "explicit", preview: "next-anchor", label: "Путь" },
+    // TradingView's Curve: a quadratic Bezier. anchor0/anchor1 are the two
+    // endpoints (staged drag, as usual); anchor2 is the Bezier *control*
+    // point - the curve bulges toward it but does not pass through it
+    // (standard Bezier vocabulary; TradingView's own "drag to bow through
+    // this point" feel isn't independently documented anywhere verifiable,
+    // same caveat as sine_line's amplitude above). See
+    // quadraticBezierSamples() below.
+    curve: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Кривая" },
+    // TradingView's Arc: a true circular arc, not a Bezier - anchor0/
+    // anchor1/anchor2 are 3 points literally *on* the arc (unlike Curve's
+    // control-point convention above), matching what "arc" actually means
+    // geometrically. See arcSamples()/circumcircle() below; falls back to
+    // a straight anchor0->anchor1 segment when the 3 anchors are
+    // (near-)collinear, since no finite circle passes through them.
+    arc: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Дуга" },
+    // TradingView's Double Curve: a cubic Bezier S-curve. anchor0/anchor1
+    // are the two endpoints, anchor2/anchor3 are its two independent
+    // control points - same control-point convention as Curve above, just
+    // cubic instead of quadratic. See cubicBezierSamples() below.
+    double_curve: { pointsNeeded: 4, anchorCount: 4, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Двойная кривая" },
   };
 
   /** Unit direction each Arrow Mark glyph points in pane-pixel space -
@@ -460,6 +487,81 @@
       points.push({ x: pix[0].x + dx * t + nx * offset, y: pix[0].y + dy * t + ny * offset });
     }
     return points;
+  }
+
+  const BEZIER_SAMPLES = 32;
+
+  /** Quadratic Bezier sample points (pane-pixel space) from p0 to p1 -
+   * `control` is the literal Bezier control point (the curve bulges toward
+   * it, never passes through it). Shared by _hitDrawing and _buildOp for
+   * the "curve" tool. */
+  function quadraticBezierSamples(p0, control, p1, steps = BEZIER_SAMPLES) {
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps, mt = 1 - t;
+      out.push({
+        x: mt * mt * p0.x + 2 * mt * t * control.x + t * t * p1.x,
+        y: mt * mt * p0.y + 2 * mt * t * control.y + t * t * p1.y,
+      });
+    }
+    return out;
+  }
+
+  /** Cubic Bezier sample points (pane-pixel space) from p0 to p1 via two
+   * literal control points c1/c2 - same control-point convention as
+   * quadraticBezierSamples above. Shared by _hitDrawing and _buildOp for
+   * the "double_curve" tool. */
+  function cubicBezierSamples(p0, c1, c2, p1, steps = BEZIER_SAMPLES + 8) {
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps, mt = 1 - t;
+      const a = mt * mt * mt, b = 3 * mt * mt * t, c = 3 * mt * t * t, e = t * t * t;
+      out.push({
+        x: a * p0.x + b * c1.x + c * c2.x + e * p1.x,
+        y: a * p0.y + b * c1.y + c * c2.y + e * p1.y,
+      });
+    }
+    return out;
+  }
+
+  /** Circumcircle (center + radius) of 3 pane-pixel points via the
+   * standard determinant formula, or null if they're (near-)collinear
+   * (no finite circle fits). Shared by arcSamples() below. */
+  function circumcircle(a, b, c) {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-6) return null;
+    const aa = a.x * a.x + a.y * a.y, bb = b.x * b.x + b.y * b.y, cc = c.x * c.x + c.y * c.y;
+    const ux = (aa * (b.y - c.y) + bb * (c.y - a.y) + cc * (a.y - b.y)) / d;
+    const uy = (aa * (c.x - b.x) + bb * (a.x - c.x) + cc * (b.x - a.x)) / d;
+    return { x: ux, y: uy, r: Math.hypot(a.x - ux, a.y - uy) };
+  }
+
+  /** Sampled points (pane-pixel space) along the circular arc from p0 to
+   * p1 that passes through pOn - all 3 are literally anchors *on* the arc
+   * (TradingView's own "Arc" semantics, distinct from Curve's control-
+   * point convention above). Picks whichever of the two possible sweep
+   * directions between p0 and p1 actually passes through pOn. Falls back
+   * to the straight p0->p1 segment if the 3 points are (near-)collinear -
+   * no finite circle fits, and the geometric limit of an ever-flatter arc
+   * *is* a straight line anyway. Shared by _hitDrawing and _buildOp. */
+  function arcSamples(p0, pOn, p1, steps = BEZIER_SAMPLES + 8) {
+    const circ = circumcircle(p0, pOn, p1);
+    if (!circ) return [p0, p1];
+    const norm = (a) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const a0 = Math.atan2(p0.y - circ.y, p0.x - circ.x);
+    const a1raw = Math.atan2(p1.y - circ.y, p1.x - circ.x);
+    const aMraw = Math.atan2(pOn.y - circ.y, pOn.x - circ.x);
+    const ccwSpan = norm(a1raw - a0); // increasing-angle distance a0 -> a1
+    const ccwToM = norm(aMraw - a0);
+    // If pOn lies on the increasing-angle sweep from a0 to a1, take that
+    // sweep; otherwise pOn is on the complementary (decreasing-angle) arc.
+    const span = ccwToM <= ccwSpan ? ccwSpan : -(2 * Math.PI - ccwSpan);
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = a0 + span * (i / steps);
+      out.push({ x: circ.x + circ.r * Math.cos(a), y: circ.y + circ.r * Math.sin(a) });
+    }
+    return out;
   }
 
   /** Anchored VWAP's price path: cumulative volume-weighted typical price
@@ -1201,6 +1303,27 @@
           }
           return null;
         }
+        case "curve":
+        case "arc": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          const samples = d.type === "curve" ? quadraticBezierSamples(pix[0], pix[2], pix[1]) : arcSamples(pix[0], pix[2], pix[1]);
+          for (let i = 0; i < samples.length - 1; i++) {
+            if (pointToSegmentDist(px, py, samples[i].x, samples[i].y, samples[i + 1].x, samples[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "double_curve": {
+          if (pix.length < 4 || pix[0].x == null || pix[1].x == null || pix[2].x == null || pix[3].x == null) return null;
+          for (let i = 0; i < 4; i++) if (handleAt(i)) return { id: d.id, handle: i };
+          const samples = cubicBezierSamples(pix[0], pix[2], pix[3], pix[1]);
+          for (let i = 0; i < samples.length - 1; i++) {
+            if (pointToSegmentDist(px, py, samples[i].x, samples[i].y, samples[i + 1].x, samples[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
         case "circle": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
@@ -1216,6 +1339,7 @@
         case "polyline":
         case "freehand":
         case "highlighter":
+        case "path":
         // XABCD/ABCD/Three Drives/Elliott Wave anchors are a plain zigzag
         // for hit-testing purposes - same "handle at any vertex, else
         // distance to any leg" test as polyline/freehand, just always a
@@ -2225,7 +2349,20 @@
           break;
         case "polyline":
         case "freehand":
+        case "path":
           if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
+          break;
+        case "curve":
+        case "arc":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
+            const samples = d.type === "curve" ? quadraticBezierSamples(pix[0], pix[2], pix[1]) : arcSamples(pix[0], pix[2], pix[1]);
+            ops.push({ kind: "bezier", points: samples, color, width, alpha, handles: [pix[0], pix[1], pix[2]] });
+          }
+          break;
+        case "double_curve":
+          if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null && pix[3]?.x != null) {
+            ops.push({ kind: "bezier", points: cubicBezierSamples(pix[0], pix[2], pix[3], pix[1]), color, width, alpha, handles: [pix[0], pix[1], pix[2], pix[3]] });
+          }
           break;
         case "highlighter":
           if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "highlighter", points: pix, color, width: d.properties.width || 14, alpha, handles: pix });
@@ -2463,7 +2600,12 @@
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
-        case "polyline": {
+        case "polyline":
+        // "bezier": Curve/Arc/Double Curve already came in as oversampled
+        // points (quadraticBezierSamples/cubicBezierSamples/arcSamples) -
+        // painting is identical to polyline's, just a different op.kind so
+        // tests/callers can tell a smooth curve from a raw polyline/path.
+        case "bezier": {
           ctx.beginPath();
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();

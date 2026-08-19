@@ -256,6 +256,7 @@ const allTools = [
   "elliott_impulse_wave", "elliott_correction_wave", "cyclic_lines", "sine_line",
   "anchored_vwap", "highlighter", "arrow", "arrow_mark_up", "arrow_mark_down",
   "arrow_mark_left", "arrow_mark_right", "rotated_rectangle",
+  "path", "curve", "arc", "double_curve",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -482,6 +483,39 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   assert.ok(strokeOp, "highlighter: no render op produced for the stroke");
   assert.strictEqual(strokeOp.kind, "highlighter", "highlighter should get its own paint op kind, not freehand's polyline");
   assert.strictEqual(strokeOp.width, 14, "highlighter: default width should stay thick even mid-draft");
+}
+
+// Path/Curve/Arc/Double Curve: each gets the render op kind its own
+// TOOL_DEFS comment promises - "path" reuses polyline's raw-segment op,
+// "curve"/"arc"/"double_curve" get the shared oversampled "bezier" op kind
+// (quadraticBezierSamples/arcSamples/cubicBezierSamples respectively).
+{
+  const env = makeManager();
+  const kindFor = { path: "polyline", curve: "bezier", arc: "bezier", double_curve: "bezier" };
+  for (const tool of ["path", "curve", "arc", "double_curve"]) {
+    const d = env.manager.addDrawing(tool, pointsFor(tool));
+    const ops = renderOps(env);
+    const op = ops.find((o) => o.d && o.d.id === d.id);
+    assert.ok(op, `${tool}: no render op produced`);
+    assert.strictEqual(op.kind, kindFor[tool], `${tool}: unexpected render op kind`);
+    assert.ok(op.points.length >= 2, `${tool}: expected a sampled/raw point list, got ${op.points.length}`);
+    for (const p of op.points) {
+      assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `${tool}: non-finite sample point`);
+    }
+  }
+}
+
+// Arc: 3 (near-)collinear anchors have no finite circumcircle - must fall
+// back to the straight anchor0->anchor1 segment instead of crashing or
+// producing a bogus/huge arc.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("arc", [{ time: 40, price: 100 }, { time: 100, price: 130 }, { time: 160, price: 160 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.ok(op, "arc: no render op produced for collinear anchors");
+  assert.strictEqual(op.points.length, 2, "arc: collinear anchors should fall back to a straight 2-point segment");
+  for (const p of op.points) assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), "arc: non-finite fallback point");
 }
 
 // Anchored VWAP: the one tool whose rendered body is a computed price

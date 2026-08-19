@@ -91,6 +91,10 @@
     { id: "arrow_mark_left", label: "Стрелка влево", icon: "←" },
     { id: "arrow_mark_right", label: "Стрелка вправо", icon: "→" },
     { id: "highlighter", label: "Маркер", icon: "▮" },
+    { id: "path", label: "Путь", icon: "⌇" },
+    { id: "curve", label: "Кривая", icon: "◜" },
+    { id: "arc", label: "Дуга", icon: "◠" },
+    { id: "double_curve", label: "Двойная кривая", icon: "∾" },
   ];
 
   const LAYOUTS = [
