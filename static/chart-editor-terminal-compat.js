@@ -60,6 +60,10 @@
       tile.core._legendSubscribed = true;
       tile.core.onDataChanged(() => renderLegend());
     }
+    if (typeof tile.onCompareChange === "function" && !tile._compareLegendSubscribed) {
+      tile._compareLegendSubscribed = true;
+      tile.onCompareChange(() => renderLegend());
+    }
     let legend = host.querySelector(".sl-chart-legend");
     if (!legend) { legend = document.createElement("div"); legend.className = "sl-chart-legend"; host.appendChild(legend); }
     const candles = (tile.core && tile.core.candles) || [];
@@ -82,7 +86,23 @@
         : "";
       return `<div class="sl-chart-legend-chip ${visible ? "" : "off"}"><i class="sl-legend-dot" style="background:${colors[0] || "#9aa6ba"}"></i><span>${esc(def ? def.shortName || def.label : inst.type)}</span>${valuesHtml ? `<span class="sl-legend-values">${valuesHtml}</span>` : ""}<button data-sl-legend-settings="${inst.id}" title="Настройки">⚙</button><button data-sl-legend-vis="${inst.id}" title="Показать/скрыть">◉</button><button data-sl-legend-remove="${inst.id}" title="Удалить">×</button></div>`;
     }).join("");
-    legend.innerHTML = ohlcHtml + indHtml;
+    // Compare/add symbol overlays get the same chip shape as an indicator
+    // (color dot + name + live value + remove), minus the settings gear -
+    // there's nothing to configure on a %-change overlay beyond show/hide,
+    // already covered by the same eye-style toggle. tile.listCompareSymbols
+    // may not exist on a tile from before this feature (or a fake test
+    // double) - guarded rather than assumed.
+    const compareList = typeof tile.listCompareSymbols === "function" ? tile.listCompareSymbols() : [];
+    const compareHtml = compareList.map((e) => {
+      // A plain 2-decimal percent, not fmtVal() (built for price-like
+      // values spanning many orders of magnitude, hence its 2-8 sliding
+      // digit count - overkill and inconsistent with the compare popover's
+      // own toFixed(2) for a %-change value that's always in a narrow,
+      // human-scale range).
+      const pctHtml = e.pct == null ? "" : `<span class="sl-legend-values"><em style="color:${e.color}">${e.pct >= 0 ? "+" : ""}${e.pct.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</em></span>`;
+      return `<div class="sl-chart-legend-chip ${e.visible ? "" : "off"}"><i class="sl-legend-dot" style="background:${e.color}"></i><span>${esc(e.symbol)}</span>${pctHtml}<button data-sl-legend-cmp-vis="${esc(e.symbol)}" title="Показать/скрыть">◉</button><button data-sl-legend-cmp-remove="${esc(e.symbol)}" title="Убрать">×</button></div>`;
+    }).join("");
+    legend.innerHTML = ohlcHtml + indHtml + compareHtml;
     legend.querySelectorAll("[data-sl-legend-settings]").forEach((b) => b.onclick = () => openIndicators(b.dataset.slLegendSettings));
     legend.querySelectorAll("[data-sl-legend-vis]").forEach((b) => b.onclick = () => {
       const m = manager(), item = m && m.list().find((x) => x.id === b.dataset.slLegendVis);
@@ -92,6 +112,17 @@
       renderLegend();
     });
     legend.querySelectorAll("[data-sl-legend-remove]").forEach((b) => b.onclick = () => { const m = manager(); if (m) m.remove(b.dataset.slLegendRemove); renderLegend(); });
+    legend.querySelectorAll("[data-sl-legend-cmp-vis]").forEach((b) => b.onclick = () => {
+      const e = tile.listCompareSymbols().find((x) => x.symbol === b.dataset.slLegendCmpVis);
+      tile.setCompareVisible(b.dataset.slLegendCmpVis, !(e && e.visible));
+      if (typeof Page._saveWorkspaceState === "function") Page._saveWorkspaceState();
+      renderLegend();
+    });
+    legend.querySelectorAll("[data-sl-legend-cmp-remove]").forEach((b) => b.onclick = () => {
+      tile.removeCompareSymbol(b.dataset.slLegendCmpRemove);
+      if (typeof Page._saveWorkspaceState === "function") Page._saveWorkspaceState();
+      renderLegend();
+    });
   }
 
   // The legend also needs to refresh whenever an indicator is added/removed/

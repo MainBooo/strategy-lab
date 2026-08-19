@@ -799,6 +799,33 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
 }
 .ca-ws-actions { display: flex; gap: 2px; flex: 0 0 auto; }
 
+.ca-compare-panel { display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
+.ca-compare-active { display: flex; flex-direction: column; gap: 2px; }
+.ca-compare-row { display: flex; align-items: center; gap: 6px; padding: 4px 2px; font-size: 12px; }
+.ca-compare-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.ca-compare-symbol { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ca-compare-pct { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* #4dd4ac/#ff7081 match theme.up/theme.down in theme.js exactly - no CSS
+ * custom property for them exists, this file's own colors are all hex
+ * literals for the same reason (see the up/down candle colors elsewhere
+ * in this stylesheet). */
+.ca-compare-pct.up { color: #4dd4ac; }
+.ca-compare-pct.down { color: #ff7081; }
+.ca-compare-row .icon-btn { width: 24px; height: 24px; flex: 0 0 auto; }
+.ca-compare-search {
+  width: 100%; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 6px 8px; font-size: 12px;
+}
+.ca-compare-results { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.ca-compare-result {
+  display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text);
+  padding: 6px 6px; font-size: 12px; cursor: pointer; border-radius: 6px;
+}
+.ca-compare-result:hover { background: rgba(255,255,255,.06); }
+.ca-compare-result span { color: var(--muted); margin-left: 4px; }
+.ca-compare-result:disabled { opacity: .5; pointer-events: none; }
+.ca-compare-loading, .ca-compare-empty { padding: 6px 4px; font-size: 12px; color: var(--muted); }
+
 .ca-modal-backdrop {
   position: fixed; inset: 0; background: rgba(5,7,12,.72); display: flex; align-items: center; justify-content: center;
   z-index: 80;

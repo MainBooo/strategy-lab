@@ -46,7 +46,8 @@
     expand: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
     chevronDown: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
     panelRight: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>',
-    more: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>'
+    more: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+    compare: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><rect x="8" y="8" width="13" height="13" rx="2"/></svg>'
   };
 
   const TOOL_BUTTONS = [
@@ -208,6 +209,9 @@
   function escapeAttr(s) {
     return String(s).replace(/"/g, "&quot;");
   }
+  function esc(v) {
+    return String(v == null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
   function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
   }
@@ -325,6 +329,10 @@
             <div class="gt-menu" id="gtAlertsMenu" data-key="alerts" data-priority="9" data-label="Оповещения" data-icon="🔔">
               <button class="gt-btn icon-btn" id="gtAlertBtn" title="Оповещения" aria-label="Оповещения" aria-haspopup="true">${ICN.bell}<span class="gt-badge hidden" id="gtAlertBadge"></span></button>
               <div class="ca-popover ca-popover-wide hidden" id="gtAlertsPop"></div>
+            </div>
+            <div class="gt-menu" id="gtCompareMenu" data-key="compare" data-priority="6.5" data-label="Сравнение" data-icon="⧉">
+              <button class="gt-btn icon-btn" id="gtCompareBtn" title="Сравнение / наложение символа" aria-label="Сравнение / наложение символа" aria-haspopup="true">${ICN.compare}</button>
+              <div class="ca-popover ca-popover-wide hidden" id="gtComparePop"></div>
             </div>
             <button class="icon-btn" id="gtReplayBtn" data-key="replay" data-priority="6" data-label="Market Replay" data-icon="⏮" title="Market Replay" aria-label="Открыть Market Replay для текущего инструмента">${ICN.rewind}</button>
             <button class="icon-btn" id="caUndoBtn" data-key="undo" data-priority="8" data-label="Отменить" data-icon="↶" title="Отменить (Ctrl+Z)" aria-label="Отменить">↶</button>
@@ -473,6 +481,7 @@
       this._wireGlobalPopover($("#gtIndicatorsBtn"), $("#gtIndicatorsPop"), () => this._renderIndicatorsInto($("#gtIndicatorsPop")));
       this._wireGlobalPopover($("#gtTemplatesBtn"), $("#gtTemplatesPop"), () => this._renderTemplatesInto($("#gtTemplatesPop")));
       this._wireGlobalPopover($("#gtAlertBtn"), $("#gtAlertsPop"), () => this._renderAlertsInto($("#gtAlertsPop")));
+      this._wireGlobalPopover($("#gtCompareBtn"), $("#gtComparePop"), () => this._renderCompareInto($("#gtComparePop")));
       this._wireGlobalPopover($("#gtLayoutBtn"), $("#gtLayoutPop"), () => this._renderLayoutPopover());
       this._wireGlobalPopover($("#gtMoreBtn"), $("#gtMorePop"), () => this._renderMorePopover());
 
@@ -496,6 +505,7 @@
         indicators: () => $("#gtIndicatorsBtn").click(),
         templates: () => $("#gtTemplatesBtn").click(),
         alerts: () => $("#gtAlertBtn").click(),
+        compare: () => $("#gtCompareBtn").click(),
       };
       Object.keys(this._toolbarActions).forEach((key) => {
         const btn = this.root.querySelector(`[data-key="${key}"]`);
@@ -638,6 +648,83 @@
           if (willOpen) { panel.classList.remove("hidden"); this._renderIndicatorSettings(panel, tile, btn.dataset.indGear); }
         };
       });
+    },
+
+    // ------------------------------------------------- compare popover ----
+
+    /** "Compare/add symbol": a small typeahead over the same instrument
+     * catalog the watchlist/data-sync pages already search
+     * (/api/market-data/instruments) - see ChartTile.addCompareSymbol for
+     * why this needed no new backend endpoint. Deliberately its own
+     * lightweight search rather than reusing WatchlistSidebar's - that
+     * component's click handler *replaces* the primary symbol
+     * (_commandSelectTicker), the opposite of "add a second, overlaid
+     * symbol", and repurposing its single-select semantics would be a
+     * bigger, riskier change than this self-contained popover. */
+    _renderCompareInto(container) {
+      const tile = this.activeTile;
+      if (!tile) { container.innerHTML = ""; return; }
+      const active = tile.listCompareSymbols();
+      container.innerHTML = `
+        <div class="ca-compare-panel">
+          ${active.length ? `<div class="ca-compare-active">
+            ${active.map((e) => `
+              <div class="ca-compare-row">
+                <i class="ca-compare-dot" style="background:${e.color}"></i>
+                <span class="ca-compare-symbol">${esc(e.symbol)}</span>
+                <span class="ca-compare-pct ${e.pct == null ? "" : e.pct >= 0 ? "up" : "down"}">${e.pct == null ? "—" : `${e.pct >= 0 ? "+" : ""}${e.pct.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`}</span>
+                <button class="icon-btn" data-compare-vis="${esc(e.symbol)}" title="${e.visible ? "Скрыть" : "Показать"}" aria-label="${e.visible ? "Скрыть" : "Показать"} ${esc(e.symbol)}">${e.visible ? "◉" : "○"}</button>
+                <button class="icon-btn" data-compare-remove="${esc(e.symbol)}" title="Убрать" aria-label="Убрать ${esc(e.symbol)}">✕</button>
+              </div>`).join("")}
+          </div><div class="ca-more-sep"></div>` : ""}
+          ${active.length >= 6 ? `<div class="ca-compare-empty">Максимум 6 наложенных символов.</div>` : `
+          <input class="ca-compare-search" type="text" placeholder="Тикер или название…" data-compare-search autocomplete="off" spellcheck="false">
+          <div class="ca-compare-results" data-compare-results></div>`}
+        </div>
+      `;
+      container.querySelectorAll("[data-compare-vis]").forEach((b) => (b.onclick = () => {
+        const e = tile.listCompareSymbols().find((x) => x.symbol === b.dataset.compareVis);
+        tile.setCompareVisible(b.dataset.compareVis, !(e && e.visible));
+        this._saveWorkspaceState();
+        this._renderCompareInto(container);
+      }));
+      container.querySelectorAll("[data-compare-remove]").forEach((b) => (b.onclick = () => {
+        tile.removeCompareSymbol(b.dataset.compareRemove);
+        this._saveWorkspaceState();
+        this._renderCompareInto(container);
+      }));
+      const search = container.querySelector("[data-compare-search]");
+      if (!search) return;
+      const results = container.querySelector("[data-compare-results]");
+      let debounceTimer = null;
+      const runSearch = async (q) => {
+        if (!q) { results.innerHTML = ""; return; }
+        results.innerHTML = `<div class="ca-compare-loading">Поиск…</div>`;
+        let items = [];
+        try {
+          const res = await fetch(`/api/market-data/instruments?q=${encodeURIComponent(q)}`);
+          if (res.ok) {
+            const data = await res.json();
+            const taken = new Set([tile.symbol, ...tile.listCompareSymbols().map((e) => e.symbol)]);
+            items = (data.items || []).filter((it) => !taken.has(it.symbol)).slice(0, 12);
+          }
+        } catch (_) { /* results just stay empty below */ }
+        if (search.value.trim().toUpperCase() !== q) return; // a newer query already fired - drop this stale response
+        results.innerHTML = items.length
+          ? items.map((it) => `<button class="ca-compare-result" data-compare-add="${esc(it.symbol)}">${esc(it.symbol)}${it.base ? ` <span>${esc(it.base)}/${esc(it.quote || "")}</span>` : ""}</button>`).join("")
+          : `<div class="ca-compare-empty">Ничего не найдено</div>`;
+        results.querySelectorAll("[data-compare-add]").forEach((b) => (b.onclick = async () => {
+          b.disabled = true;
+          try { await tile.addCompareSymbol(b.dataset.compareAdd); this._saveWorkspaceState(); } catch (_) { /* addCompareSymbol already rolled its own state back */ }
+          this._renderCompareInto(container);
+        }));
+      };
+      search.oninput = () => {
+        clearTimeout(debounceTimer);
+        const q = search.value.trim().toUpperCase();
+        debounceTimer = setTimeout(() => runSearch(q), 200);
+      };
+      search.focus();
     },
 
     _renderIndicatorSettings(panel, tile, instanceId) {

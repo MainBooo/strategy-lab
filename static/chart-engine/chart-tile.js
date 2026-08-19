@@ -62,6 +62,14 @@
     { label: "1Д", days: 1 }, { label: "5Д", days: 5 }, { label: "1М", days: 30 }, { label: "3М", days: 90 },
     { label: "6М", days: 182 }, { label: "1Г", days: 365 }, { label: "5Л", days: 365 * 5 },
   ];
+  // Compare/add symbol (ТЗ header row): each overlaid symbol gets the next
+  // color in this fixed cycle, distinct from theme.up/theme.down/theme.accent
+  // so an overlay line is never confused with the candles or another drawing.
+  const COMPARE_COLORS = ["#f7a531", "#c792ea", "#5ec8f8", "#f75990", "#7cff8f", "#ffd166"];
+  // TradingView itself caps how many symbols one chart can compare against -
+  // an unbounded overlay list would both clutter the % scale and mean an
+  // unbounded number of /api/candles polls per tail-refresh tick.
+  const COMPARE_MAX = 6;
 
   // Icons for the floating toolbar (see ChartTile._renderFloatToolbar below).
   // lock/eye/trash paths match the ones already used by the mobile drawing
@@ -100,13 +108,18 @@
   function todayISO() { return new Date().toISOString().slice(0, 10); }
 
   class ChartTile {
-    constructor({ symbol = "BTCUSDT", timeframe = "1d", chartType = "candles", displayOptions = null, indicators = null } = {}) {
+    constructor({ symbol = "BTCUSDT", timeframe = "1d", chartType = "candles", displayOptions = null, indicators = null, compareSymbols = null } = {}) {
       this.id = "tile" + ++_seq;
       this.symbol = symbol;
       this.timeframe = timeframe;
       this._initialChartType = chartType;
       this._initialDisplayOptions = displayOptions || null;
       this._initialIndicators = indicators || null;
+      this._initialCompareSymbols = compareSymbols || null;
+      // symbol -> { symbol, color, visible, candles, series, _lastPct } - see
+      // the "compare" section near the bottom of this class.
+      this._compareSymbols = new Map();
+      this._compareRangeSub = null;
       // Full-history-by-default (see docs): a fresh tile never starts with
       // fromDate/toDate filled in - see also toConfig()/ChartAnalysisPage's
       // workspace-state restore, which deliberately never persists these
@@ -583,6 +596,7 @@
         indicators: this.indicatorMgr
           ? this.indicatorMgr.list().map((i) => ({ type: i.type, params: i.params, style: i.style }))
           : this._initialIndicators,
+        compareSymbols: this._compareSymbols.size ? [...this._compareSymbols.keys()] : this._initialCompareSymbols,
       };
     }
 
@@ -592,6 +606,12 @@
         this.el.removeEventListener("pointerdown", this._activatePointerHandler, true);
       }
       this._activatePointerHandler = null;
+      // chart.remove() below (via core.destroy()) already tears down every
+      // series/subscription this compare state points at - just drop our
+      // own bookkeeping, not another removeSeries()/unsubscribe round trip
+      // against a chart that's about to stop existing.
+      this._compareSymbols.clear();
+      this._compareRangeSub = null;
       if (this.indicator) this.indicator.destroy();
       if (this.fsCtrl) this.fsCtrl.destroy();
       if (this.drawingMgr) this.drawingMgr.destroy();
@@ -610,6 +630,7 @@
       this.timeframe = tf;
       this.updateHeader();
       this._reload();
+      this._reloadCompareSymbols();
       this._notifyStateChanged();
     }
 
@@ -630,9 +651,14 @@
       this.rangeMode = "all";
       this.fromDate = null;
       this.toDate = null;
+      // Comparing a symbol against itself is meaningless - if the new
+      // primary symbol was already one of the overlays, drop that overlay
+      // rather than leave a flat 0% line sitting on top of the candles.
+      if (this._compareSymbols.has(ticker)) this.removeCompareSymbol(ticker);
       this.updateHeader();
       if (this.indicator) this.indicator.setSymbol(ticker);
       this._loadOrInit();
+      this._reloadCompareSymbols();
       this._syncAlertLines();
       this._notifyStateChanged({ symbolChanged: true });
     }
@@ -737,6 +763,9 @@
         // toConfig()/ChartAnalysisPage._restoreWorkspaceState.
         if (this._initialIndicators) {
           this._initialIndicators.forEach((ind) => this.indicatorMgr.add(ind.type, ind.params, undefined, ind.style));
+        }
+        if (this._initialCompareSymbols) {
+          this._initialCompareSymbols.forEach((s) => this.addCompareSymbol(s).catch(() => {}));
         }
       }
     }
@@ -906,6 +935,7 @@
       this._tailInFlight = true;
       try {
         await this.core.refreshTail(10);
+        if (this._compareSymbols.size) await this._refreshCompareTails();
         this._tailFailures = 0;
         if (this.el) {
           const status = this.el.querySelector(".ca-tile-status");
@@ -925,6 +955,197 @@
       } finally {
         this._tailInFlight = false;
       }
+    }
+
+    // -------------------------------------------------------- compare -----
+    // "Compare/add symbol" (ТЗ top-toolbar row): overlay another symbol's
+    // price, normalized to %-change, on top of this tile's own candles.
+    // /api/candles is already a generic symbol-agnostic endpoint (see
+    // api_candles() in app.py - the only gate is the same CHART_ANALYSIS_ACCESS
+    // feature flag this tile's own primary series already required), so this
+    // needed no new backend: just a second series + its own polling, reusing
+    // exactly the load-then-poll-the-tail shape ChartCore.load()/refreshTail()
+    // already established for the primary symbol.
+
+    /** Fetches `symbol`'s full history at this tile's current timeframe and
+     * adds it as a %-change overlay line on the shared left price scale.
+     * No-ops (not an error) on a duplicate symbol, comparing a symbol to
+     * itself, or the COMPARE_MAX cap - all three are "nothing to do", not
+     * failure states a caller needs to branch on. Throws (after rolling
+     * its own partial state back out) only on a genuine fetch failure, so
+     * the popover UI that calls this can show a real error. */
+    async addCompareSymbol(symbol) {
+      symbol = String(symbol || "").trim().toUpperCase();
+      if (!symbol || symbol === this.symbol) return null;
+      if (this._compareSymbols.has(symbol)) return this._compareSymbols.get(symbol);
+      if (this._compareSymbols.size >= COMPARE_MAX || !this.core) return null;
+      const color = COMPARE_COLORS[this._compareSymbols.size % COMPARE_COLORS.length];
+      const entry = { symbol, color, visible: true, candles: [], series: null, _lastPct: null };
+      this._compareSymbols.set(symbol, entry);
+      this._ensureCompareScale();
+      entry.series = this.core.chart.addSeries(global.LightweightCharts.LineSeries, {
+        priceScaleId: "left", color, lineWidth: 1.5, lastValueVisible: true, priceLineVisible: false,
+        priceFormat: { type: "custom", minMove: 0.01, formatter: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` },
+      });
+      this._ensureCompareRangeSubscription();
+      try {
+        const params = new URLSearchParams({ symbol, timeframe: this.timeframe, limit: "5000" });
+        const res = await fetch(`/api/candles?${params}`);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        const data = await res.json();
+        entry.candles = data.candles || [];
+      } catch (err) {
+        this.removeCompareSymbol(symbol);
+        throw err;
+      }
+      this._recomputeCompareSeries(entry);
+      this._notifyCompareChanged();
+      return entry;
+    }
+
+    removeCompareSymbol(symbol) {
+      symbol = String(symbol || "").trim().toUpperCase();
+      const entry = this._compareSymbols.get(symbol);
+      if (!entry) return;
+      if (entry.series) { try { this.core.chart.removeSeries(entry.series); } catch (_) { /* chart/series already gone */ } }
+      this._compareSymbols.delete(symbol);
+      if (!this._compareSymbols.size) this._teardownCompareScale();
+      this._notifyCompareChanged();
+    }
+
+    setCompareVisible(symbol, visible) {
+      const entry = this._compareSymbols.get(String(symbol || "").trim().toUpperCase());
+      if (!entry) return;
+      entry.visible = !!visible;
+      try { entry.series.applyOptions({ visible: entry.visible }); } catch (_) {}
+      this._notifyCompareChanged();
+    }
+
+    /** Plain-data snapshot for the legend/popover UI - never hands out the
+     * live series/candles references themselves. */
+    listCompareSymbols() {
+      return [...this._compareSymbols.values()].map((e) => ({
+        symbol: e.symbol, color: e.color, visible: e.visible, pct: e._lastPct,
+      }));
+    }
+
+    _ensureCompareScale() {
+      try { this.core.chart.priceScale("left").applyOptions({ visible: true, scaleMargins: { top: 0.08, bottom: 0.08 } }); } catch (_) {}
+    }
+    _teardownCompareScale() {
+      if (this._compareRangeSub) {
+        try { this.core.chart.timeScale().unsubscribeVisibleLogicalRangeChange(this._compareRangeSub); } catch (_) {}
+        this._compareRangeSub = null;
+      }
+      try { this.core.chart.priceScale("left").applyOptions({ visible: false }); } catch (_) {}
+    }
+    /** Re-bases every overlay to the leftmost currently-visible bar on every
+     * pan/zoom - the defining part of TradingView's own %-compare mode (a
+     * fixed base would make the comparison meaningless once you've scrolled
+     * away from it). Coalesced to at most once per animation frame - a raw
+     * per-event handler would re-run series.setData() on every intermediate
+     * frame of a drag, which is a much heavier call than the cheap canvas-
+     * primitive redraws the drawing tools' own range-change recompute
+     * (anchored_vwap, cyclic_lines, ...) get away with doing uncoalesced. */
+    _ensureCompareRangeSubscription() {
+      if (this._compareRangeSub) return;
+      this._compareRangeSub = () => this._scheduleCompareRecompute();
+      this.core.chart.timeScale().subscribeVisibleLogicalRangeChange(this._compareRangeSub);
+    }
+    _scheduleCompareRecompute() {
+      if (this._compareRecomputeScheduled) return;
+      this._compareRecomputeScheduled = true;
+      requestAnimationFrame(() => {
+        this._compareRecomputeScheduled = false;
+        this._recomputeAllCompareSeries();
+      });
+    }
+    _recomputeAllCompareSeries() {
+      if (!this._compareSymbols.size) return;
+      this._compareSymbols.forEach((entry) => this._recomputeCompareSeries(entry));
+      this._notifyCompareChanged();
+    }
+    /** Base = the first of `entry`'s own candles at-or-after the primary
+     * chart's current visible left edge - falls back to the overlay's own
+     * last candle when its history doesn't reach that far forward (a
+     * symbol listed more recently than the primary one, viewed at a range
+     * before the overlay existed) rather than throwing or picking a
+     * meaningless earlier bar. */
+    _recomputeCompareSeries(entry) {
+      if (!entry.series || !entry.candles.length) return;
+      let from = entry.candles[0].time;
+      try {
+        const visible = this.core.chart.timeScale().getVisibleRange();
+        if (visible && Number.isFinite(visible.from)) from = visible.from;
+      } catch (_) {}
+      const base = entry.candles.find((c) => c.time >= from) || entry.candles[entry.candles.length - 1];
+      const baseClose = base && base.close;
+      if (!baseClose) return;
+      const data = entry.candles.map((c) => ({ time: c.time, value: (c.close - baseClose) / baseClose * 100 }));
+      entry.series.setData(data);
+      entry._lastPct = data.length ? data[data.length - 1].value : null;
+    }
+    /** Same tail-merge shape as ChartCore.mergeTailCandles() (append new/
+     * update the still-forming last bar, ignore anything older) reimplemented
+     * against a compare entry's own plain candle array rather than a
+     * ChartCore instance - a compare overlay never needs everything else
+     * ChartCore tracks (drawings, indicators, live-tick state, ...). */
+    _mergeCompareTail(entry, candles) {
+      if (!candles.length || !entry.candles.length) return;
+      const lastLoaded = entry.candles[entry.candles.length - 1].time;
+      if (candles[0].time > lastLoaded + 1) return;
+      candles.forEach((c) => {
+        if (c.time < lastLoaded) return;
+        const idx = entry.candles.findIndex((x) => x.time === c.time);
+        if (idx >= 0) entry.candles[idx] = c; else entry.candles.push(c);
+      });
+    }
+    async _refreshCompareTails() {
+      const entries = [...this._compareSymbols.values()];
+      await Promise.all(entries.map(async (entry) => {
+        try {
+          const params = new URLSearchParams({ symbol: entry.symbol, timeframe: this.timeframe, limit: "10" });
+          const res = await fetch(`/api/candles?${params}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          this._mergeCompareTail(entry, data.candles || []);
+        } catch (_) { /* one overlay's poll failing must not break the primary tile refresh */ }
+      }));
+      this._recomputeAllCompareSeries();
+    }
+    /** Refetches every overlay's full history at the tile's now-current
+     * symbol/timeframe (see setTimeframe/_setSymbol) - the 5000-bar window
+     * already loaded was for the *old* timeframe and no longer lines up. */
+    async _reloadCompareSymbols() {
+      if (!this._compareSymbols.size) return;
+      const entries = [...this._compareSymbols.values()];
+      await Promise.all(entries.map(async (entry) => {
+        try {
+          const params = new URLSearchParams({ symbol: entry.symbol, timeframe: this.timeframe, limit: "5000" });
+          const res = await fetch(`/api/candles?${params}`);
+          entry.candles = res.ok ? ((await res.json()).candles || []) : [];
+        } catch (_) { entry.candles = []; }
+      }));
+      this._recomputeAllCompareSeries();
+    }
+    _notifyCompareChanged() {
+      // Keep _initialCompareSymbols in lockstep with live state on every
+      // add/remove, not just what the constructor originally saw - a
+      // symbol/timeframe change re-applies _initialCompareSymbols via
+      // _loadOrInit() (see the "no saved layout" branch there), and
+      // without this a symbol switch *within the same tile's lifetime*
+      // would silently resurrect an overlay the user had already removed
+      // (removeCompareSymbol only reaches persisted storage through the
+      // caller's own _saveWorkspaceState(), which nothing here can force -
+      // the next full page load would be correct, but this tile object
+      // itself needs to already agree with itself before that).
+      this._initialCompareSymbols = this._compareSymbols.size ? [...this._compareSymbols.keys()] : null;
+      (this._compareChangeCbs || []).forEach((cb) => { try { cb(this); } catch (e) { console.error(e); } });
+    }
+    onCompareChange(cb) {
+      this._compareChangeCbs = this._compareChangeCbs || [];
+      this._compareChangeCbs.push(cb);
+      return () => { this._compareChangeCbs = this._compareChangeCbs.filter((f) => f !== cb); };
     }
 
     /** Ticks this tile's current bar from its own realtime price, using
