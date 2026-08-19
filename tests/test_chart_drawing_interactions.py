@@ -266,7 +266,7 @@ def test_touch_object_editing_and_textual_editor_contracts():
     assert "this._emit({ preview: true })" in drawings
     assert "detail.preview || detail.hover" in analysis
 
-    assert 'const isTextual = d.type === "text" || d.type === "note"' in analysis
+    assert "const isTextual = CE.Drawings.TEXT_ANNOTATION_TYPES.has(d.type)" in analysis
     assert 'textarea id="propText"' in analysis
     assert "textInput.onchange" in analysis
     assert "textInput.oninput" not in analysis
@@ -274,7 +274,7 @@ def test_touch_object_editing_and_textual_editor_contracts():
     # per-selection toolbar (ChartTile._renderFloatToolbar), not the old bar
     # pinned to a fixed spot at the top of the workspace.
     assert 'data-act="edittext"' in tile
-    assert 'const isTextual = d.type === "text" || d.type === "note"' in tile
+    assert "const isTextual = CE.Drawings.TEXT_ANNOTATION_TYPES.has(d.type)" in tile
     assert "focusText" in tile
 
 

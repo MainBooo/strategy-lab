@@ -420,7 +420,7 @@
       const d = dm && dm.drawings.find((x) => x.id === dm.selectedId);
       if (!d) { el.classList.add("hidden"); el.innerHTML = ""; return; }
       el.classList.remove("hidden");
-      const isTextual = d.type === "text" || d.type === "note";
+      const isTextual = CE.Drawings.TEXT_ANNOTATION_TYPES.has(d.type);
       // Arrow Mark glyphs are a fixed size/direction (see ARROW_MARK_LEN_PX
       // in drawings.js) - width/dash have no visual effect on them, and
       // they have no text to edit either, so neither of isTextual's two

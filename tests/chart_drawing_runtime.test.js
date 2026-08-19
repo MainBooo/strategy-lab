@@ -75,7 +75,7 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync("static/chart-engine/drawings.js", "utf8"), context);
 
-const { DrawingManager, TOOL_DEFS, INTERACTION_STATES } = windowTarget.ChartEngine.Drawings;
+const { DrawingManager, TOOL_DEFS, INTERACTION_STATES, TEXT_ANNOTATION_TYPES } = windowTarget.ChartEngine.Drawings;
 
 function makeManager() {
   const container = new FakeTarget();
@@ -217,7 +217,7 @@ function renderOps(env) {
 }
 
 function findBodyPoint(env, drawing, pointerType = "touch") {
-  if (drawing.type === "text" || drawing.type === "note") {
+  if (TEXT_ANNOTATION_TYPES.has(drawing.type)) {
     const point = env.manager.pixelToPoint(200, 200);
     drawing._lastBox = { x1: 190, y1: 180, x2: 270, y2: 220 };
     if (point.time === drawing.points[0].time && point.price === drawing.points[0].price) return { x: 230, y: 200 };
@@ -260,6 +260,7 @@ const allTools = [
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
   "fib_channel", "fib_wedge", "trend_based_fib_time", "fib_pitchfan", "fib_spiral",
   "volume_profile", "trend_angle", "regression_trend", "flat_top_bottom", "disjoint_channel",
+  "anchored_text", "price_note", "callout", "comment", "price_label", "signpost",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -649,6 +650,58 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   assert.deepStrictEqual({ x1: op.ox1, y1: op.oy1, x2: op.ox2, y2: op.oy2 }, { x1: 100, y1: 120, x2: 140, y2: 220 }, "disjoint_channel: line2 should be anchor2->anchor3, independent of line1");
   assert.strictEqual(op.handles.length, 4);
   assert.strictEqual(d.points.length, 4);
+}
+
+// Text annotation family (ТЗ "Text, Anchored Text, Note, Price Note,
+// Callout, Comment, Price Label, Signpost") - 6 new 1-anchor types beyond
+// text/note, each locked to its own distinguishing render op field:
+// anchored_text carries the pane height (its leader line's far end),
+// price_note/price_label carry the pane width (their leader/chip's far
+// edge) - both computed once by _buildOp, not something the paint step
+// has to re-derive.
+{
+  const env = makeManager();
+  const paneW = 800, paneH = 400; // makeManager()'s FakeTarget clientWidth/clientHeight, no gutter/time-axis mocked
+
+  const dAnchoredText = env.manager.addDrawing("anchored_text", [{ time: 40, price: 100 }]);
+  const opAnchoredText = renderOps(env).find((o) => o.kind === "anchored_text");
+  assert.ok(opAnchoredText, "anchored_text: no render op produced");
+  assert.strictEqual(opAnchoredText.x, 40);
+  assert.strictEqual(opAnchoredText.y, 100);
+  assert.strictEqual(opAnchoredText.h, paneH, "anchored_text: leader line should reach the pane height");
+
+  const dPriceNote = env.manager.addDrawing("price_note", [{ time: 40, price: 100 }]);
+  const opPriceNote = renderOps(env).find((o) => o.kind === "price_note");
+  assert.ok(opPriceNote, "price_note: no render op produced");
+  assert.strictEqual(opPriceNote.w, paneW, "price_note: leader line should reach the pane width (price axis)");
+  assert.strictEqual(opPriceNote.d.points[0].price, 100, "price_note: price label should read the anchor's own price");
+
+  env.manager.addDrawing("callout", [{ time: 40, price: 100 }]);
+  const opCallout = renderOps(env).find((o) => o.kind === "callout");
+  assert.ok(opCallout, "callout: no render op produced");
+
+  env.manager.addDrawing("comment", [{ time: 40, price: 100 }]);
+  const opComment = renderOps(env).find((o) => o.kind === "comment");
+  assert.ok(opComment, "comment: no render op produced");
+
+  const dPriceLabel = env.manager.addDrawing("price_label", [{ time: 40, price: 100 }]);
+  const opPriceLabel = renderOps(env).find((o) => o.kind === "price_label");
+  assert.ok(opPriceLabel, "price_label: no render op produced");
+  assert.strictEqual(opPriceLabel.w, paneW, "price_label: chip should be positioned relative to the pane width (price axis)");
+  assert.strictEqual(opPriceLabel.x, 40, "price_label: drag handle should stay at the literal anchor, not the chip");
+  assert.strictEqual(TOOL_DEFS.price_label.editAxis, "price", "price_label: whole-object drag should only move price, like horizontal_line");
+
+  env.manager.addDrawing("signpost", [{ time: 40, price: 100 }]);
+  const opSignpost = renderOps(env).find((o) => o.kind === "signpost");
+  assert.ok(opSignpost, "signpost: no render op produced");
+
+  // Every one of the 8 text-annotation types shares the same creation-time
+  // text prompt, editing UX, and box-based hit-test (see TEXT_ANNOTATION_TYPES
+  // in drawings.js) - a fresh drawing of each should already carry the
+  // per-type default text defaultProperties() gives it.
+  assert.strictEqual(dAnchoredText.properties.text, "Заметка");
+  assert.strictEqual(dPriceNote.properties.text, "Заметка");
+  assert.strictEqual(dPriceLabel.properties.text, "Метка");
 }
 
 // Trend-Based Fib Time: zones must project from anchor1 (the trend's end),

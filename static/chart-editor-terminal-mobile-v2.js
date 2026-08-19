@@ -48,7 +48,7 @@
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["rotated_rectangle","Повёрнутый прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["arrow","Стрелки",icon("arrow"),[["arrow","Стрелка"],["arrow_mark_up","Стрелка вверх"],["arrow_mark_down","Стрелка вниз"],["arrow_mark_left","Стрелка влево"],["arrow_mark_right","Стрелка вправо"]]],
     ["curves","Кривые",icon("curve"),[["path","Путь"],["curve","Кривая"],["arc","Дуга"],["double_curve","Двойная кривая"]]],
-    ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"]]],
+    ["text","Текст",icon("text"),[["text","Текст"],["note","Заметка / метка"],["anchored_text","Привязанный текст"],["price_note","Ценовая заметка"],["callout","Выноска"],["comment","Комментарий"],["price_label","Ценовая метка"],["signpost","Сигнальный флаг"]]],
     ["measure","Измерения",icon("measure"),[["measure","Линейка (временная)"],["price_range","Диапазон цены"],["time_range","Диапазон времени"],["price_date_range","Цена и время"]]],
     ["brush","Кисть",icon("brush"),[["freehand","Кисть / freehand"],["highlighter","Маркер / highlighter"]]],
     ["position","Позиции",icon("position"),[["long_position","Long Position"],["short_position","Short Position"]]]

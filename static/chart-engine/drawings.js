@@ -76,6 +76,20 @@
     time_range: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Диапазон времени" },
     text: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Текст" },
     note: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Заметка" },
+    // The remaining 6 text-annotation sub-types from the TZ's "Text,
+    // Anchored Text, Note, Price Note, Callout, Comment, Price Label,
+    // Signpost" line - all 1-anchor tap placement, identical creation/
+    // editing plumbing to text/note (TEXT_ANNOTATION_TYPES below), only
+    // the render glyph/layout differs per type.
+    anchored_text: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Привязанный текст" },
+    price_note: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Ценовая заметка" },
+    callout: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Выноска" },
+    comment: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Комментарий" },
+    // Renders as a compact chip pinned to the price axis (right pane edge)
+    // at the anchor's price - its own x/time is otherwise irrelevant to
+    // rendering, same reason horizontal_line uses editAxis:"price".
+    price_label: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", editAxis: "price", label: "Ценовая метка" },
+    signpost: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Сигнальный флаг" },
     fib_retracement: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Коррекция Фибоначчи" },
     fib_extension: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Расширение Фибоначчи" },
     long_position: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", editHandles: ["start", "end", "stop", "take"], label: "Long позиция" },
@@ -295,6 +309,12 @@
     // below.
     fib_spiral: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Спираль Фибоначчи" },
   };
+
+  // Every 1-anchor tool whose whole point is user-entered text - shares
+  // creation-time prompt(), double-click-to-edit, and Properties
+  // panel/floating toolbar's "edit text instead of width/dash" branch
+  // (chart-tile.js/chart-analysis.js both gate on this exact set).
+  const TEXT_ANNOTATION_TYPES = new Set(["text", "note", "anchored_text", "price_note", "callout", "comment", "price_label", "signpost"]);
 
   /** Unit direction each Arrow Mark glyph points in pane-pixel space -
    * screen-space constants (y grows downward), not tied to price/time. */
@@ -982,8 +1002,10 @@
     if (type === "highlighter") return Object.assign(base, { color: "#ffeb3b", width: 14, opacity: 0.35 });
     if (type === "long_position") return Object.assign(base, { color: theme.up, riskDistance: null, rewardDistance: null, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
-    if (type === "text") return Object.assign(base, { text: "Заметка" });
-    if (type === "note") return Object.assign(base, { text: "Заметка", color: "#ffce54" });
+    if (type === "text" || type === "anchored_text" || type === "callout") return Object.assign(base, { text: "Заметка" });
+    if (type === "note" || type === "comment") return Object.assign(base, { text: "Заметка", color: "#ffce54" });
+    if (type === "price_note") return Object.assign(base, { text: "Заметка", color: "#ffce54" });
+    if (type === "price_label" || type === "signpost") return Object.assign(base, { text: "Метка" });
     // levels: null means "use the tool's own default set" (FIB_RETRACEMENT_
     // LEVELS / FIB_EXTENSION_LEVELS below) - only a drawing whose levels the
     // user actually edited carries its own array, so every fib placed before
@@ -2186,7 +2208,13 @@
           return px >= x1 - tol && px <= x2 + tol && py >= yTop - tol && py <= yBottom + tol ? { id: d.id, handle: null } : null;
         }
         case "text":
-        case "note": {
+        case "note":
+        case "anchored_text":
+        case "price_note":
+        case "callout":
+        case "comment":
+        case "price_label":
+        case "signpost": {
           if (pix[0] == null || pix[0].x == null) return null;
           const box = d._lastBox;
           if (box && px >= box.x1 - tol && px <= box.x2 + tol && py >= box.y1 - tol && py <= box.y2 + tol) return { id: d.id, handle: null };
@@ -2872,11 +2900,11 @@
       const type = this.draft.type;
       let properties;
       if (type === "long_position" || type === "short_position") properties = defaultProperties(type);
-      if (type === "text" || type === "note") {
+      if (TEXT_ANNOTATION_TYPES.has(type)) {
         properties = defaultProperties(type);
         this._setInteractionState(INTERACTION_STATES.TEXT_EDIT);
         if (typeof global.prompt === "function") {
-          const next = global.prompt(type === "text" ? "Текст" : "Текст заметки", properties.text || "");
+          const next = global.prompt(TOOL_DEFS[type].label, properties.text || "");
           if (next != null) properties.text = next;
         }
       }
@@ -2994,8 +3022,8 @@
       const hit = this.hitTest(x, y);
       if (hit) {
         const d = this.drawings.find((dd) => dd.id === hit.id);
-        if (d && (d.type === "text" || d.type === "note") && typeof global.prompt === "function") {
-          const next = global.prompt("Текст заметки", d.properties.text || "");
+        if (d && TEXT_ANNOTATION_TYPES.has(d.type) && typeof global.prompt === "function") {
+          const next = global.prompt(TOOL_DEFS[d.type].label, d.properties.text || "");
           if (next != null) this.updateDrawing(d.id, { properties: { text: next } });
         }
       }
@@ -3270,6 +3298,30 @@
           break;
         case "note":
           if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "note", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
+        case "anchored_text":
+          if (pix[0]?.x != null && pix[0]?.y != null) {
+            ops.push({ kind: "anchored_text", d, x: pix[0].x, y: pix[0].y, h: paneHeight(this.manager.core), color, alpha, handle: pix[0] });
+          }
+          break;
+        case "price_note":
+          if (pix[0]?.x != null && pix[0]?.y != null) {
+            ops.push({ kind: "price_note", d, x: pix[0].x, y: pix[0].y, w: paneWidth(this.manager.core), color, alpha, handle: pix[0] });
+          }
+          break;
+        case "callout":
+          if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "callout", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
+        case "comment":
+          if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "comment", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
+        case "price_label":
+          if (pix[0]?.x != null && pix[0]?.y != null) {
+            ops.push({ kind: "price_label", d, x: pix[0].x, y: pix[0].y, w: paneWidth(this.manager.core), color, alpha, handle: pix[0] });
+          }
+          break;
+        case "signpost":
+          if (pix[0]?.x != null && pix[0]?.y != null) ops.push({ kind: "signpost", d, x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
           break;
         case "fib_retracement":
           if (pix[0]?.x != null && pix[1]?.x != null) {
@@ -3620,6 +3672,134 @@
           ctx.font = `${13 * rv}px Inter, sans-serif`;
           ctx.fillText(op.d.properties.text || "", px + 10 * r, py + 4 * rv);
           op.d._lastBox = { x1: op.x - 6, y1: op.y - 10, x2: op.x + 10 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 10 };
+          drawHandle(ctx, px, py, r);
+          break;
+        }
+        // Text pinned to a {time,price} point (same as "text") plus a
+        // dashed vertical leader down to the time axis - the visual cue
+        // TradingView's own Anchored Text uses to read as tied to a point,
+        // not floating free like plain Text.
+        case "anchored_text": {
+          const px = op.x * r, py = op.y * rv;
+          ctx.save();
+          ctx.setLineDash([4 * r, 3 * r]);
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, op.h * rv); ctx.stroke();
+          ctx.restore();
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          ctx.fillStyle = op.color;
+          ctx.fillText(op.d.properties.text || "", px + 4 * r, py - 6 * rv);
+          op.d._lastBox = { x1: op.x, y1: op.y - 22, x2: op.x + 8 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 4 };
+          drawHandle(ctx, px, py, r);
+          break;
+        }
+        // note's dot + text, plus a dashed horizontal leader from the
+        // anchor to the price axis with the anchor's own price value
+        // labeled there - the note reads as tied to a specific price
+        // level, not just a point in time.
+        case "price_note": {
+          const px = op.x * r, py = op.y * rv;
+          ctx.save();
+          ctx.setLineDash([4 * r, 3 * r]);
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(op.w * r, py); ctx.stroke();
+          ctx.restore();
+          ctx.beginPath(); ctx.arc(px, py, 4 * r, 0, Math.PI * 2); ctx.fillStyle = op.color; ctx.fill();
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          ctx.fillText(op.d.properties.text || "", px + 10 * r, py + 4 * rv);
+          const price = op.d.points[0].price;
+          if (Number.isFinite(price)) this._text(ctx, price.toFixed(2), op.w * r - 46 * r, py - 4 * rv, op.color);
+          op.d._lastBox = { x1: op.x - 6, y1: op.y - 10, x2: op.x + 10 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 10 };
+          drawHandle(ctx, px, py, r);
+          break;
+        }
+        // Speech-bubble box (fill+stroke rect, same 0.16-alpha convention
+        // every other fillable shape in this file uses) with a triangular
+        // tail pointing back down to the anchor - classic callout shape,
+        // box sits up-and-right of the anchor so the tail always has room.
+        case "callout": {
+          const text = op.d.properties.text || "";
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          const textWidthPx = ctx.measureText(text).width / r;
+          const padX = 8, padY = 6;
+          const boxW = textWidthPx + padX * 2, boxH = 16 + padY * 2;
+          const boxX = op.x + 14, boxY = op.y - boxH - 14;
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.16;
+          ctx.fillStyle = op.color;
+          ctx.fillRect(boxX * r, boxY * rv, boxW * r, boxH * rv);
+          ctx.globalAlpha = op.alpha ?? 1;
+          ctx.strokeStyle = op.color;
+          ctx.strokeRect(boxX * r, boxY * rv, boxW * r, boxH * rv);
+          ctx.beginPath();
+          ctx.moveTo((boxX + 6) * r, (boxY + boxH) * rv);
+          ctx.lineTo(op.x * r, op.y * rv);
+          ctx.lineTo((boxX + 18) * r, (boxY + boxH) * rv);
+          ctx.stroke();
+          ctx.fillStyle = op.color;
+          ctx.fillText(text, (boxX + padX) * r, (boxY + padY + 12) * rv);
+          op.d._lastBox = { x1: Math.min(boxX, op.x) - 4, y1: boxY - 4, x2: boxX + boxW + 4, y2: Math.max(boxY + boxH, op.y) + 4 };
+          drawHandle(ctx, op.x * r, op.y * rv, r);
+          break;
+        }
+        // note's exact layout, swapping the plain dot for a tiny speech-
+        // bubble glyph - the one visual difference TradingView's own
+        // Comment tool has from Note.
+        case "comment": {
+          const px = op.x * r, py = op.y * rv;
+          ctx.fillStyle = op.color;
+          ctx.fillRect(px - 6 * r, py - 6 * rv, 12 * r, 8 * rv);
+          ctx.beginPath();
+          ctx.moveTo(px - 2 * r, py + 2 * rv);
+          ctx.lineTo(px, py + 6 * rv);
+          ctx.lineTo(px + 2 * r, py + 2 * rv);
+          ctx.closePath();
+          ctx.fill();
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          ctx.fillText(op.d.properties.text || "", px + 14 * r, py + 2 * rv);
+          op.d._lastBox = { x1: op.x - 8, y1: op.y - 8, x2: op.x + 14 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 8 };
+          drawHandle(ctx, px, py, r);
+          break;
+        }
+        // Compact solid chip pinned to the price axis (pane's right edge)
+        // at the anchor's own price - the drag handle stays at the literal
+        // anchor point (same convention horizontal_line's own handle uses:
+        // a fixed pixel dot even though the rendered line spans the full
+        // width), only the chip's y tracks the anchor's price.
+        case "price_label": {
+          const text = op.d.properties.text || "";
+          ctx.font = `${12 * rv}px Inter, sans-serif`;
+          const textWidthPx = ctx.measureText(text).width / r;
+          const padX = 6, padY = 4;
+          const chipW = textWidthPx + padX * 2, chipH = 14 + padY * 2;
+          const chipX = op.w - chipW - 4, chipY = op.y - chipH / 2;
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.85;
+          ctx.fillStyle = op.color;
+          ctx.fillRect(chipX * r, chipY * rv, chipW * r, chipH * rv);
+          ctx.globalAlpha = op.alpha ?? 1;
+          // Dark text on the solid colored chip - #0c1019 matches this
+          // app's own canvas/dark-theme background elsewhere (see Hollow
+          // Candles' body fill in core.js).
+          ctx.fillStyle = "#0c1019";
+          ctx.fillText(text, (chipX + padX) * r, (chipY + padY + 11) * rv);
+          op.d._lastBox = { x1: chipX - 4, y1: chipY - 4, x2: chipX + chipW + 4, y2: chipY + chipH + 4 };
+          drawHandle(ctx, op.x * r, op.y * rv, r);
+          break;
+        }
+        // A small flag glyph (pole + triangular pennant) instead of note's
+        // plain dot - reads as "an event marker planted here", TradingView's
+        // own Signpost visual intent.
+        case "signpost": {
+          const px = op.x * r, py = op.y * rv;
+          ctx.strokeStyle = op.color;
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - 14 * rv); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(px, py - 14 * rv);
+          ctx.lineTo(px + 10 * r, py - 10 * rv);
+          ctx.lineTo(px, py - 6 * rv);
+          ctx.closePath();
+          ctx.fillStyle = op.color;
+          ctx.fill();
+          ctx.font = `${13 * rv}px Inter, sans-serif`;
+          ctx.fillText(op.d.properties.text || "", px + 14 * r, py - 6 * rv);
+          op.d._lastBox = { x1: op.x - 3, y1: op.y - 18, x2: op.x + 14 + ctx.measureText(op.d.properties.text || "").width / r, y2: op.y + 4 };
           drawHandle(ctx, px, py, r);
           break;
         }
@@ -3983,6 +4163,7 @@
     TOOL_DEFS,
     INTERACTION_STATES,
     defaultProperties,
+    TEXT_ANNOTATION_TYPES,
     positionStopPrice,
     positionTakePrice,
     FIB_RETRACEMENT_LEVELS,

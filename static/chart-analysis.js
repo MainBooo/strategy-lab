@@ -67,6 +67,12 @@
     { id: "polyline", label: "Полилиния (Enter/двойной клик — завершить)", icon: "⌁" },
     { id: "text", label: "Текст", icon: "T" },
     { id: "note", label: "Заметка", icon: "🗨" },
+    { id: "anchored_text", label: "Привязанный текст", icon: "T¦" },
+    { id: "price_note", label: "Ценовая заметка", icon: "🗨—" },
+    { id: "callout", label: "Выноска", icon: "💬" },
+    { id: "comment", label: "Комментарий", icon: "🗯" },
+    { id: "price_label", label: "Ценовая метка", icon: "▮T" },
+    { id: "signpost", label: "Сигнальный флаг", icon: "🚩" },
     { id: "measure", label: "Измерение (временное, потяните — исчезает при отпускании)", icon: "📏" },
     { id: "price_range", label: "Диапазон цены", icon: "↕" },
     { id: "time_range", label: "Диапазон времени", icon: "↔" },
@@ -1478,7 +1484,7 @@
       const d = dm ? dm.drawings.find((x) => x.id === dm.selectedId) : null;
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
-      const isTextual = d.type === "text" || d.type === "note";
+      const isTextual = CE.Drawings.TEXT_ANNOTATION_TYPES.has(d.type);
       const isFib = d.type === "fib_retracement" || d.type === "fib_extension";
       const fibDefaults = d.type === "fib_retracement" ? CE.Drawings.FIB_RETRACEMENT_LEVELS : CE.Drawings.FIB_EXTENSION_LEVELS;
       const fibLevels = Array.isArray(d.properties.levels) && d.properties.levels.length ? d.properties.levels : fibDefaults;
@@ -1492,7 +1498,7 @@
           ${d.points.map((p, i) => `<div class="ca-coord-row">${d.points.length > 1 ? `#${i + 1}: ` : ""}${fmtCoordTime(p.time)}${p.price != null ? ` · ${fmtPrice(p.price)}` : ""}</div>`).join("")}
         </div>
         ${isTextual ? `
-          <label class="ca-prop-text-label">${d.type === "note" ? "Текст заметки" : "Текст"}
+          <label class="ca-prop-text-label">${d.type === "text" ? "Текст" : CE.Drawings.TOOL_DEFS[d.type].label}
             <textarea id="propText" class="ca-prop-textarea" rows="4" placeholder="Введите текст…"></textarea>
           </label>
           <div class="muted-note ca-prop-text-hint">Текст сохраняется после завершения ввода.</div>
