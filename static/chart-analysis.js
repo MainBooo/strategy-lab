@@ -181,6 +181,7 @@
           this.layoutMode = "1";
         }
         this._build();
+        this._syncHistoryButtons();
         this._syncTileGrid();
         this._loadSecurities();
         if (global.AlertService) global.AlertService.onTriggered(() => this._refreshAlertBadge());
@@ -1235,7 +1236,7 @@
             // must repaint the primitive, not rebuild the properties/object
             // DOM while the user is dragging on iPhone.
             if (detail && (detail.preview || detail.hover)) return;
-            if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); }
+            if (tile.id === this.activeTileId) { this._renderProps(); this._renderObjects(); this._syncHistoryButtons(); }
           });
           tile.onRangeChange((range) => { if (this.syncFlags.scroll || this.syncFlags.zoom) this._broadcastRange(tile, range); });
           tile.onCrosshairMove((time, price) => { if (this.syncFlags.crosshair) this._broadcastCrosshair(tile, time, price); });
@@ -1359,7 +1360,23 @@
       this._renderTickerOptions();
       this._renderProps();
       this._renderObjects();
+      this._syncHistoryButtons();
       this._saveWorkspaceState();
+    },
+
+    /** caUndoBtn/caRedoBtn never reflected drawingMgr's actual undo/redo
+     * stack - they were always clickable (undo()/redo() no-op safely on an
+     * empty stack, so this wasn't a crash, just a TradingView-parity/
+     * affordance gap: the real toolbar visibly disables them). Called from
+     * every path that already re-renders props/objects for the active tile
+     * (onChange history/created/updated/removed events, tile switch) so it
+     * stays in sync without a dedicated listener of its own. */
+    _syncHistoryButtons() {
+      const dm = this.drawingMgr;
+      const undoBtn = this.root.querySelector("#caUndoBtn");
+      const redoBtn = this.root.querySelector("#caRedoBtn");
+      if (undoBtn) undoBtn.disabled = !dm || !dm._undoStack.length;
+      if (redoBtn) redoBtn.disabled = !dm || !dm._redoStack.length;
     },
 
     // ------------------------------------------------------- persistence --
