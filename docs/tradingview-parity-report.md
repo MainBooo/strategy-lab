@@ -167,9 +167,8 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 custom levels закрыты в этой же сессии:
 
 - **Продвинутые инструменты рисования**: Fib Channel/Time Zone/Circles/
-  Spiral/Arcs/Wedge, Volume Profile, Path/Arc/Curve/DoubleCurve,
-  Multiselect, Grouping — не реализованы (P2/P3 по ТЗ, самый крупный
-  оставшийся кусок работы).
+  Spiral/Arcs/Wedge, Volume Profile, Multiselect, Grouping — не
+  реализованы (P2/P3 по ТЗ, самый крупный оставшийся кусок работы).
 - ~~**Rotated Rectangle / Arrow / Arrow Mark ×4 / Highlighter**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19»): `rotated_rectangle` — настоящий повёрнутый quad в
@@ -177,8 +176,15 @@ custom levels закрыты в этой же сессии:
   треугольная голова; `arrow_mark_up/down/left/right` — фиксированный
   screen-space глиф на 1 анкоре; `highlighter` — тот же drag-release
   семплинг, что freehand, с толстым полупрозрачным round-cap стилем по
-  умолчанию. Path/Arc/Curve/DoubleCurve (bezier-геометрия) остаются
-  MISSING — соседний, более дорогой кусок той же строки ТЗ.
+  умолчанию.
+- ~~**Path / Curve / Arc / Double Curve**~~ — добавлены той же сессией
+  (см. matrix changelog «Продолжение 2026-08-19, часть 2»): `path` —
+  та же геометрия, что polyline; `curve` — квадратичный Bezier
+  (control-точка); `arc` — настоящая дуга окружности через 3 анкора,
+  с честным откатом на прямой отрезок при коллинеарных точках;
+  `double_curve` — кубический Bezier-S (2 control-точки). Закрывает
+  строку ТЗ «Polyline, Path, Arc, Curve, Double Curve, Brush, Highlighter,
+  Arrow, Arrow Marker» полностью — 9 из 9.
 - ~~**Gann Fan / Pitchfork (Standard) / XABCD Pattern**~~ — из MISSING в
   PARTIAL (см. matrix changelog): `gann_fan` (9 классических лучей 1×8..8×1
   от реального-бар наклона), `pitchfork` (медиана + 2 параллельных зубца,

@@ -58,7 +58,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
 | Pitchfork family (4 варианта) | | 3 из 4: Standard `pitchfork`, Schiff `pitchfork_schiff`, Modified Schiff `pitchfork_modified_schiff` — общая геометрия (median + 2 parallel teeth, pane-pixel space), различаются только парой model-точек, задающих median (см. `PITCHFORK_VARIANT`); Inside Pitchfork отсутствует | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 3 варианта нарисованы с идентичными анкорами для сравнения, median-геометрия подтверждена программно (Schiff/Modified Schiff стартуют из одной точки midpoint(P0,P1), расходятся по направлению), hit-test/select/Properties/Object Tree подтверждены на проде |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | все 4: `rotated_rectangle` (эта сессия) — anchor0-anchor1 задают одно ребро (длина+угол), anchor2 — перпендикулярное смещение (ширина), реальный повёрнутый quad в pane-pixel space (`rotatedRectCorners()`), не просто offset-цена как у parallel_channel | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — нарисован (3 анкора), рендер `kind:"rotated_rect"` (4 угла, заливка+обводка), hit-test (2 треугольника через `pointInTriangle`, плюс 4 стороны) подтверждён программно в обеих направлениях |
-| Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline/freehand были; добавлены (эта сессия) `highlighter` (тот же drag-release семплинг, что freehand, но толще/полупрозрачнее/round-cap по умолчанию — отдельный rail-инструмент, не пресет), `arrow` (2-анкорный сегмент + треугольная голова у anchor 1), 4× `arrow_mark_{up,down,left,right}` (1 анкор, фиксированный screen-space глиф без учёта drag). Path/Arc/Curve/DoubleCurve (bezier-геометрия) по-прежнему отсутствуют — более дорогой отдельный кусок | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 6 новых типов нарисованы программно (`dm.addDrawing`), верные render op kinds (`arrow`/`arrow_mark`/`highlighter`/`rotated_rect`), hit-test подтверждён на геометрически рассчитанной точке тела каждого объекта (не только на handle), Object Tree показал верные русские подписи, `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
+| Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | все 9 из 9 теперь реализованы. Эта сессия (2026-08-19, продолжение): `highlighter` (тот же drag-release семплинг, что freehand, но толще/полупрозрачнее/round-cap по умолчанию — отдельный rail-инструмент, не пресет), `arrow` (2-анкорный сегмент + треугольная голова у anchor 1), 4× `arrow_mark_{up,down,left,right}` (1 анкор, фиксированный screen-space глиф без учёта drag); затем `path` (тот же multi-tap/geometry, что polyline — TradingView сам их почти не различает), `curve` (квадратичный Bezier, anchor2 — control-точка, кривая её не проходит), `arc` (настоящая дуга окружности через 3 анкора — `circumcircle()`+`arcSamples()`, откат на прямой отрезок при коллинеарных анкорах), `double_curve` (кубический Bezier-S, anchor2/anchor3 — 2 control-точки) | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — все 10 новых типов (highlighter/arrow/4×arrow_mark из первой части + path/curve/arc/double_curve из этой) нарисованы программно (`dm.addDrawing`), верные render op kinds (`arrow`/`arrow_mark`/`highlighter`/`rotated_rect`/`polyline`/`bezier`), hit-test подтверждён на геометрически рассчитанной точке тела каждого объекта, для Arc отдельно программно подтверждено, что сэмплированная дуга проходит через 3-й анкор (расстояние <1px — только погрешность дискретизации), Object Tree показал верные русские подписи, `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
@@ -451,6 +451,57 @@ PARITY там, где нет хотя бы одного из этих подтв
   и свой собственный op kind/width; `arrow` добавлен в generic
   fixed-2-point-tools цикл; `arrow_mark_up` — в generic single-tap-anchor
   цикл).
+
+### Продолжение 2026-08-19, часть 2 — Path, Curve, Arc, Double Curve
+
+Закрывает последний хвост той же строки ТЗ ("Polyline, Path, Arc, Curve,
+Double Curve, Brush, Highlighter, Arrow, Arrow Marker" — теперь 9/9), после
+Rotated Rectangle/Arrow/Arrow Mark/Highlighter выше в этом же changelog.
+
+- **Path** (`path`) — из MISSING в PARITY. Буквально та же
+  multi-tap-геометрия, что `polyline` (делит один и тот же render/hit-test
+  `case`, рендерится тем же `kind:"polyline"`) — в реальном TradingView
+  Path и Polyline тоже почти не различимы (оба — прямые отрезки между
+  кликами), разница только в отдельной кнопке на рейле.
+- **Curve** (`curve`) — из MISSING в PARITY. Квадратичный Bezier: anchor0/
+  anchor1 — концы (staged drag, как обычно), anchor2 — **control-точка**
+  (кривая выгибается в её сторону, но не проходит через неё — стандартная
+  Bezier-терминология; TradingView-шный "тащи прямо по кривой" эффект
+  нигде не задокументирован достаточно точно для сверки). Сэмплируется в
+  33 точки (`quadraticBezierSamples()`) и красится/hit-тестится как
+  полилиния через них — тот же принцип, которым уже пользуется
+  `sine_line`, а не встроенный canvas `quadraticCurveTo` (у которого нет
+  API «расстояние до точки» для hit-test).
+- **Arc** (`arc`) — из MISSING в PARITY. Настоящая дуга окружности, не
+  Bezier — anchor0/anchor1/anchor2 все трое лежат буквально **на** дуге
+  (`circumcircle()` — окружность через 3 точки по формуле определителя;
+  `arcSamples()` считает, какое из двух возможных направлений обхода от
+  anchor0 к anchor1 реально проходит через anchor2, и сэмплирует именно
+  его). При (почти) коллинеарных анкорах окружность не существует —
+  честный откат на прямой отрезок anchor0→anchor1 (геометрический предел
+  всё более плоской дуги — тоже прямая, ничего не «ломается»).
+- **Double Curve** (`double_curve`) — из MISSING в PARITY. Кубический
+  Bezier-S: anchor0/anchor1 — концы, anchor2/anchor3 — их две независимые
+  control-точки (тот же принцип, что у Curve, только кубический —
+  `cubicBezierSamples()`, 41 точка).
+- Все четыре не потребовали нового кода в Properties panel/Object Tree/
+  undo-redo/автосохранении/whole-object drag — та же generic N-анкорная
+  инфраструктура. Кнопки: `chart-analysis.js` TOOL_BUTTONS (+4 записи) и
+  новая группа «Кривые» в `chart-editor-terminal-mobile-v2.js`.
+  **Верифицировано** вживую на проде (тот же QA-аккаунт): все 4 типа
+  созданы программно с ценами внутри видимого диапазона, верные render op
+  kinds (`polyline` для Path, общий `bezier` для Curve/Arc/Double Curve),
+  скриншот визуально подтвердил угловатый zigzag у Path в противовес
+  гладким кривым у остальных трёх; hit-test подтверждён на середине
+  сэмплированной кривой для всех четырёх; отдельно программно проверено,
+  что дуга Arc проходит через 3-й анкор (минимальное расстояние от
+  сэмплированной дуги до пикселя anchor2 — 0.86px, чистая погрешность
+  дискретизации на 41 точке, не ошибка формулы); Object Tree — верные
+  подписи; тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`. 198 pytest + JS runtime suite зелёные —
+  добавлены op-kind проверки для всех четырёх новых типов плюс отдельный
+  regression-тест на откат Arc к прямому отрезку при коллинеарных
+  анкорах (было бы `NaN`/крашем без guard на `circumcircle()`).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
