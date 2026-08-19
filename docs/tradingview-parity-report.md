@@ -188,6 +188,16 @@ custom levels закрыты в этой же сессии:
   channel с константной, а не offset-параллельной, второй границей;
   `disjoint_channel` — две независимые линии на 4 анкорах, переиспользует
   render/hit-test `channel`-кайнда напрямую.
+- ~~**Text annotation family (Anchored Text, Price Note, Callout, Comment,
+  Price Label, Signpost)**~~ — реализовано сессией 2026-08-19 (см. matrix
+  changelog), закрывает строку ТЗ 8 из 8 (были только text/note). Все 6
+  переиспользуют 1-анкорную creation/edit-инфраструктуру text/note
+  (новое `TEXT_ANNOTATION_TYPES`-множество в drawings.js, экспортировано
+  через `CE.Drawings`); различаются только paint-кодом: пунктирный
+  leader до оси времени (anchored_text) или до ценовой оси с числом
+  (price_note), речевой пузырь с хвостиком (callout), мини-иконка вместо
+  точки (comment), закреплённый у ценовой оси чип с `editAxis:"price"`
+  (price_label), иконка флажка (signpost).
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19, часть 3»): `fib_time_zone` — вертикальные линии на

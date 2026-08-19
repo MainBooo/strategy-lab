@@ -59,7 +59,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Pitchfork family (4 варианта) | | 3 из 4: Standard `pitchfork`, Schiff `pitchfork_schiff`, Modified Schiff `pitchfork_modified_schiff` — общая геометрия (median + 2 parallel teeth, pane-pixel space), различаются только парой model-точек, задающих median (см. `PITCHFORK_VARIANT`); Inside Pitchfork отсутствует | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 3 варианта нарисованы с идентичными анкорами для сравнения, median-геометрия подтверждена программно (Schiff/Modified Schiff стартуют из одной точки midpoint(P0,P1), расходятся по направлению), hit-test/select/Properties/Object Tree подтверждены на проде |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | все 4: `rotated_rectangle` (эта сессия) — anchor0-anchor1 задают одно ребро (длина+угол), anchor2 — перпендикулярное смещение (ширина), реальный повёрнутый quad в pane-pixel space (`rotatedRectCorners()`), не просто offset-цена как у parallel_channel | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — нарисован (3 анкора), рендер `kind:"rotated_rect"` (4 угла, заливка+обводка), hit-test (2 треугольника через `pointInTriangle`, плюс 4 стороны) подтверждён программно в обеих направлениях |
 | Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | все 9 из 9 теперь реализованы. Эта сессия (2026-08-19, продолжение): `highlighter` (тот же drag-release семплинг, что freehand, но толще/полупрозрачнее/round-cap по умолчанию — отдельный rail-инструмент, не пресет), `arrow` (2-анкорный сегмент + треугольная голова у anchor 1), 4× `arrow_mark_{up,down,left,right}` (1 анкор, фиксированный screen-space глиф без учёта drag); затем `path` (тот же multi-tap/geometry, что polyline — TradingView сам их почти не различает), `curve` (квадратичный Bezier, anchor2 — control-точка, кривая её не проходит), `arc` (настоящая дуга окружности через 3 анкора — `circumcircle()`+`arcSamples()`, откат на прямой отрезок при коллинеарных анкорах), `double_curve` (кубический Bezier-S, anchor2/anchor3 — 2 control-точки) | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — все 10 новых типов (highlighter/arrow/4×arrow_mark из первой части + path/curve/arc/double_curve из этой) нарисованы программно (`dm.addDrawing`), верные render op kinds (`arrow`/`arrow_mark`/`highlighter`/`rotated_rect`/`polyline`/`bezier`), hit-test подтверждён на геометрически рассчитанной точке тела каждого объекта, для Arc отдельно программно подтверждено, что сэмплированная дуга проходит через 3-й анкор (расстояние <1px — только погрешность дискретизации), Object Tree показал верные русские подписи, `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
-| Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
+| Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | 8 из 8 (эта сессия): text/note уже были; добавлены `anchored_text` (текст + пунктирный вертикальный leader до оси времени), `price_note` (note + пунктирный горизонтальный leader до ценовой оси с подписанной ценой), `callout` (речевой пузырь — залитый+обведённый прямоугольник с хвостиком к анкору), `comment` (note с мини-иконкой пузыря вместо точки), `price_label` (компактный залитый чип, закреплённый на правом крае у ценовой оси на цене анкора — `editAxis:"price"`, как у horizontal_line), `signpost` (note с иконкой флажка вместо точки). Все 6 — переиспользуют ровно ту же 1-анкорную creation/edit-инфраструктуру, что text/note (`TEXT_ANNOTATION_TYPES`-множество в `drawings.js`, разделяемое с `chart-tile.js`/`chart-analysis.js`), отличается только paint-код | да | **PARITY (испр. эта сессия)** | живой Playwright на реальных данных SOLUSDT — все 6 созданы, верные render op kinds, hit-test подтверждён для каждого (у price_label — по реальной позиции чипа у ценовой оси, не по анкору, который в этот момент был вне видимого диапазона времени — то же намеренное поведение, что у horizontal_line); визуально подтверждены все 3 «иконочных» типа разом (callout — рамка с хвостиком, comment — мини-пузырь, price_note — точка+пунктир+число цены у оси), Properties panel корректно показывает подпись типа и редактируемый текст; 198 pytest + оба JS runtime suites зелёные |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
 | Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 9 из 9 — семья закрыта полностью. Часть 1 (`fib_time_zone`/`fib_speed_resistance_fan`/`fib_circles`/`fib_arcs`) — см. changelog «часть 3». Часть 2 (`fib_channel`/`fib_wedge`/`trend_based_fib_time`) — см. changelog «часть 4». Часть 3 (эта сессия): `fib_pitchfan` (тот же 3-анкорный handle+прогн placement, что у pitchfork, но вместо median+2 зубьев — веер лучей от anchor0 через каждую Фибоначчи-долю отрезка anchor1↔anchor2; на 50% луч буквально совпадает с медианой обычного pitchfork — переиспользует render/hit-test `gann_fan` без изменений, как уже делает fib_speed_resistance_fan), `fib_spiral` (логарифмическая «золотая спираль» вокруг anchor0, anchor1 задаёт стартовый радиус/угол; радиус растёт в φ раз за каждую четверть оборота — стандартное определение) | да | **PARITY/PARTIAL (испр. эта сессия)** | живой Playwright на проде — оба типа нарисованы программно, верные render op kinds (`gann_fan` для Pitchfan, `fib_spiral` для Spiral), скриншот визуально подтвердил веер лучей и узнаваемую логарифмическую спираль одновременно; hit-test подтверждён программно для обоих (Pitchfan — точка на веере рядом с вершиной, Spiral — точка на первом витке); floating toolbar появился при выделении; консоль чистая; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода. Юнит-тесты: Pitchfan — все 7 лучей стартуют строго из anchor0, 50%-луч коллинеарен midpoint(anchor1,anchor2) и помечен major; Spiral — первая точка сэмплов буквально совпадает с anchor1, после ровно четверти оборота радиус вырос ровно в φ раз |
@@ -873,6 +873,64 @@ Closes the second half of the Anchored VWAP / Volume Profile ТЗ line item
   candles edge case; отдельные geometry-тесты на `trend_angle`'s угол,
   `flat_top_bottom`'s флэт-границу, `disjoint_channel`'s независимость
   двух сегментов).
+- **Text annotation family (Anchored Text/Price Note/Callout/Comment/
+  Price Label/Signpost)** — из PARTIAL (2 из 8: только text/note) в
+  PARITY (8 из 8). Перечитал матрицу заново вместо доверия устаревшему
+  списку кандидатов в памяти — единственный оставшийся крупный MISSING-
+  пункт был Compare/add symbol (нужен отдельный multi-symbol backend,
+  не drop-in), а эта строка была PARTIAL с явно перечисленными
+  недостающими конкретными типами, дешевле и такой же пользовательской
+  ценности. Все 6 новых типов — 1-анкорное `tap`-размещение, разделяют
+  ровно ту же creation/edit-инфраструктуру, что уже была у text/note
+  (creation-time `prompt()`, double-click-редактирование, Properties
+  panel текстовое поле, floating toolbar «✎ редактировать текст» вместо
+  толщины/стиля) — вынесено в новое множество `TEXT_ANNOTATION_TYPES`
+  (`drawings.js`, экспортировано через `CE.Drawings`, использовано в
+  `chart-tile.js`/`chart-analysis.js` вместо повторявшегося 4 раза
+  `d.type === "text" || d.type === "note"`). Различается только paint-
+  код: `anchored_text` — тот же текст, что `text`, плюс пунктирный
+  вертикальный leader от анкора до оси времени (за подписью TradingView-
+  й Anchored Text — привязка читается визуально, не просто хранится в
+  данных); `price_note` — тот же дот+текст, что `note`, плюс пунктирный
+  горизонтальный leader от анкора до ценовой оси с подписанным числовым
+  значением цены анкора там же; `callout` — речевой пузырь (залитый+
+  обведённый прямоугольник, тот же 0.16-альфа приём, что у остальных
+  fillable-фигур файла) с треугольным хвостиком к анкору, бокс сидит
+  сверху-справа от анкора; `comment` — note с мини-иконкой пузыря вместо
+  плоской точки; `price_label` — компактный залитый чип, закреплённый на
+  правом крае пейна (у ценовой оси) на цене анкора, а не на его времени —
+  получил `editAxis:"price"` в TOOL_DEFS (тот же смысл, что у
+  horizontal_line: whole-object drag двигает только цену), при этом сам
+  drag-хэндл остаётся на буквальном пикселе анкора (тоже horizontal_
+  line-конвенция — фиксированная точка, даже когда рисуемая форма шире);
+  `signpost` — note с иконкой флажка (древко+флаг) вместо точки. Ни один
+  не потребовал изменений в Object Tree/undo-redo/автосохранении/whole-
+  object drag — вся эта инфраструктура уже была generic по 1-анкорным
+  типам.
+  **Верифицировано** вживую на проде (тот же QA-аккаунт, реальные свечи
+  SOLUSDT): все 6 созданы программно, верные render op kinds
+  подтверждены структурно (`anchored_text.h`/`price_note.w`/
+  `price_label.w` — считанная один раз в `_buildOp` высота/ширина пейна,
+  не что-то, что paint-шаг должен пересчитывать), hit-test подтверждён
+  для каждого — 5 по анкору напрямую, `price_label` отдельно по
+  реальной позиции своего чипа (анкор в момент проверки оказался вне
+  текущего видимого диапазона времени — намеренное поведение той же
+  природы, что и у horizontal_line, не баг); скриншот подтвердил все три
+  «иконочных» типа разом изолированно — обведённый бокс с хвостиком
+  (callout), мини-пузырь (comment), точка+пунктир+число цены у оси
+  (price_note); отдельно подтверждён чип `price_label`, закреплённый
+  у правого края, и пунктирный вертикальный leader `anchored_text`;
+  Properties panel корректно показала подпись типа («Выноска» для
+  callout) и редактируемое текстовое поле с текущим текстом; консоль
+  чистая; тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`. 198 pytest (включая обновлённый контрактный
+  тест на новую `CE.Drawings.TEXT_ANNOTATION_TYPES.has(d.type)` строку
+  вместо старой `d.type === "text" || d.type === "note"` — буквальный
+  substring-поиск по исходнику, пришлось синхронизировать вместе с
+  правкой, тот же класс фикса, что раньше был с "all N tools" в
+  комментарии) + оба JS runtime suites зелёные (allTools +6 имён,
+  dedicated geometry-блок на все 6 новых op kind полей, включая
+  `TOOL_DEFS.price_label.editAxis === "price"`).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
