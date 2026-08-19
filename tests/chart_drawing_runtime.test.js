@@ -257,6 +257,7 @@ const allTools = [
   "anchored_vwap", "highlighter", "arrow", "arrow_mark_up", "arrow_mark_down",
   "arrow_mark_left", "arrow_mark_right", "rotated_rectangle",
   "path", "curve", "arc", "double_curve",
+  "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -516,6 +517,56 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   assert.ok(op, "arc: no render op produced for collinear anchors");
   assert.strictEqual(op.points.length, 2, "arc: collinear anchors should fall back to a straight 2-point segment");
   for (const p of op.points) assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), "arc: non-finite fallback point");
+}
+
+// Fibonacci family part 1: Fib Time Zone/Speed Resistance Fan/Circles/Arcs
+// each get the render op kind their own TOOL_DEFS comment promises -
+// fib_speed_resistance_fan literally reuses gann_fan's op shape, the other
+// three get their own kind.
+{
+  const env = makeManager();
+  const kindFor = { fib_time_zone: "fib_time_zone", fib_speed_resistance_fan: "gann_fan", fib_circles: "fib_circles", fib_arcs: "fib_arcs" };
+  for (const tool of ["fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs"]) {
+    const d = env.manager.addDrawing(tool, pointsFor(tool));
+    const ops = renderOps(env);
+    const op = ops.find((o) => o.d && o.d.id === d.id);
+    assert.ok(op, `${tool}: no render op produced`);
+    assert.strictEqual(op.kind, kindFor[tool], `${tool}: unexpected render op kind`);
+  }
+}
+
+// Fib Circles: concentric rings centered at anchor0, radii strictly
+// increasing with FIB_CIRCLE_LEVELS (each ratio of the anchor0->anchor1
+// pixel distance) - not just "some rings", the actual nesting order.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_circles", [{ time: 40, price: 100 }, { time: 160, price: 220 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.ok(op.rings.length >= 6, `fib_circles: expected several rings, got ${op.rings.length}`);
+  for (let i = 1; i < op.rings.length; i++) {
+    assert.ok(op.rings[i].radius > op.rings[i - 1].radius, "fib_circles: ring radii should strictly increase with level");
+  }
+  assert.deepStrictEqual({ x: op.cx, y: op.cy }, { x: 40, y: 100 }, "fib_circles: center should be anchor0's own pixel (identity-conversion fake environment maps time/price 1:1 to x/y)");
+}
+
+// Fib Arcs: half-circle, not a full ring - each arc's first and last
+// sample point must be distinct and roughly equidistant from anchor1 (the
+// arc's own center), unlike a closed circle whose "ends" would coincide.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_arcs", [{ time: 40, price: 100 }, { time: 160, price: 220 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.ok(op.arcs.length >= 6, `fib_arcs: expected several arcs, got ${op.arcs.length}`);
+  const center = { x: 160, y: 220 }; // anchor1, identity-conversion fake environment
+  for (const arc of op.arcs) {
+    const start = arc.points[0], end = arc.points[arc.points.length - 1];
+    assert.notDeepStrictEqual(start, end, "fib_arcs: a half-circle's two ends must not coincide");
+    const rStart = Math.hypot(start.x - center.x, start.y - center.y);
+    const rEnd = Math.hypot(end.x - center.x, end.y - center.y);
+    assert.ok(Math.abs(rStart - rEnd) < 1e-6, "fib_arcs: both ends should sit on the same radius from anchor1");
+  }
 }
 
 // Anchored VWAP: the one tool whose rendered body is a computed price

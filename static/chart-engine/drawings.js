@@ -207,6 +207,31 @@
     // control points - same control-point convention as Curve above, just
     // cubic instead of quadratic. See cubicBezierSamples() below.
     double_curve: { pointsNeeded: 4, anchorCount: 4, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Двойная кривая" },
+    // Fibonacci family, part 1 (the other half - Fib Channel/Wedge/Spiral/
+    // Pitchfan/Trend-Based Fib Time - is a separate, larger follow-up, see
+    // the parity matrix "Дальше"). Fib Time Zone: anchor0->anchor1's time
+    // span is the base interval; vertical lines are drawn at anchor0.time +
+    // interval*F for each Fibonacci number F (0,1,2,3,5,8,13...) - see
+    // fibTimeZoneMarks() below, the same "recompute from the live visible
+    // range every frame" principle cyclic_lines already uses.
+    fib_time_zone: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Временные зоны Фибоначчи" },
+    // Fib Speed Resistance Fan: same 2-anchor placement as gann_fan, but
+    // the fan rays go from anchor0 through fractional-*price* points at
+    // anchor1's time (Fibonacci ratios of the anchor0->anchor1 price
+    // range) rather than Gann's fixed angle-ratio baseline - see
+    // fibFanSegments() below, reuses gann_fan's own render/hit-test op
+    // shape (segments with label/major) unchanged.
+    fib_speed_resistance_fan: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Веер скорости Фибоначчи" },
+    // Fib Circles: concentric rings centered at anchor0, radii = Fibonacci
+    // ratios of the anchor0->anchor1 pixel distance - see fibCircles()
+    // below.
+    fib_circles: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Круги Фибоначчи" },
+    // Fib Arcs: same Fibonacci-ratio radii as Fib Circles above, but
+    // centered at anchor1 (the move's end point, TradingView's own
+    // convention - distinct from Fib Circles' anchor0 center) and drawn as
+    // half-circles facing away from anchor0, not full rings - see
+    // fibArcSamples() below.
+    fib_arcs: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Дуги Фибоначчи" },
   };
 
   /** Unit direction each Arrow Mark glyph points in pane-pixel space -
@@ -311,6 +336,39 @@
       if (!far || far.x == null) continue;
       const clipped = clipParametricLineToRect(pix[0], far, paneWidth(core), paneHeight(core), "ray");
       if (clipped) segs.push(Object.assign({ label: g.label, major: g.r === 1 }, clipped));
+    }
+    return segs;
+  }
+
+  /** TradingView's classic Fib Speed Resistance Fan ratio set - the same
+   * fractions fib_retracement uses, applied to the anchor0->anchor1
+   * *price* range (see fibFanSegments() below) rather than to time. */
+  const FIB_FAN_RATIOS = [
+    { r: 0, label: "0" }, { r: 0.236, label: "23.6" }, { r: 0.382, label: "38.2" },
+    { r: 0.5, label: "50" }, { r: 0.618, label: "61.8" }, { r: 0.786, label: "78.6" }, { r: 1, label: "100" },
+  ];
+
+  /** Fib Speed Resistance Fan's rays (pane-pixel space): from anchor0
+   * through the point at anchor1's *time* whose price is anchor0's price
+   * offset by each Fibonacci ratio of the anchor0->anchor1 price range,
+   * extended as a ray to the pane edge (same clipParametricLineToRect
+   * "ray" mode ray/pitchfork/gann_fan already use). Unlike Gann Fan's
+   * angle-ratio baseline (gannBaseline/GANN_RATIOS above), these rays fan
+   * out to fractional *price* heights at a fixed time - the classic Speed
+   * Resistance Fan definition (fan lines to fractional retracement levels
+   * of the move's price range, not fractions of a 45-degree bar-angle).
+   * Shared by _hitDrawing and _buildOp; reuses gann_fan's own render op
+   * shape (segments with label/major) unchanged. Returns [] if pix[0]/
+   * pix[1] aren't both visible. */
+  function fibFanSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return [];
+    const segs = [];
+    for (const f of FIB_FAN_RATIOS) {
+      const price = d.points[0].price + (d.points[1].price - d.points[0].price) * f.r;
+      const targetPix = toPixels(core, [{ time: d.points[1].time, price }])[0];
+      if (!targetPix || targetPix.x == null) continue;
+      const clipped = clipParametricLineToRect(pix[0], targetPix, paneWidth(core), paneHeight(core), "ray");
+      if (clipped) segs.push(Object.assign({ label: f.label, major: f.r === 0.5 }, clipped));
     }
     return segs;
   }
@@ -459,6 +517,31 @@
       .filter((x) => finite(x) && x >= 0 && x <= w);
   }
 
+  // Fixed, generously long Fibonacci sequence for Fib Time Zone - unlike
+  // Cyclic Lines' fixed-interval repeats (which need a dynamic, viewport-
+  // dependent count), Fibonacci-scaled zones grow exponentially, so a
+  // bounded static list comfortably covers any realistic zoom level/anchor
+  // spacing without needing per-frame recomputation of how many terms are
+  // needed.
+  const FIB_TIME_ZONE_SEQUENCE = [0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025];
+
+  /** Fib Time Zone's vertical-line x-positions + Fibonacci-number labels
+   * (pane-pixel space), filtered to whatever's currently visible - shared
+   * by _hitDrawing and _buildOp. [] for a degenerate zero-interval pair
+   * (anchors on the same bar). */
+  function fibTimeZoneMarks(core, d) {
+    if (!d.points[0] || !d.points[1]) return [];
+    const interval = d.points[1].time - d.points[0].time;
+    if (!interval) return [];
+    const w = paneWidth(core);
+    const marks = [];
+    for (const f of FIB_TIME_ZONE_SEQUENCE) {
+      const x = timeToCoordinateSafe(core, d.points[0].time + interval * f);
+      if (finite(x) && x >= 0 && x <= w) marks.push({ x, label: String(f) });
+    }
+    return marks;
+  }
+
   // Sine Line's amplitude as a fraction of the anchor0->anchor1 baseline's
   // own pixel length, so the wave scales with how far apart the two
   // anchors are placed rather than a fixed pixel constant that would look
@@ -562,6 +645,54 @@
       out.push({ x: circ.x + circ.r * Math.cos(a), y: circ.y + circ.r * Math.sin(a) });
     }
     return out;
+  }
+
+  // Fib Circles/Arcs' ratio set - TradingView's own extension-style levels
+  // (goes past 100%, unlike fib_retracement's 0-100% set) since a
+  // "circle"/"arc" naturally keeps growing outward past the move itself.
+  const FIB_CIRCLE_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.272, 1.618];
+
+  /** Sampled points (pane-pixel space) around a circle centered at
+   * `center` with the given radius, from startAngle to endAngle (radians)
+   * - shared by fibCircles() (a full turn) and fibArcSamples() (a half
+   * turn) below. */
+  function circleArcSamples(center, radius, startAngle, endAngle, steps = 48) {
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const a = startAngle + (endAngle - startAngle) * (i / steps);
+      out.push({ x: center.x + radius * Math.cos(a), y: center.y + radius * Math.sin(a) });
+    }
+    return out;
+  }
+
+  /** Fib Circles' concentric ring radii (pane-pixel space, logical/CSS
+   * units - not yet scaled for bitmap draw), centered at anchor0: each
+   * FIB_CIRCLE_LEVELS ratio of the anchor0->anchor1 pixel distance.
+   * Shared by _hitDrawing and _buildOp. [] for a degenerate zero-distance
+   * pair. */
+  function fibCircles(pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return [];
+    const dist = Math.hypot(pix[1].x - pix[0].x, pix[1].y - pix[0].y);
+    if (!dist) return [];
+    return FIB_CIRCLE_LEVELS.map((level) => ({ level, radius: dist * level }));
+  }
+
+  /** Fib Arcs' half-circle rings (pane-pixel space): same FIB_CIRCLE_LEVELS
+   * radii as fibCircles() above, but centered at anchor1 (the move's end
+   * point - TradingView's own convention, distinct from Fib Circles'
+   * anchor0 center) and each sampled only across the half facing away from
+   * anchor0 (the direction price would continue "into"), not a full ring.
+   * Shared by _hitDrawing and _buildOp. [] for a degenerate zero-distance
+   * pair. */
+  function fibArcSamples(pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return [];
+    const dist = Math.hypot(pix[1].x - pix[0].x, pix[1].y - pix[0].y);
+    if (!dist) return [];
+    const angle = Math.atan2(pix[1].y - pix[0].y, pix[1].x - pix[0].x);
+    return FIB_CIRCLE_LEVELS.map((level) => ({
+      level,
+      points: circleArcSamples(pix[1], dist * level, angle - Math.PI / 2, angle + Math.PI / 2),
+    }));
   }
 
   /** Anchored VWAP's price path: cumulative volume-weighted typical price
@@ -1402,6 +1533,46 @@
           const h = paneHeight(this.core);
           for (const x of cyclicLineXs(this.core, d)) {
             if (Math.abs(px - x) <= tol && py >= 0 && py <= h) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_time_zone": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const h = paneHeight(this.core);
+          for (const m of fibTimeZoneMarks(this.core, d)) {
+            if (Math.abs(px - m.x) <= tol && py >= 0 && py <= h) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_speed_resistance_fan": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          for (const seg of fibFanSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_circles": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const dist = Math.hypot(px - pix[0].x, py - pix[0].y);
+          for (const ring of fibCircles(pix)) {
+            if (Math.abs(dist - ring.radius) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_arcs": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          for (const arc of fibArcSamples(pix)) {
+            for (let i = 0; i < arc.points.length - 1; i++) {
+              if (pointToSegmentDist(px, py, arc.points[i].x, arc.points[i].y, arc.points[i + 1].x, arc.points[i + 1].y) <= tol) return { id: d.id, handle: null };
+            }
           }
           return null;
         }
@@ -2450,6 +2621,26 @@
           if (xs.length) ops.push({ kind: "cyclic_lines", xs, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         }
+        case "fib_time_zone": {
+          const marks = fibTimeZoneMarks(this.manager.core, d);
+          if (marks.length) ops.push({ kind: "fib_time_zone", marks, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "fib_speed_resistance_fan": {
+          const segs = fibFanSegments(this.manager.core, d, pix);
+          if (segs.length) ops.push({ kind: "gann_fan", segments: segs, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "fib_circles": {
+          const rings = fibCircles(pix);
+          if (rings.length) ops.push({ kind: "fib_circles", cx: pix[0].x, cy: pix[0].y, rings, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "fib_arcs": {
+          const arcs = fibArcSamples(pix);
+          if (arcs.length) ops.push({ kind: "fib_arcs", arcs, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
         case "sine_line": {
           const samples = sineLineSamples(pix);
           if (samples) ops.push({ kind: "sine_line", samples, color, width, alpha, handles: [pix[0], pix[1]] });
@@ -2786,6 +2977,34 @@
           op.xs.forEach((x) => { ctx.beginPath(); ctx.moveTo(x * r, 0); ctx.lineTo(x * r, h); ctx.stroke(); });
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
+        case "fib_time_zone":
+          op.marks.forEach((m) => {
+            ctx.beginPath(); ctx.moveTo(m.x * r, 0); ctx.lineTo(m.x * r, h); ctx.stroke();
+            this._text(ctx, m.label, m.x * r + 4 * r, 14 * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        case "fib_circles": {
+          op.rings.forEach((ring) => {
+            ctx.beginPath();
+            ctx.ellipse(op.cx * r, op.cy * rv, ring.radius * r, ring.radius * rv, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            this._text(ctx, `${(ring.level * 100).toFixed(1)}%`, op.cx * r + ring.radius * r + 4 * r, op.cy * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "fib_arcs": {
+          op.arcs.forEach((arc) => {
+            ctx.beginPath();
+            arc.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+            ctx.stroke();
+            const mid = arc.points[Math.floor(arc.points.length / 2)];
+            this._text(ctx, `${(arc.level * 100).toFixed(1)}%`, mid.x * r + 4 * r, mid.y * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
         case "sine_line": {
           ctx.beginPath();
           op.samples.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });

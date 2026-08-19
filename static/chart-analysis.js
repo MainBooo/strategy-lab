@@ -95,6 +95,10 @@
     { id: "curve", label: "Кривая", icon: "◜" },
     { id: "arc", label: "Дуга", icon: "◠" },
     { id: "double_curve", label: "Двойная кривая", icon: "∾" },
+    { id: "fib_time_zone", label: "Временные зоны Фибоначчи", icon: "F|" },
+    { id: "fib_speed_resistance_fan", label: "Веер скорости Фибоначчи", icon: "F⋔" },
+    { id: "fib_circles", label: "Круги Фибоначчи", icon: "F◎" },
+    { id: "fib_arcs", label: "Дуги Фибоначчи", icon: "F◠" },
   ];
 
   const LAYOUTS = [
