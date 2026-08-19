@@ -179,6 +179,15 @@ custom levels закрыты в этой же сессии:
   `duplicateSelection()` (дублированная группа получает новый groupId).
   Floating toolbar и панель «Свойства» получили отдельный компактный
   режим для мульти-выборки (счётчик + Дублировать/Группировать/Удалить).
+- ~~**Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel**~~
+  — реализовано сессией 2026-08-19 (см. matrix changelog): `trend_angle` —
+  та же геометрия, что trend_line, плюс on-screen угол в градусах,
+  пересчитываемый на каждый рендер; `regression_trend` — OLS-регрессия
+  close по времени + полосы ±2σ, вычисляется живьём из `core.candles`
+  (тот же принцип, что anchored_vwap); `flat_top_bottom` — parallel_
+  channel с константной, а не offset-параллельной, второй границей;
+  `disjoint_channel` — две независимые линии на 4 анкорах, переиспользует
+  render/hit-test `channel`-кайнда напрямую.
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19, часть 3»): `fib_time_zone` — вертикальные линии на

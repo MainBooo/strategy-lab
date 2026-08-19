@@ -55,7 +55,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 |---|---|---|---|---|---|
 | Trend Line, Ray, Extended Line, Horizontal/Vertical Line, Horizontal Ray | все работают | все 6 реализованы, включая **horizontal_ray** (эта сессия) | да | **PARITY (испр. эта сессия)** | живой Playwright — создан, отрисован, обрезан ровно по границе пейна |
 | Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
-| Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
+| Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | все 4 реализованы (эта сессия): `trend_angle` — та же 2-анкорная геометрия/hit-test, что trend_line, плюс on-screen угол в градусах (`trendAngleDegrees()`, пересчитывается на каждый рендер — тот же принцип, почему угол в реальном TradingView «плывёт» при зуме); `regression_trend` — 2 анкора задают только временной диапазон, сама линия+полосы отклонения (±2σ) вычисляются живьём из `core.candles` (OLS-регрессия close по времени, `regressionTrendChannel()`) — тот же «живой пересчёт без отдельного update-провода», которым уже пользуется `anchored_vwap`; `flat_top_bottom` — тот же 3-анкорный `parallel_channel`, но вторая граница держит цену anchor2 константой (`flatBoundaryPoints()`), а не offset-параллельна; `disjoint_channel` — 4 независимых анкора, две несвязанные линии, переиспользует render/hit-test `channel`-кайнда напрямую (он и так не предполагает параллельность) | да | **PARITY (испр. эта сессия)** | живой Playwright на реальных данных SOLUSDT (200-барное окно для регрессии) — все 4 созданы программно, верные render op kinds, hit-test подтверждён для каждой линии/границы отдельно (включая обе несвязанные линии disjoint_channel и оба edge'а flat_top_bottom), regression_trend визуально подтверждён скриншотом (сплошная mid-линия + пунктирные ±2σ границы + заливка); 198 pytest + оба JS runtime suites зелёные (dedicated numeric-тест на OLS slope/intercept/stddev для regression_trend на synthetic 3-candle фикстуре, geometry-тесты на flat_top_bottom/disjoint_channel/trend_angle) |
 | Pitchfork family (4 варианта) | | 3 из 4: Standard `pitchfork`, Schiff `pitchfork_schiff`, Modified Schiff `pitchfork_modified_schiff` — общая геометрия (median + 2 parallel teeth, pane-pixel space), различаются только парой model-точек, задающих median (см. `PITCHFORK_VARIANT`); Inside Pitchfork отсутствует | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 3 варианта нарисованы с идентичными анкорами для сравнения, median-геометрия подтверждена программно (Schiff/Modified Schiff стартуют из одной точки midpoint(P0,P1), расходятся по направлению), hit-test/select/Properties/Object Tree подтверждены на проде |
 | Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | все 4: `rotated_rectangle` (эта сессия) — anchor0-anchor1 задают одно ребро (длина+угол), anchor2 — перпендикулярное смещение (ширина), реальный повёрнутый quad в pane-pixel space (`rotatedRectCorners()`), не просто offset-цена как у parallel_channel | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — нарисован (3 анкора), рендер `kind:"rotated_rect"` (4 угла, заливка+обводка), hit-test (2 треугольника через `pointInTriangle`, плюс 4 стороны) подтверждён программно в обеих направлениях |
 | Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | все 9 из 9 теперь реализованы. Эта сессия (2026-08-19, продолжение): `highlighter` (тот же drag-release семплинг, что freehand, но толще/полупрозрачнее/round-cap по умолчанию — отдельный rail-инструмент, не пресет), `arrow` (2-анкорный сегмент + треугольная голова у anchor 1), 4× `arrow_mark_{up,down,left,right}` (1 анкор, фиксированный screen-space глиф без учёта drag); затем `path` (тот же multi-tap/geometry, что polyline — TradingView сам их почти не различает), `curve` (квадратичный Bezier, anchor2 — control-точка, кривая её не проходит), `arc` (настоящая дуга окружности через 3 анкора — `circumcircle()`+`arcSamples()`, откат на прямой отрезок при коллинеарных анкорах), `double_curve` (кубический Bezier-S, anchor2/anchor3 — 2 control-точки) | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — все 10 новых типов (highlighter/arrow/4×arrow_mark из первой части + path/curve/arc/double_curve из этой) нарисованы программно (`dm.addDrawing`), верные render op kinds (`arrow`/`arrow_mark`/`highlighter`/`rotated_rect`/`polyline`/`bezier`), hit-test подтверждён на геометрически рассчитанной точке тела каждого объекта, для Arc отдельно программно подтверждено, что сэмплированная дуга проходит через 3-й анкор (расстояние <1px — только погрешность дискретизации), Object Tree показал верные русские подписи, `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
@@ -813,6 +813,66 @@ Closes the second half of the Anchored VWAP / Volume Profile ТЗ line item
   JS runtime suite зелёные (расширены dedicated-блоком на select/additive/
   group-selection-unit/duplicateSelection/group-drag/multi-delete-
   duplicate-group-ungroup-via-keyboard).
+- **Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel** —
+  из MISSING в PARITY, следующий выбранный крупный MISSING-пункт после
+  того, как Multiselect/Grouping закрыл предыдущий. Все 4 переиспользуют
+  уже написанную инфраструктуру, ни одному не потребовалось совсем новой
+  геометрии с нуля.
+  `trend_angle` — буквально `trend_line`'s 2-анкорная placement/hit-test
+  (добавлен в тот же `case` список), но `_buildOp` считает
+  `trendAngleDegrees(pix0,pix1)` (screen-space `atan2`, знак инвертирован
+  под конвенцию TradingView — растущая слева-направо линия даёт
+  положительный угол) и пишет его в новый op kind `trend_angle`, который
+  красит ту же линию, что `segment`, плюс подпись `±N.N°` у середины
+  (`_text()`, тот же хелпер, что уже красит подписи hline/fib_channel).
+  Угол считается заново на каждый рендер из ТЕКУЩЕЙ пиксельной проекции,
+  не хранится — тот же эффект, из-за которого у настоящего TradingView
+  угол «плывёт» при зуме, это не баг, а прямое следствие того, что это
+  экранный, а не геометрический угол.
+  `regression_trend` — 2 анкора задают только временной диапазон
+  (`[min(t0,t1),max(t0,t1)]`, order-independent — тот же принцип, что
+  `volumeProfileBuckets`), сама линия — обычная OLS-регрессия close по
+  времени всех попавших в диапазон свечей плюс параллельные полосы на
+  ±2σ остатков (TradingView-й дефолт для этого инструмента) —
+  `regressionTrendChannel()`, вычисляется живьём из `core.candles` каждый
+  вызов, ни разу не кешируется — тот же «живой пересчёт без отдельного
+  update-провода», которым уже пользуется `anchored_vwap`/`cyclic_lines`/
+  `volume_profile`. Новый op kind `regression_trend`: сплошная mid-линия,
+  пунктирные upper/lower, опциональная заливка между ними (тот же
+  0.14-альфа приём, что у `channel`/`rect`).
+  `flat_top_bottom` — та же 3-анкорная staged placement, что
+  `parallel_channel`, но вторая граница — не параллельный offset, а
+  буквально константная цена anchor2 на времени anchor0/anchor1
+  (`flatBoundaryPoints()`) — переиспользует `channel`-кайнд без изменений
+  (он просто рисует line1 + опциональную line2 + заливку между ними, без
+  предположения о параллельности).
+  `disjoint_channel` — 4 независимых анкора (drag+2×tap, та же схема, что
+  у `double_curve`), две генуинно несвязанные линии (anchor0-anchor1,
+  anchor2-anchor3, вторая никак не выводится из первой) — тоже
+  переиспользует `channel`-кайнд напрямую без единой строчки нового
+  рендер-кода, только 4 хэндла вместо 3.
+  **Верифицировано** вживую на проде (тот же QA-аккаунт, реальные
+  свечи SOLUSDT — 200-барное окно для regression_trend, чтобы OLS считал
+  по-настоящему): все 4 созданы программно, верные render op kinds
+  подтверждены структурно (`flat_top_bottom`: `ox1===x1`/`ox2===x2` —
+  флэт-граница на тех же x, что и наклонная кромка; `disjoint_channel`:
+  `ox1/ox2` заметно вне диапазона `x1/x2` — независимый второй сегмент,
+  не производный от первого); hit-test подтверждён отдельно для каждой
+  линии/границы (обе несвязанные линии disjoint_channel, обе кромки
+  flat_top_bottom, mid-линия regression_trend, тело trend_angle);
+  regression_trend отдельно подтверждён скриншотом в изоляции — узнаваемая
+  форма TradingView-регрессионного канала (сплошная mid + пунктирные
+  ±2σ границы + лёгкая заливка); тестовые drawings удалены, reload с
+  прода подтвердил `drawings.length === 0`, консоль чистая (единственная
+  ошибка — сторонний `wss://mc.yandex.ru` handshake от Yandex Metrika, не
+  относится к правке). 198 pytest + оба JS runtime suites зелёные
+  (`allTools` +4 имени; `regression_trend` заведён в тот же
+  `persistentTools`-эксклюжн, что `anchored_vwap`/`volume_profile`, со
+  своим dedicated-тестом на synthetic 3-candle фикстуре — slope/intercept/
+  stddev посчитаны вручную и сверены с точностью 1e-9, плюс under-2-
+  candles edge case; отдельные geometry-тесты на `trend_angle`'s угол,
+  `flat_top_bottom`'s флэт-границу, `disjoint_channel`'s независимость
+  двух сегментов).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
