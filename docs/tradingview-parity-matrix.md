@@ -62,7 +62,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
-| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 7 из 9. Часть 1 (`fib_time_zone`/`fib_speed_resistance_fan`/`fib_circles`/`fib_arcs`) — см. changelog «часть 3». Часть 2 (эта сессия): `fib_channel` (тот же 3-анкорный parallel_channel-offset, но одна линия-уровень на каждую долю Фибоначчи диапазона anchor0-anchor1↔offset-линии, вместо всего двух границ), `fib_wedge` (тот же 3-анкорный треугольник-вершина, что у triangle/pitchfork, но вместо замкнутой фигуры — сужающаяся серия соединительных линий от вершины наружу на каждую долю Фибоначчи), `trend_based_fib_time` (та же математика чисел Фибоначчи, что Time Zone, но зоны считаются от anchor1 — конца тренда, а не anchor0 — начала; переиспользует render/hit-test `fib_time_zone` без изменений). Fib Spiral/Pitchfan остаются MISSING — оба требуют принципиально новой геометрии (логарифмическая спираль / веер медиан), не drop-in расширение уже написанного | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 3 типа нарисованы программно, верные render op kinds (`fib_channel`/`fib_wedge`/`fib_time_zone`), скриншот визуально подтвердил все 3 формы одновременно (подписанные уровни канала 0-100%, сужающийся клин, зоны 0/1); hit-test подтверждён программно для всех трёх, включая обе граничные стороны клина отдельно от уровневых линий; Object Tree — верные подписи; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
+| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 9 из 9 — семья закрыта полностью. Часть 1 (`fib_time_zone`/`fib_speed_resistance_fan`/`fib_circles`/`fib_arcs`) — см. changelog «часть 3». Часть 2 (`fib_channel`/`fib_wedge`/`trend_based_fib_time`) — см. changelog «часть 4». Часть 3 (эта сессия): `fib_pitchfan` (тот же 3-анкорный handle+прогн placement, что у pitchfork, но вместо median+2 зубьев — веер лучей от anchor0 через каждую Фибоначчи-долю отрезка anchor1↔anchor2; на 50% луч буквально совпадает с медианой обычного pitchfork — переиспользует render/hit-test `gann_fan` без изменений, как уже делает fib_speed_resistance_fan), `fib_spiral` (логарифмическая «золотая спираль» вокруг anchor0, anchor1 задаёт стартовый радиус/угол; радиус растёт в φ раз за каждую четверть оборота — стандартное определение) | да | **PARITY/PARTIAL (испр. эта сессия)** | живой Playwright на проде — оба типа нарисованы программно, верные render op kinds (`gann_fan` для Pitchfan, `fib_spiral` для Spiral), скриншот визуально подтвердил веер лучей и узнаваемую логарифмическую спираль одновременно; hit-test подтверждён программно для обоих (Pitchfan — точка на веере рядом с вершиной, Spiral — точка на первом витке); floating toolbar появился при выделении; консоль чистая; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода. Юнит-тесты: Pitchfan — все 7 лучей стартуют строго из anchor0, 50%-луч коллинеарен midpoint(anchor1,anchor2) и помечен major; Spiral — первая точка сэмплов буквально совпадает с anchor1, после ровно четверти оборота радиус вырос ровно в φ раз |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
 | Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 8 из 8 категорий ТЗ покрыты (10 конкретных tool-типов): XABCD `xabcd_pattern`/ABCD `abcd_pattern`/Three Drives `three_drives_pattern`/Elliott Impulse `elliott_impulse_wave`/Elliott Correction `elliott_correction_wave` — общий размеченный-зигзаг+%-отношение рендер; Triangle Pattern `triangle_pattern`/Head & Shoulders `head_shoulders_pattern` — зигзаг + boundary-луч(и) (2 сходящихся/расходящихся для треугольника, 1 neckline для Г&П); Cyclic Lines `cyclic_lines` — серия равноотстоящих по времени вертикальных линий через весь видимый pane (Time Cycles отдельно не реализован — тот же TradingView-концепт); Sine Line `sine_line` — одна синусоида между двумя анкорами, перпендикулярно базовой линии в pane-pixel space (амплитуда — эвристика, не сверялась пиксель-в-пиксель с живым TradingView). Ни один паттерн без авто-классификации по имени (Gartley/Bat/Butterfly/Crab для XABCD, волновые правила для Elliott) — отдельный, более крупный кусок работы | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех новых (drag+2×tap для Elliott Correction, drag+4×tap для Elliott Impulse, drag-release для Cyclic Lines/Sine Line), метки/%-отношения (Elliott), 16 равноотстоящих вертикальных линий подтверждены программно после pan (Cyclic Lines), 65-точечная синусоида подтверждена программно (Sine Line), hit-test/Object Tree подтверждены для всех четырёх новых типов; живьём найден и исправлен реальный краш (`cyclicLineTimes` читал `d.points[1].time` без guard на draft-preview с 1 точкой) |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
@@ -629,6 +629,60 @@ Pitchfan — новая геометрия, отдельный будущий к
   (Node's `deepStrictEqual` сверяет и прототип) — исправлено извлечением
   примитивных полей в новый объект перед сравнением, тот же приём, что
   уже неявно использовался в паре существующих тестов этого файла.
+
+### Продолжение 2026-08-19, часть 5 — Fibonacci family, часть 3 (Pitchfan, Spiral) — семья закрыта 9/9
+
+Закрывает последние два инструмента Fibonacci-строки ТЗ. Оба — genuinely
+новая геометрия (не drop-in расширение существующего кода), как и
+ожидалось в плане части 4.
+
+- **Fib Pitchfan** (`fib_pitchfan`) — из MISSING в PARTIAL. Та же
+  3-анкорная постановка, что у `pitchfork` (anchor0 — handle,
+  anchor1/anchor2 — прогны), но вместо median+2 параллельных зубьев —
+  новая `fibPitchfanSegments()`: веер лучей от anchor0 через точку на
+  каждой доле `FIB_PITCHFAN_RATIOS` (`[0, 0.382, 0.5, 0.618, 1, 1.618,
+  2.618]`) вдоль отрезка anchor1→anchor2, интерполированного в реальных
+  time+price (доли вне [0,1] корректно экстраполируют за прогн).
+  Переиспользует ray-клиппинг + render/hit-test-опу `gann_fan` без
+  изменений — тот же приём, которым уже пользуется
+  `fib_speed_resistance_fan` для своего, по-другому устроенного веера.
+  На доле 0.5 целевая точка буквально совпадает с midpoint(anchor1,
+  anchor2) — той же точкой, куда целится медиана обычного pitchfork
+  (`pitchforkMedianModelPoints`, вариант "standard") — не совпадение, оба
+  инструмента в TradingView имеют это определение; этот луч помечен
+  `major`, как и 1×1-луч у Gann Fan.
+- **Fib Spiral** (`fib_spiral`) — из MISSING в PARTIAL. Новая
+  `fibSpiralSamples()`: логарифмическая «золотая спираль» вокруг
+  anchor0, anchor1 задаёт стартовый радиус (пиксельное расстояние от
+  anchor0) и стартовый угол. Радиус растёт в φ=(1+√5)/2 раз за каждую
+  четверть оборота — стандартное определение «golden spiral», честно
+  задокументированная эвристика (как и амплитуда sine_line/набор рэйтов
+  Ганн-фана), не сверенная пиксель-в-пиксель с живым TradingView.
+  Сэмплируется на `FIB_SPIRAL_TURNS=3` полных оборота (`48` сэмплов на
+  оборот) в polyline-точки — та же техника, что уже использует sine_line/
+  bezier-семья, а не через canvas-примитив дуги (нет API «расстояние до
+  точки» для hit-test).
+- Оба не потребовали нового кода в Properties panel/Object Tree/undo-
+  redo/автосохранении/whole-object drag. Кнопки: `chart-analysis.js`
+  TOOL_BUTTONS (+2 записи) и группа «Фибоначчи» в
+  `chart-editor-terminal-mobile-v2.js` (была 9 пунктов, стала 11).
+  **Верифицировано** вживую на проде (тот же QA-аккаунт): оба типа
+  созданы программно с реальными bar-aligned анкорами; верные render op
+  kinds (`gann_fan` для Pitchfan, `fib_spiral` для Spiral — отдельный
+  новый); скриншот визуально подтвердил явный веер лучей и узнаваемую
+  логарифмическую спираль на одном графике одновременно; hit-test
+  подтверждён программно для обоих (вершина веера у Pitchfan, первая
+  точка сэмплов у Spiral — совпала с якорем `handle:1`); floating
+  toolbar появился при выделении Pitchfan; консоль чистая на всех шагах;
+  тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`. 198 pytest + оба JS runtime suite зелёные —
+  allTools +2 имени, плюс точная геометрическая проверка (Fib Pitchfan:
+  все 7 лучей стартуют строго из anchor0 (x1=y1=0 в тестовых
+  identity-координатах), 50%-луч коллинеарен midpoint(anchor1,anchor2) и
+  помечен `major`; Fib Spiral: первая точка сэмплов буквально совпадает
+  с anchor1, после ровно четверти оборота (шаг 12 из 48-на-оборот)
+  радиус вырос ровно в φ раз — оба свойства прошли на первой попытке,
+  без правок формул).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 

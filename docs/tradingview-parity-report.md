@@ -166,9 +166,9 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
-- **Продвинутые инструменты рисования**: Fib Spiral/Pitchfan,
-  Volume Profile, Multiselect, Grouping — не реализованы (P2/P3 по ТЗ,
-  самый крупный оставшийся кусок работы).
+- **Продвинутые инструменты рисования**: Volume Profile, Multiselect,
+  Grouping — не реализованы (P2/P3 по ТЗ, самый крупный оставшийся
+  кусок работы).
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19, часть 3»): `fib_time_zone` — вертикальные линии на
@@ -184,8 +184,15 @@ custom levels закрыты в этой же сессии:
   тот же вершинный 3-анкорный triangle/pitchfork-скелет, сужающиеся
   соединительные линии от вершины наружу; `trend_based_fib_time` — та
   же математика, что fib_time_zone, но зоны считаются от anchor1
-  (конец тренда). Fibonacci-строка ТЗ теперь 7 из 9 — только Fib
-  Spiral/Pitchfan (принципиально новая геометрия) остаются MISSING.
+  (конец тренда).
+- ~~**Fib Pitchfan / Spiral**~~ — добавлены той же сессией 2026-08-19
+  (см. matrix changelog «Продолжение 2026-08-19, часть 5»): `fib_pitchfan`
+  — тот же вершинный 3-анкорный pitchfork-скелет, но веер лучей от
+  anchor0 через Фибоначчи-доли отрезка anchor1↔anchor2 вместо
+  median+2 зубьев (переиспользует render/hit-test gann_fan); `fib_spiral`
+  — логарифмическая золотая спираль вокруг anchor0, радиус растёт в φ раз
+  за каждую четверть оборота. **Fibonacci-строка ТЗ теперь закрыта
+  полностью, 9 из 9.**
 - ~~**Rotated Rectangle / Arrow / Arrow Mark ×4 / Highlighter**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19»): `rotated_rectangle` — настоящий повёрнутый quad в
