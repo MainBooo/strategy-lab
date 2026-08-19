@@ -139,9 +139,25 @@ function activateTab(name){
   // resumes it and fetches immediately instead of waiting for the next tick.
   if(leaving==="charts"&&leaving!==name&&window.ChartAnalysisPage&&window.ChartAnalysisPage.onTabLeave)window.ChartAnalysisPage.onTabLeave();
   if(name==="backtest")renderBacktestTab();
-  if(name==="charts"&&window.ChartAnalysisPage)window.ChartAnalysisPage.init($("chartsRoot"));
-  if(name==="replay"&&window.MarketReplayPage)window.MarketReplayPage.init($("replayRoot"));
+  if(name==="charts")initTabPageWhenReady("ChartAnalysisPage","chartsRoot");
+  if(name==="replay")initTabPageWhenReady("MarketReplayPage","replayRoot");
   if(window.refreshPortfolioBalance)window.refreshPortfolioBalance();
+}
+// chart-analysis.js/market-replay.js load AFTER this script (see script order
+// in index.html - they depend on chart-engine/* and app.js helpers loaded in
+// between), so on first paint - specifically initTabs() running synchronously
+// from bootstrap() below, e.g. right after a reload that lands back on a
+// remembered "charts"/"replay" tab - window.ChartAnalysisPage/MarketReplayPage
+// don't exist yet and activateTab used to silently skip init(), leaving the
+// tab marked active with an empty page. Poll a few animation frames for the
+// global to appear instead of requiring callers to know about load order.
+function initTabPageWhenReady(globalName,rootId,attemptsLeft){
+  if(attemptsLeft===undefined)attemptsLeft=60;
+  if(_activeTabName!==(globalName==="ChartAnalysisPage"?"charts":"replay"))return;
+  const page=window[globalName];
+  if(page){page.init($(rootId));return}
+  if(attemptsLeft<=0){console.error(`[startup] ${globalName} never loaded`);return}
+  requestAnimationFrame(()=>initTabPageWhenReady(globalName,rootId,attemptsLeft-1));
 }
 function initTabs(){
   document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>activateTab(b.dataset.tab));
