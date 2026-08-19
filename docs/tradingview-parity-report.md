@@ -166,6 +166,13 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
+- ~~**XABCD harmonic-pattern авто-классификация**~~ — реализовано сессией
+  2026-08-19 (см. matrix changelog): Gartley/Bat/Butterfly/Crab по
+  канонической ratio-таблице (широко задокументированные диапазоны, не
+  гаданные — в отличие от Inside Pitchfork/Gann Square-Box, которые
+  сознательно оставлены нереализованными без уверенного источника
+  формулы). Только для `xabcd_pattern` (единственный тул семьи с
+  X-анкором); подпись «Паттерн (бычий/медвежий)» у точки D.
 - ~~**Compare/add symbol**~~ — реализовано сессией 2026-08-19 (см. matrix
   changelog): наложение второго тикера как %-change оверлея. Матрица
   годами ошибочно держала это как «нет back-end» — расследование
