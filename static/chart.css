@@ -268,14 +268,6 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
   overflow-y: auto;
 }
-.ca-tool-btn {
-  width: 42px; height: 38px; border-radius: 8px; border: 1px solid transparent; background: transparent;
-  color: var(--muted); font-size: 16px; cursor: pointer;
-}
-.ca-tool-btn:hover { background: rgba(255,255,255,.05); color: var(--text); }
-.ca-tool-btn.active { background: rgba(124,140,255,.16); border-color: var(--accent); color: var(--accent); }
-.ca-tool-danger { color: var(--danger); margin-top: 8px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; }
-
 .ca-chart-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1 1 auto; min-height: 0; }
 
 /* -------------------------------------------------------- multi-chart grid -- */
@@ -593,12 +585,13 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   .ca-tile-change { display: none; }
   .ca-tile-grid { min-height: 220px; }
   .ca-bottom { max-height: 34vh; }
-  /* Drawing-tool rail: same tools, narrower footprint so the chart itself
-     keeps as much of a phone's width as possible (chart-analysis.js's own
-     tool list/click handling is untouched, only the button box shrinks). */
+  /* Drawing-tool rail: narrower footprint so the chart itself keeps as
+     much of a phone's width as possible. The rail's actual buttons are
+     chart-editor-terminal-mobile-v2.js's own .tv-rail markup (see
+     buildRail() there, which owns #caTools on every viewport) - this
+     just tweaks the shared .ca-tools container's own padding/gap. */
   .ca-workspace { gap: 4px; }
   .ca-tools { padding: 4px 2px; gap: 3px; }
-  .ca-tool-btn { width: 32px; height: 32px; font-size: 13px; }
   #chartsRoot { gap: 4px; }
   .ca-toolbar-unified { border-radius: 8px; }
 }

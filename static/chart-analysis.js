@@ -23,12 +23,9 @@
   // the emoji glyphs the toolbar shipped with, which read as a mismatched,
   // dated accent against the rest of the app's monochrome stroke-icon
   // language (see the mobile bottom nav in index.html for the same style).
-  // Deliberately NOT touching TOOL_BUTTONS below (the drawing-tool rail) -
-  // those are already plain technical symbols (╱ — ↗ …), not colorful
-  // emoji, and rendered through a different path (_buildToolRail) than the
-  // toolbar HTML this is inlined into. Each icon is intentionally tiny
-  // (16x16, 2px stroke) so it reads at a glance next to a text label
-  // without the button growing past its existing 32px box. data-icon
+  // Each icon is intentionally tiny (16x16, 2px stroke) so it reads at a
+  // glance next to a text label without the button growing past its
+  // existing 32px box. data-icon
   // attributes elsewhere in the toolbar (used only as a plain-text prefix
   // in the collapsed "Ещё" popover list, see _renderMorePopover) are left
   // as their original emoji on purpose - that's a compact text list, not a
@@ -49,75 +46,6 @@
     more: '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
     compare: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><rect x="8" y="8" width="13" height="13" rx="2"/></svg>'
   };
-
-  const TOOL_BUTTONS = [
-    { id: null, label: "Курсор", icon: "⇖" },
-    { id: "trend_line", label: "Линия тренда", icon: "╱" },
-    { id: "horizontal_line", label: "Горизонтальная линия", icon: "—" },
-    { id: "horizontal_ray", label: "Горизонтальный луч", icon: "―→" },
-    { id: "vertical_line", label: "Вертикальная линия", icon: "❘" },
-    { id: "ray", label: "Луч", icon: "↗" },
-    { id: "extended_line", label: "Расширенная линия", icon: "⟷" },
-    { id: "parallel_channel", label: "Параллельный канал", icon: "═" },
-    { id: "trend_angle", label: "Угол тренда", icon: "∠" },
-    { id: "regression_trend", label: "Регрессионный тренд", icon: "≈" },
-    { id: "flat_top_bottom", label: "Плоский верх/низ", icon: "⊓" },
-    { id: "disjoint_channel", label: "Несвязный канал", icon: "⌇" },
-    { id: "rectangle", label: "Прямоугольник", icon: "▭" },
-    { id: "circle", label: "Эллипс", icon: "◯" },
-    { id: "polyline", label: "Полилиния (Enter/двойной клик — завершить)", icon: "⌁" },
-    { id: "text", label: "Текст", icon: "T" },
-    { id: "note", label: "Заметка", icon: "🗨" },
-    { id: "anchored_text", label: "Привязанный текст", icon: "T¦" },
-    { id: "price_note", label: "Ценовая заметка", icon: "🗨—" },
-    { id: "callout", label: "Выноска", icon: "💬" },
-    { id: "comment", label: "Комментарий", icon: "🗯" },
-    { id: "price_label", label: "Ценовая метка", icon: "▮T" },
-    { id: "signpost", label: "Сигнальный флаг", icon: "🚩" },
-    { id: "measure", label: "Измерение (временное, потяните — исчезает при отпускании)", icon: "📏" },
-    { id: "zoom_area", label: "Увеличение области (потяните, чтобы масштабировать)", icon: "🔍" },
-    { id: "price_range", label: "Диапазон цены", icon: "↕" },
-    { id: "time_range", label: "Диапазон времени", icon: "↔" },
-    { id: "long_position", label: "Long позиция", icon: "↑" },
-    { id: "short_position", label: "Short позиция", icon: "↓" },
-    { id: "fib_retracement", label: "Коррекция Фибоначчи", icon: "F" },
-    { id: "fib_extension", label: "Расширение Фибоначчи", icon: "Fx" },
-    { id: "pitchfork", label: "Вилы Эндрюса", icon: "⑂" },
-    { id: "pitchfork_schiff", label: "Вилы Шиффа", icon: "⑃" },
-    { id: "pitchfork_modified_schiff", label: "Модифицированные вилы Шиффа", icon: "⑄" },
-    { id: "gann_fan", label: "Веер Ганна", icon: "⋔" },
-    { id: "xabcd_pattern", label: "Паттерн XABCD (X-A-B-C-D)", icon: "◬" },
-    { id: "abcd_pattern", label: "Паттерн ABCD (A-B-C-D)", icon: "◭" },
-    { id: "triangle_pattern", label: "Паттерн треугольник", icon: "◺" },
-    { id: "three_drives_pattern", label: "Паттерн «Три драйва»", icon: "◮" },
-    { id: "head_shoulders_pattern", label: "Паттерн «Голова и плечи»", icon: "⛰" },
-    { id: "elliott_impulse_wave", label: "Волна Эллиотта (импульс)", icon: "⚡" },
-    { id: "elliott_correction_wave", label: "Волна Эллиотта (коррекция)", icon: "↝" },
-    { id: "cyclic_lines", label: "Циклические линии", icon: "❘❘❘" },
-    { id: "sine_line", label: "Синусоида", icon: "∿" },
-    { id: "anchored_vwap", label: "Привязанный VWAP", icon: "V" },
-    { id: "volume_profile", label: "Профиль объёма (диапазон)", icon: "▤" },
-    { id: "rotated_rectangle", label: "Повёрнутый прямоугольник", icon: "▱" },
-    { id: "arrow", label: "Стрелка", icon: "↗" },
-    { id: "arrow_mark_up", label: "Стрелка вверх", icon: "↑" },
-    { id: "arrow_mark_down", label: "Стрелка вниз", icon: "↓" },
-    { id: "arrow_mark_left", label: "Стрелка влево", icon: "←" },
-    { id: "arrow_mark_right", label: "Стрелка вправо", icon: "→" },
-    { id: "highlighter", label: "Маркер", icon: "▮" },
-    { id: "path", label: "Путь", icon: "⌇" },
-    { id: "curve", label: "Кривая", icon: "◜" },
-    { id: "arc", label: "Дуга", icon: "◠" },
-    { id: "double_curve", label: "Двойная кривая", icon: "∾" },
-    { id: "fib_time_zone", label: "Временные зоны Фибоначчи", icon: "F|" },
-    { id: "fib_speed_resistance_fan", label: "Веер скорости Фибоначчи", icon: "F⋔" },
-    { id: "fib_circles", label: "Круги Фибоначчи", icon: "F◎" },
-    { id: "fib_arcs", label: "Дуги Фибоначчи", icon: "F◠" },
-    { id: "fib_channel", label: "Канал Фибоначчи", icon: "F═" },
-    { id: "fib_wedge", label: "Клин Фибоначчи", icon: "F◺" },
-    { id: "trend_based_fib_time", label: "Временные зоны по тренду", icon: "F|" },
-    { id: "fib_pitchfan", label: "Веер Фибоначчи (Pitchfan)", icon: "F⋕" },
-    { id: "fib_spiral", label: "Спираль Фибоначчи", icon: "F@" },
-  ];
 
   const LAYOUTS = [
     { id: "1", label: "Один график", rows: 1, cols: 1 },
@@ -354,10 +282,13 @@
           </div>
         </div>
         <div class="ca-workspace" id="caWorkspace">
-          <div class="ca-tools" id="caTools">
-            ${TOOL_BUTTONS.map((t) => `<button class="ca-tool-btn ${t.id === null ? "active" : ""}" data-tool="${t.id || ""}" title="${t.label}" aria-label="${t.label}">${t.icon}</button>`).join("")}
-            <button class="ca-tool-btn ca-tool-danger" id="caDeleteBtn" title="Удалить объект (Delete)" aria-label="Удалить объект">🗑</button>
-          </div>
+          <!-- Populated entirely by chart-editor-terminal-mobile-v2.js's
+               buildRail() on every viewport, not just phone (see its sync()
+               calling buildRail() unconditionally) - left empty here on
+               purpose rather than pre-rendering a flat tool-button list
+               that would only ever be visible for a single animation frame
+               before being replaced. -->
+          <div class="ca-tools" id="caTools"></div>
           <div class="ca-center" id="caCenter">
             <div class="ca-chart-col">
               <div class="ca-tile-grid" id="caTileGrid"></div>
@@ -382,7 +313,6 @@
         <div class="wl-mobile-backdrop" id="caWatchlistBackdrop"></div>
       `;
 
-      this._wireToolTools();
       this._wireGlobalToolbar();
       this._wireWatchlist();
       this._wireSideTabs();
@@ -431,17 +361,6 @@
         clearBuffer();
         apply(`${n}${suffix}`);
       }, true);
-    },
-
-    _wireToolTools() {
-      this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => {
-        b.onclick = () => {
-          this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((x) => x.classList.remove("active"));
-          b.classList.add("active");
-          if (this.drawingMgr) this.drawingMgr.setTool(b.dataset.tool || null);
-        };
-      });
-      this.root.querySelector("#caDeleteBtn").onclick = () => { if (this.drawingMgr && this.drawingMgr.selectedId) this.drawingMgr.removeDrawing(this.drawingMgr.selectedId); };
     },
 
     _wireSideTabs() {
@@ -1431,8 +1350,10 @@
       // Drawing-tool selection is a per-interaction toolbar concept, not
       // per-tile persisted state - switching the active tile resets it to
       // the cursor so the newly focused tile isn't left mid-draw with a
-      // tool it never picked.
-      this.root.querySelectorAll(".ca-tool-btn[data-tool]").forEach((b) => b.classList.toggle("active", !b.dataset.tool));
+      // tool it never picked. The rail's own active-group visual (mobile-
+      // v2's refreshRail(), re-run right after this via the wrapped
+      // Page._setActiveTile) reads this same drawingMgr.activeTool state,
+      // so no separate DOM toggle is needed here.
       if (this.drawingMgr) this.drawingMgr.setTool(null);
       this._refreshGlobalHeader();
       this._renderTickerOptions();

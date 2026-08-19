@@ -7,7 +7,6 @@ ENGINE = ROOT / "static" / "chart-engine" / "drawings.js"
 INTERACTIONS = ROOT / "static" / "chart-mobile-interactions.js"
 POLISH = ROOT / "static" / "chart-editor-polish.js"
 TILE = ROOT / "static" / "chart-engine" / "chart-tile.js"
-ANALYSIS = ROOT / "static" / "chart-analysis.js"
 RAIL = ROOT / "static" / "chart-editor-terminal-mobile-v2.js"
 RUNTIME = ROOT / "tests" / "chart_drawing_runtime.test.js"
 
@@ -136,12 +135,10 @@ def test_keep_drawing_and_completion_are_engine_owned():
 def test_circle_persistence_id_is_retained_but_ui_semantics_are_ellipse():
     engine = source(ENGINE)
     rail = source(RAIL)
-    analysis = source(ANALYSIS)
     assert 'circle: {' in engine
     assert 'semanticShape: "ellipse"' in engine
     assert 'label: "Эллипс"' in engine
     assert '["circle","Эллипс"]' in rail
-    assert '{ id: "circle", label: "Эллипс"' in analysis
     assert 'case "circle"' in engine
     assert 'kind: "ellipse"' in engine
 
