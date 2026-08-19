@@ -419,6 +419,11 @@
       if (!d) { el.classList.add("hidden"); el.innerHTML = ""; return; }
       el.classList.remove("hidden");
       const isTextual = d.type === "text" || d.type === "note";
+      // Arrow Mark glyphs are a fixed size/direction (see ARROW_MARK_LEN_PX
+      // in drawings.js) - width/dash have no visual effect on them, and
+      // they have no text to edit either, so neither of isTextual's two
+      // branches applies.
+      const isArrowMark = d.type.startsWith("arrow_mark_");
       const width = Number(d.properties.width || 1);
       const dash = d.properties.dash || "solid";
       // Width/dash selects and the text-edit shortcut match the old fixed-
@@ -431,7 +436,7 @@
         <input type="color" class="ca-ft-color" data-role="color" value="${ftColorHex(d.properties.color)}" title="Цвет" aria-label="Цвет">
         ${isTextual ? `
         <button type="button" class="ca-ft-btn" data-act="edittext" title="Редактировать текст" aria-label="Редактировать текст">${FT_ICONS.edittext}</button>
-        ` : `
+        ` : isArrowMark ? "" : `
         <select class="ca-ft-select" data-role="width" title="Толщина" aria-label="Толщина">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${width === n ? "selected" : ""}>${n}px</option>`).join("")}</select>
         <select class="ca-ft-select" data-role="dash" title="Стиль линии" aria-label="Стиль линии">
           <option value="solid" ${dash === "solid" ? "selected" : ""}>—</option>

@@ -84,6 +84,13 @@
     { id: "cyclic_lines", label: "Циклические линии", icon: "❘❘❘" },
     { id: "sine_line", label: "Синусоида", icon: "∿" },
     { id: "anchored_vwap", label: "Привязанный VWAP", icon: "V" },
+    { id: "rotated_rectangle", label: "Повёрнутый прямоугольник", icon: "▱" },
+    { id: "arrow", label: "Стрелка", icon: "↗" },
+    { id: "arrow_mark_up", label: "Стрелка вверх", icon: "↑" },
+    { id: "arrow_mark_down", label: "Стрелка вниз", icon: "↓" },
+    { id: "arrow_mark_left", label: "Стрелка влево", icon: "←" },
+    { id: "arrow_mark_right", label: "Стрелка вправо", icon: "→" },
+    { id: "highlighter", label: "Маркер", icon: "▮" },
   ];
 
   const LAYOUTS = [

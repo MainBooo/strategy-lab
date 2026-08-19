@@ -153,7 +153,79 @@
     // a third completion mode alongside the existing "anchor-count"/
     // "explicit" ones.
     freehand: { pointsNeeded: -1, anchorCount: -1, creationGesture: "freehand-drag", dragStagePoints: 0, completion: "drag-release", preview: "none", label: "Кисть" },
+    // TradingView's Highlighter: same continuous drag-release sampling as
+    // freehand above (see completion:"drag-release" handling in
+    // _onPointerMove/_finishCreatePointer/_finishDraft) - only its default
+    // stroke width/opacity/cap style differ (see defaultProperties() and the
+    // "highlighter" render case), which is why TradingView itself ships it
+    // as a separate rail tool rather than a freehand preset.
+    highlighter: { pointsNeeded: -1, anchorCount: -1, creationGesture: "freehand-drag", dragStagePoints: 0, completion: "drag-release", preview: "none", label: "Маркер" },
+    // TradingView's Arrow: identical 2-anchor placement to trend_line, only
+    // the render/hit-test differ - a plain segment plus a triangular head at
+    // anchor 1 (the direction the user dragged toward). See the "arrow" case
+    // in _hitDrawing (shares trend_line's finite-segment test) and _buildOp/
+    // _drawOp (adds the head).
+    arrow: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Стрелка" },
+    // TradingView's 4 "Arrow Mark" tools: one anchor, a small fixed-size
+    // glyph pointing a constant screen-space direction (not derived from any
+    // drag, unlike `arrow` above) - see ARROW_MARK_DIR below for the 4
+    // directions and arrowMarkBodyCenter() for the shared hit-test math.
+    arrow_mark_up: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Стрелка вверх" },
+    arrow_mark_down: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Стрелка вниз" },
+    arrow_mark_left: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Стрелка влево" },
+    arrow_mark_right: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Стрелка вправо" },
+    // TradingView's Rotated Rectangle: anchor0->anchor1 is one edge (sets
+    // length + angle), anchor2's perpendicular signed distance from that
+    // edge sets the rectangle's width - a real rotated quad in pane-pixel
+    // space, unlike `rectangle` (always axis-aligned). Same 3-anchor staged
+    // placement as triangle/pitchfork; see rotatedRectCorners() below.
+    rotated_rectangle: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Повёрнутый прямоугольник" },
   };
+
+  /** Unit direction each Arrow Mark glyph points in pane-pixel space -
+   * screen-space constants (y grows downward), not tied to price/time. */
+  const ARROW_MARK_DIR = {
+    arrow_mark_up: { x: 0, y: -1 },
+    arrow_mark_down: { x: 0, y: 1 },
+    arrow_mark_left: { x: -1, y: 0 },
+    arrow_mark_right: { x: 1, y: 0 },
+  };
+  // Glyph length (tip to tail) and the hit-test body circle's radius/offset -
+  // the offset pushes the body hit-test center past ARROW_MARK anchor's own
+  // handle radius so a whole-object body hit is reachable distinctly from
+  // the handle (mirrors how horizontal_line's line body is hittable well
+  // away from its single handle).
+  const ARROW_MARK_LEN_PX = 24;
+  const ARROW_MARK_HIT_RADIUS_PX = 14;
+  /** Center of an Arrow Mark's hit-test circle, offset from its anchor pixel
+   * toward the tail (opposite the direction it points) - shared by
+   * _hitDrawing and _buildOp/_drawOp so hit-testing and rendering agree. */
+  function arrowMarkBodyCenter(anchorPix, type) {
+    const dir = ARROW_MARK_DIR[type];
+    return { x: anchorPix.x - dir.x * ARROW_MARK_LEN_PX * 0.75, y: anchorPix.y - dir.y * ARROW_MARK_LEN_PX * 0.75 };
+  }
+
+  /** The 4 corners of a rotated-rectangle drawing in pane-pixel space:
+   * pix[0]/pix[1] are one edge (sets length + angle), pix[2]'s perpendicular
+   * signed distance from that edge sets the rectangle's width. Shared by
+   * _hitDrawing and _buildOp so hit-testing and rendering never drift. null
+   * if the edge is degenerate (zero on-screen length) or any anchor is
+   * off-viewport. */
+  function rotatedRectCorners(pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return null;
+    const dx = pix[1].x - pix[0].x, dy = pix[1].y - pix[0].y;
+    const len = Math.hypot(dx, dy);
+    if (!len) return null;
+    const nx = -dy / len, ny = dx / len;
+    const dist = (pix[2].x - pix[0].x) * nx + (pix[2].y - pix[0].y) * ny;
+    const ox = nx * dist, oy = ny * dist;
+    return [
+      { x: pix[0].x, y: pix[0].y },
+      { x: pix[1].x, y: pix[1].y },
+      { x: pix[1].x + ox, y: pix[1].y + oy },
+      { x: pix[0].x + ox, y: pix[0].y + oy },
+    ];
+  }
 
   // Minimum on-screen movement (px) between two sampled freehand points -
   // keeps the stored point count (and therefore render/hit-test cost, and
@@ -443,7 +515,10 @@
 
   function defaultProperties(type) {
     const base = { color: theme.accent, width: 1, dash: "solid", opacity: 1, label: "", showPrice: false, visibleTimeframes: null };
-    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range") return Object.assign(base, { fill: true });
+    if (type === "rectangle" || type === "price_range" || type === "circle" || type === "time_range" || type === "parallel_channel" || type === "triangle" || type === "price_date_range" || type === "rotated_rectangle") return Object.assign(base, { fill: true });
+    // Highlighter: thick, translucent, round-capped stroke by default -
+    // TradingView's own visual distinction from freehand's thin ink line.
+    if (type === "highlighter") return Object.assign(base, { color: "#ffeb3b", width: 14, opacity: 0.35 });
     if (type === "long_position") return Object.assign(base, { color: theme.up, riskDistance: null, rewardDistance: null, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "short_position") return Object.assign(base, { color: theme.down, stopOffsetPct: 1, takeOffsetPct: 2, quantity: 100 });
     if (type === "text") return Object.assign(base, { text: "Заметка" });
@@ -1049,6 +1124,7 @@
           return Math.abs(px - pix[0].x) <= tol ? { id: d.id, handle: null } : null;
         }
         case "trend_line":
+        case "arrow":
         case "ray":
         case "extended_line": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
@@ -1101,6 +1177,30 @@
           }
           return null;
         }
+        case "arrow_mark_up":
+        case "arrow_mark_down":
+        case "arrow_mark_left":
+        case "arrow_mark_right": {
+          if (pix[0] == null || pix[0].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          const c = arrowMarkBodyCenter(pix[0], d.type);
+          return Math.hypot(px - c.x, py - c.y) <= ARROW_MARK_HIT_RADIUS_PX ? { id: d.id, handle: null } : null;
+        }
+        case "rotated_rectangle": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          const c = rotatedRectCorners(pix);
+          if (!c) return null;
+          if (pointInTriangle(px, py, c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y)) return { id: d.id, handle: null };
+          if (pointInTriangle(px, py, c[0].x, c[0].y, c[2].x, c[2].y, c[3].x, c[3].y)) return { id: d.id, handle: null };
+          for (let i = 0; i < 4; i++) {
+            const a = c[i], b = c[(i + 1) % 4];
+            if (pointToSegmentDist(px, py, a.x, a.y, b.x, b.y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
         case "circle": {
           if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
@@ -1115,6 +1215,7 @@
         }
         case "polyline":
         case "freehand":
+        case "highlighter":
         // XABCD/ABCD/Three Drives/Elliott Wave anchors are a plain zigzag
         // for hit-testing purposes - same "handle at any vertex, else
         // distance to any leg" test as polyline/freehand, just always a
@@ -2084,6 +2185,15 @@
         case "trend_line":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "segment", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
+        case "arrow":
+          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "arrow", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        case "arrow_mark_up":
+        case "arrow_mark_down":
+        case "arrow_mark_left":
+        case "arrow_mark_right":
+          if (pix[0]?.x != null) ops.push({ kind: "arrow_mark", dir: ARROW_MARK_DIR[d.type], x: pix[0].x, y: pix[0].y, color, alpha, handle: pix[0] });
+          break;
         case "ray":
         case "extended_line":
           if (pix[0]?.x != null && pix[1]?.x != null) {
@@ -2117,6 +2227,14 @@
         case "freehand":
           if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "polyline", points: pix, color, width, alpha, handles: pix });
           break;
+        case "highlighter":
+          if (pix.length >= 2 && pix.every((p) => p.x != null && p.y != null)) ops.push({ kind: "highlighter", points: pix, color, width: d.properties.width || 14, alpha, handles: pix });
+          break;
+        case "rotated_rectangle": {
+          const corners = rotatedRectCorners(pix);
+          if (corners) ops.push({ kind: "rotated_rect", corners, color, width, alpha, fill: d.properties.fill, handles: [pix[0], pix[1], pix[2]] });
+          break;
+        }
         case "triangle":
           if (pix[0]?.x != null && pix[1]?.x != null && pix[2]?.x != null) {
             ops.push({
@@ -2283,6 +2401,35 @@
           ctx.beginPath(); ctx.moveTo(op.x1 * r, op.y1 * rv); ctx.lineTo(op.x2 * r, op.y2 * rv); ctx.stroke();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
+        case "arrow": {
+          const x1 = op.x1 * r, y1 = op.y1 * rv, x2 = op.x2 * r, y2 = op.y2 * rv;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+          const ang = Math.atan2(y2 - y1, x2 - x1);
+          const headLen = 10 * r;
+          ctx.beginPath();
+          ctx.moveTo(x2, y2);
+          ctx.lineTo(x2 - headLen * Math.cos(ang - Math.PI / 7), y2 - headLen * Math.sin(ang - Math.PI / 7));
+          ctx.lineTo(x2 - headLen * Math.cos(ang + Math.PI / 7), y2 - headLen * Math.sin(ang + Math.PI / 7));
+          ctx.closePath();
+          ctx.fill();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "arrow_mark": {
+          const x = op.x * r, y = op.y * rv, dir = op.dir;
+          const len = ARROW_MARK_LEN_PX * r, headLen = 9 * r;
+          const tx = x - dir.x * len, ty = y - dir.y * len * (rv / r);
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(x, y); ctx.stroke();
+          const ang = Math.atan2(y - ty, x - tx);
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - headLen * Math.cos(ang - Math.PI / 6), y - headLen * Math.sin(ang - Math.PI / 6));
+          ctx.lineTo(x - headLen * Math.cos(ang + Math.PI / 6), y - headLen * Math.sin(ang + Math.PI / 6));
+          ctx.closePath();
+          ctx.fill();
+          drawHandle(ctx, x, y, r);
+          break;
+        }
         case "rect": {
           const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
           const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
@@ -2319,6 +2466,26 @@
         case "polyline": {
           ctx.beginPath();
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "highlighter": {
+          ctx.save();
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.beginPath();
+          op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          ctx.restore();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "rotated_rect": {
+          ctx.beginPath();
+          op.corners.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.closePath();
+          if (op.fill) { ctx.globalAlpha = (op.alpha ?? 1) * 0.15; ctx.fill(); ctx.globalAlpha = op.alpha ?? 1; }
           ctx.stroke();
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;

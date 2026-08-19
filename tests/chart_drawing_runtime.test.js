@@ -254,7 +254,8 @@ const allTools = [
   "pitchfork_schiff", "pitchfork_modified_schiff", "abcd_pattern", "triangle_pattern",
   "three_drives_pattern", "head_shoulders_pattern",
   "elliott_impulse_wave", "elliott_correction_wave", "cyclic_lines", "sine_line",
-  "anchored_vwap",
+  "anchored_vwap", "highlighter", "arrow", "arrow_mark_up", "arrow_mark_down",
+  "arrow_mark_left", "arrow_mark_right", "rotated_rectangle",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -282,7 +283,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
   for (const tool of [
     "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
     "circle", "price_range", "time_range", "long_position", "short_position",
-    "price_date_range", "gann_fan", "cyclic_lines", "sine_line",
+    "price_date_range", "gann_fan", "cyclic_lines", "sine_line", "arrow",
   ]) {
     const env = makeManager();
     env.manager.setTool(tool);
@@ -411,7 +412,7 @@ for (const tool of ["three_drives_pattern", "elliott_impulse_wave"]) {
 }
 
 // One-anchor tools commit on release.
-for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchored_vwap"]) {
+for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchored_vwap", "arrow_mark_up"]) {
   const env = makeManager();
   env.manager.setTool(tool);
   tap(env, 70, 90, 1000);
@@ -449,6 +450,38 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
   assert.ok(strokeOp, "freehand: no render op produced for the stroke");
   assert.strictEqual(strokeOp.kind, "polyline", "freehand should reuse polyline's paint/hit-test op kind");
+}
+
+// Highlighter: identical drag-release sampling mechanics to freehand above
+// (same "freehand-drag"/"drag-release" TOOL_DEFS entry) - only its own
+// render op kind (and default thick/translucent styling) differ.
+{
+  const env = makeManager();
+  env.manager.setTool("highlighter");
+  tap(env, 40, 40, 1000);
+  assert.strictEqual(env.manager.drawings.length, 0, "highlighter: no-drag tap must not create a stroke");
+  assert.strictEqual(env.manager.draft, null, "highlighter: no-drag tap must not leave a dangling draft");
+  assert.strictEqual(env.manager.activeTool, "highlighter", "highlighter: tool should stay armed after a no-op click");
+
+  const down = send(env.container, "pointerdown", 40, 40, 2000);
+  send(windowTarget, "pointermove", 70, 60, 2020);
+  send(windowTarget, "pointermove", 110, 90, 2040);
+  send(windowTarget, "pointermove", 160, 130, 2060);
+  send(windowTarget, "pointerup", 160, 130, 2080);
+  assert.ok(down.defaultPrevented, "highlighter: drawing did not own pointerdown");
+  assert.strictEqual(env.manager.drawings.length, 1, "highlighter: drag did not commit a stroke");
+  const stroke = env.manager.drawings[0];
+  assert.strictEqual(stroke.type, "highlighter");
+  assert.ok(stroke.points.length >= 3, `highlighter: expected multiple sampled points, got ${stroke.points.length}`);
+  assertFiniteDrawing(stroke);
+  assert.strictEqual(env.manager.draft, null);
+  assert.strictEqual(env.manager.activeTool, null, "highlighter: tool should disarm after a completed stroke");
+
+  const ops = renderOps(env);
+  const strokeOp = ops.find((op) => op.d && op.d.id === stroke.id);
+  assert.ok(strokeOp, "highlighter: no render op produced for the stroke");
+  assert.strictEqual(strokeOp.kind, "highlighter", "highlighter should get its own paint op kind, not freehand's polyline");
+  assert.strictEqual(strokeOp.width, 14, "highlighter: default width should stay thick even mid-draft");
 }
 
 // Anchored VWAP: the one tool whose rendered body is a computed price
