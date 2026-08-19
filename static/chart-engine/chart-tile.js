@@ -832,6 +832,15 @@
 
     async deleteTemplate(id) {
       await CE.api.deleteLayout(id);
+      // Deleting the template this tile is currently saved against left
+      // this.layout pointing at a row that no longer exists server-side -
+      // every subsequent drawing/order-request save silently 404'd via
+      // _ensureLayout()'s cache (confirmed live: draw after delete, reload,
+      // drawing is gone - the save never happened, error swallowed by the
+      // .catch(() => null)/.catch(() => {}) in _persistDrawing). Clearing
+      // it here means the next save re-runs _ensureLayout()'s "no cached
+      // layout" branch and creates a fresh autosave layout instead.
+      if (this.layout && this.layout.id === id) this.layout = null;
     }
 
     async _ensureLayout() {
