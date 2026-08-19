@@ -2455,7 +2455,17 @@
       global.addEventListener("touchend", onTouchEnd, { capture: true, passive: false });
       global.addEventListener("touchcancel", onTouchEnd, { capture: true, passive: false });
       el.addEventListener("dblclick", onDblClick);
-      el.addEventListener("keydown", onKeyDown);
+      // Bound on document, not el: the _onKeyDown guard below already
+      // accepts either "pointer is hovering this pane" (_pointerInside) or
+      // "el itself has focus", matching real TradingView (Delete/Ctrl+Z
+      // work from hover, no prior click required). A listener on el alone
+      // only ever sees events when el already has DOM focus - hover never
+      // routes a keydown there, since keydown follows focus, not the
+      // mouse - so the _pointerInside half of that guard was unreachable
+      // dead code selecting via the Object Tree, re-picking a ticker, or
+      // any other non-canvas interaction leaves focus elsewhere and the
+      // hover-only path never fired.
+      document.addEventListener("keydown", onKeyDown, true);
 
       this._domCleanup = () => {
         el.removeEventListener("pointerenter", onPointerEnter);
@@ -2470,7 +2480,7 @@
         global.removeEventListener("touchend", onTouchEnd, true);
         global.removeEventListener("touchcancel", onTouchEnd, true);
         el.removeEventListener("dblclick", onDblClick);
-        el.removeEventListener("keydown", onKeyDown);
+        document.removeEventListener("keydown", onKeyDown, true);
         this._domCleanup = null;
       };
       this._syncInteractionMode();
@@ -3108,6 +3118,16 @@
     }
 
     _onKeyDown(e) {
+      // Now that this listens on document (see _bindDom's comment above),
+      // it sees every keydown on the page, not just ones already scoped to
+      // this pane - a real text field elsewhere (ticker search, an alert
+      // price input, a template-name box) must win over drawing hotkeys
+      // even if the mouse happens to be resting over this chart.
+      // Duck-typed, not `instanceof Element` - this file also runs inside
+      // the Node vm-sandboxed runtime test harness, which has no `Element`
+      // global at all.
+      const target = e.target;
+      if (target && typeof target.matches === "function" && target.matches("input,textarea,select,[contenteditable],[contenteditable='true']")) return;
       if (!this._pointerInside && document.activeElement !== this.core.container) return;
       const meta = e.ctrlKey || e.metaKey;
       if (e.key === "Enter" && this.draft && TOOL_DEFS[this.draft.type].completion === "explicit") {

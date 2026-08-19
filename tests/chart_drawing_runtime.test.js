@@ -49,7 +49,8 @@ class FakeTarget {
 }
 
 const windowTarget = new FakeTarget();
-const documentTarget = { activeElement: null };
+const documentTarget = new FakeTarget();
+documentTarget.activeElement = null;
 windowTarget.ChartEngine = {
   theme: {
     accent: "#7c8cff", up: "#4dd4ac", down: "#ff7081", muted: "#999",
@@ -1915,7 +1916,11 @@ for (const tool of ["polyline", "fib_retracement", "fib_extension", "text", "not
 
 // Multi-delete/multi-duplicate/group/ungroup via keyboard (Delete,
 // Ctrl+D, Ctrl+G, Ctrl+Shift+G) all operate on the whole selection, not
-// just one drawing.
+// just one drawing. Dispatched on documentTarget, not env.container -
+// _bindDom binds this pane's onKeyDown on document (see its own comment),
+// not the container element, so hover alone (no prior focus click) also
+// triggers it for real users; _pointerInside is still what scopes it to
+// this one pane among several.
 {
   const env = makeManager();
   env.manager._pointerInside = true;
@@ -1925,26 +1930,44 @@ for (const tool of ["polyline", "fib_retracement", "fib_extension", "text", "not
   env.manager.select(d1.id, { additive: true });
   env.manager.select(d2.id, { additive: true });
 
-  env.container.dispatch("keydown", { key: "g", ctrlKey: true });
+  documentTarget.dispatch("keydown", { key: "g", ctrlKey: true });
   assert.strictEqual(d1.properties.groupId, d2.properties.groupId, "Ctrl+G should group the selection");
   assert.ok(d1.properties.groupId);
 
-  env.container.dispatch("keydown", { key: "d", ctrlKey: true });
+  documentTarget.dispatch("keydown", { key: "d", ctrlKey: true });
   assert.strictEqual(env.manager.drawings.length, 4, "Ctrl+D should duplicate the whole selection");
   assert.strictEqual(env.manager.selectedIds.size, 2, "Ctrl+D should select the new copies");
   const copyIds = [...env.manager.selectedIds];
   assert.notStrictEqual(copyIds[0], d1.id);
   assert.notStrictEqual(copyIds[1], d2.id);
 
-  env.container.dispatch("keydown", { key: "G", ctrlKey: true, shiftKey: true });
+  documentTarget.dispatch("keydown", { key: "G", ctrlKey: true, shiftKey: true });
   for (const id of copyIds) {
     const d = env.manager.drawings.find((x) => x.id === id);
     assert.ok(!d.properties.groupId, "Ctrl+Shift+G should ungroup every selected drawing");
   }
 
-  env.container.dispatch("keydown", { key: "Delete" });
+  documentTarget.dispatch("keydown", { key: "Delete" });
   assert.strictEqual(env.manager.drawings.length, 2, "Delete should remove every selected drawing, not just one");
   assert.strictEqual(env.manager.selectedIds.size, 0);
+}
+
+// A document-level keydown listener sees every keystroke on the page, not
+// just ones over this pane - a real text field elsewhere must win even
+// while _pointerInside is true (mouse resting over the chart while
+// typing in, say, the ticker search). Regression test for the bug this
+// session found live: before the input-target guard existed, this would
+// have deleted the drawing instead of leaving the field alone.
+{
+  const env = makeManager();
+  env.manager._pointerInside = true;
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  env.manager.select(d1.id);
+  const fakeInput = { matches: (sel) => sel.includes("input") };
+  documentTarget.dispatch("keydown", { key: "Delete", target: fakeInput });
+  assert.strictEqual(env.manager.drawings.length, 1, "Delete typed into a real input must not delete the selected drawing");
+  documentTarget.dispatch("keydown", { key: "z", ctrlKey: true, target: fakeInput });
+  assert.strictEqual(env.manager.drawings.length, 1, "Ctrl+Z typed into a real input must not trigger drawing undo");
 }
 
 console.log("chart drawing runtime tests: PASS");
