@@ -57,8 +57,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Parallel Channel | 3 точки, offset-линия | `parallel_channel` реализован | да | PARITY | код |
 | Trend Angle, Regression Trend, Flat Top/Bottom, Disjoint Channel | | отсутствуют | да | MISSING | — |
 | Pitchfork family (4 варианта) | | 3 из 4: Standard `pitchfork`, Schiff `pitchfork_schiff`, Modified Schiff `pitchfork_modified_schiff` — общая геометрия (median + 2 parallel teeth, pane-pixel space), различаются только парой model-точек, задающих median (см. `PITCHFORK_VARIANT`); Inside Pitchfork отсутствует | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 3 варианта нарисованы с идентичными анкорами для сравнения, median-геометрия подтверждена программно (Schiff/Modified Schiff стартуют из одной точки midpoint(P0,P1), расходятся по направлению), hit-test/select/Properties/Object Tree подтверждены на проде |
-| Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | rectangle/circle(ellipse)/triangle есть; Rotated Rectangle отсутствует | да | PARTIAL | код |
-| Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline, freehand(brush) есть; Path/Arc/Curve/DoubleCurve/Highlighter/Arrow/ArrowMarker отсутствуют | да | PARTIAL | код |
+| Rectangle, Rotated Rectangle, Circle/Ellipse, Triangle | | все 4: `rotated_rectangle` (эта сессия) — anchor0-anchor1 задают одно ребро (длина+угол), anchor2 — перпендикулярное смещение (ширина), реальный повёрнутый quad в pane-pixel space (`rotatedRectCorners()`), не просто offset-цена как у parallel_channel | да | **PARITY (испр. эта сессия)** | живой Playwright на проде — нарисован (3 анкора), рендер `kind:"rotated_rect"` (4 угла, заливка+обводка), hit-test (2 треугольника через `pointInTriangle`, плюс 4 стороны) подтверждён программно в обеих направлениях |
+| Polyline, Path, Arc, Curve, Double Curve, Brush(freehand), Highlighter, Arrow, Arrow Marker | | polyline/freehand были; добавлены (эта сессия) `highlighter` (тот же drag-release семплинг, что freehand, но толще/полупрозрачнее/round-cap по умолчанию — отдельный rail-инструмент, не пресет), `arrow` (2-анкорный сегмент + треугольная голова у anchor 1), 4× `arrow_mark_{up,down,left,right}` (1 анкор, фиксированный screen-space глиф без учёта drag). Path/Arc/Curve/DoubleCurve (bezier-геометрия) по-прежнему отсутствуют — более дорогой отдельный кусок | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 6 новых типов нарисованы программно (`dm.addDrawing`), верные render op kinds (`arrow`/`arrow_mark`/`highlighter`/`rotated_rect`), hit-test подтверждён на геометрически рассчитанной точке тела каждого объекта (не только на handle), Object Tree показал верные русские подписи, `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
@@ -389,6 +389,68 @@ PARITY там, где нет хотя бы одного из этих подтв
   список TOOL_BUTTONS. Уже существовавший до этой сессии пробел (`triangle`/
   `freehand` тоже отсутствовали в TOOL_BUTTONS) подтверждает это — не стал
   трогать/удалять в этой сессии, вне заявленной задачи.
+
+### Продолжение 2026-08-19 (после части 10) — Rotated Rectangle, Arrow, Arrow Mark ×4, Highlighter
+
+- **Rotated Rectangle** (`rotated_rectangle`) — из MISSING в PARITY. 3-анкорное
+  размещение (staged drag+tap, как triangle/pitchfork): anchor0→anchor1 —
+  одно ребро (длина+угол), anchor2 — перпендикулярное смещение от этого
+  ребра (ширина). Настоящий повёрнутый quad в pane-pixel space
+  (`rotatedRectCorners()`), а не price-offset проекция, которой пользуется
+  `parallel_channel`, — поэтому прямоугольник реально поворачивается на
+  экране, а не просто «съезжает» по цене. Hit-test — 2 треугольника через
+  уже существовавший `pointInTriangle()` (диагональное разбиение quad) +
+  4 стороны.
+- **Arrow** (`arrow`) — из MISSING в PARITY. То же 2-анкорное размещение,
+  что и `trend_line` (hit-test буквально делит с ним один `case`), рендер
+  добавляет треугольную голову у anchor 1 в направлении вектора.
+- **Arrow Mark ×4** (`arrow_mark_up/down/left/right`) — из MISSING в
+  PARITY. 1 анкор, фиксированный screen-space глиф (не зависит от drag,
+  в отличие от `arrow`) — стрелка + короткий хвост в одном из 4
+  направлений (`ARROW_MARK_DIR`). Hit-test — круг вокруг тела глифа,
+  смещённого от анкора в сторону хвоста (`arrowMarkBodyCenter()`), а не
+  вокруг самой точки анкора — иначе тело было бы неотличимо от handle.
+  Floating toolbar для этого типа скрывает и «толщину/стиль» (глиф
+  фиксированного размера — на него не влияют), и текстовую кнопку
+  text/note (`isArrowMark` в `chart-tile.js`).
+- **Highlighter** (`highlighter`) — из MISSING в PARITY. Буквально тот же
+  `creationGesture`/`completion` («freehand-drag»/«drag-release»), что и
+  `freehand`, — отдельный tool, не пресет, только чтобы иметь свою кнопку
+  на рейле (как в реальном TradingView). Отличается только
+  `defaultProperties` (толщина 14px, непрозрачность 0.35, жёлтый по
+  умолчанию) и собственным render op `kind:"highlighter"` (round
+  cap/join — иначе толстый штрих выглядел бы как последовательность
+  прямоугольных сегментов, не как маркер).
+- Все шесть новых типов не потребовали ни строчки специального кода в
+  Properties panel/Object Tree/undo-redo/автосохранении/whole-object drag
+  (генерик-перевод точек по `editAxis`) — та же generic N-анкорная
+  инфраструктура, что и у паттерн-семьи part 5-9.
+- Кнопки: `chart-analysis.js` TOOL_BUTTONS (+7 записей, тот же вероятно
+  мёртвый код, что и раньше — см. находку части 5, не трогал) и
+  мобильный/унифицированный рейл `chart-editor-terminal-mobile-v2.js` —
+  новая группа «Стрелки» (Arrow + 4× Arrow Mark), `rotated_rectangle`
+  добавлен в существующую группу «Фигуры», `highlighter` — в
+  существующую группу «Кисть» рядом с `freehand`.
+  **Верифицировано** вживую на проде (QA-логин через подписанный session
+  cookie, тот же `chart-qa-hollow-1786191200@example.com`): все 7 объектов
+  созданы программно (`dm.addDrawing`) с ценами внутри видимого диапазона
+  графика (не за пределами price-scale — первая попытка с офсетами ±3..8
+  ушла за видимый диапазон и ничего не отрисовала, это не баг кода, а
+  ошибка тестовых координат); render op kind подтверждён для каждого
+  (`arrow`/`arrow_mark`×4/`highlighter`/`rotated_rect`), скриншот
+  визуально подтвердил стрелку с головой, полупрозрачный жёлтый
+  highlighter-штрих и повёрнутый залитый прямоугольник; hit-test
+  подтверждён программным сканом на геометрически рассчитанной точке
+  тела каждого объекта (не только на handle) — для arrow_mark отдельно
+  проверены все 4 направления смещения тела; Object Tree показал верные
+  русские подписи; все тестовые drawings удалены, reload с прода
+  подтвердил `drawings.length === 0` — не осталось мусора в реальной БД.
+  198 pytest + оба JS runtime suites зелёные (allTools расширен на 7
+  новых имён; отдельный блок для `highlighter`, зеркальный уже
+  существовавшему для `freehand`, проверяет drag-release семплирование
+  и свой собственный op kind/width; `arrow` добавлен в generic
+  fixed-2-point-tools цикл; `arrow_mark_up` — в generic single-tap-anchor
+  цикл).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 

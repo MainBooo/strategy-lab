@@ -167,9 +167,18 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 custom levels закрыты в этой же сессии:
 
 - **Продвинутые инструменты рисования**: Fib Channel/Time Zone/Circles/
-  Spiral/Arcs/Wedge, Volume Profile, Rotated Rectangle, Path/Arc/Curve/
-  DoubleCurve/Highlighter/Arrow/ArrowMarker, Multiselect, Grouping — не
-  реализованы (P2/P3 по ТЗ, самый крупный оставшийся кусок работы).
+  Spiral/Arcs/Wedge, Volume Profile, Path/Arc/Curve/DoubleCurve,
+  Multiselect, Grouping — не реализованы (P2/P3 по ТЗ, самый крупный
+  оставшийся кусок работы).
+- ~~**Rotated Rectangle / Arrow / Arrow Mark ×4 / Highlighter**~~ —
+  добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
+  2026-08-19»): `rotated_rectangle` — настоящий повёрнутый quad в
+  pane-pixel space (не price-offset проекция); `arrow` — trend_line +
+  треугольная голова; `arrow_mark_up/down/left/right` — фиксированный
+  screen-space глиф на 1 анкоре; `highlighter` — тот же drag-release
+  семплинг, что freehand, с толстым полупрозрачным round-cap стилем по
+  умолчанию. Path/Arc/Curve/DoubleCurve (bezier-геометрия) остаются
+  MISSING — соседний, более дорогой кусок той же строки ТЗ.
 - ~~**Gann Fan / Pitchfork (Standard) / XABCD Pattern**~~ — из MISSING в
   PARTIAL (см. matrix changelog): `gann_fan` (9 классических лучей 1×8..8×1
   от реального-бар наклона), `pitchfork` (медиана + 2 параллельных зубца,
