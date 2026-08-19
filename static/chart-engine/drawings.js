@@ -2497,8 +2497,13 @@
 
     _touchHitOwnsGesture(touch) {
       if (!touch) return false;
-      if (this.activeTool) return true;
       const pos = this._relXY(touch);
+      // Mirrors the pointerdown guard above: a tool armed but touched down
+      // over an indicator sub-pane/time-axis strip must not claim (and
+      // therefore preventDefault) the native touch gesture there, or pan/
+      // pinch in that pane would silently die alongside the drawing that
+      // never gets created.
+      if (this.activeTool) return pos.y <= paneHeight(this.core);
       return !!this.hitTest(pos.x, pos.y, { pointerType: "touch" });
     }
 
@@ -2661,6 +2666,17 @@
       const pos = this._relXY(e);
 
       if (this.activeTool) {
+        // Generic N-anchor tools only ever read/write price through the
+        // *main* series' own scale (coordinateToPriceSafe/priceToCoordinateSafe
+        // below) - a pointerdown that is actually over an indicator sub-pane
+        // (RSI/MACD/etc.) or the time-axis strip would silently reinterpret
+        // that y as a nonsense main-pane price instead of an RSI/MACD value.
+        // Confirmed live: dragging inside an RSI pane created a trend_line
+        // anchored near the *candle* price - invisible in the RSI pane,
+        // wrong place in the main one. Bail out without claiming the
+        // pointer so the gesture falls through to lightweight-charts' own
+        // per-pane interaction (crosshair, pane resize) instead.
+        if (pos.y > paneHeight(this.core)) return;
         const def = TOOL_DEFS[this.activeTool];
         const draftBefore = this.draft ? JSON.parse(JSON.stringify(this.draft)) : null;
         const anchorsBefore = draftBefore ? draftBefore.points.length : 0;

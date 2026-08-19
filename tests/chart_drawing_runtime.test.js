@@ -1970,4 +1970,30 @@ for (const tool of ["polyline", "fib_retracement", "fib_extension", "text", "not
   assert.strictEqual(env.manager.drawings.length, 1, "Ctrl+Z typed into a real input must not trigger drawing undo");
 }
 
+// Regression test for a bug found live on prod: generic N-anchor tools
+// only ever read/write price through the *main* series' scale, so a
+// drawing gesture that starts over an indicator sub-pane (RSI/MACD/etc.,
+// stacked below the main pane inside the same container) or the
+// time-axis strip must not be allowed to start there - otherwise it
+// silently creates a drawing anchored to a nonsense main-pane price
+// (confirmed live: dragging inside an RSI pane produced a trend_line
+// invisible in the RSI pane and in the wrong place on the main one).
+{
+  const env = makeManager();
+  // Simulate a sub-pane/time-axis strip eating the bottom 100px of the
+  // 400px container, the same way paneHeight() reads real chart layout
+  // via chart.timeScale().height() in production.
+  const origTimeScale = env.chart.timeScale;
+  env.chart.timeScale = () => Object.assign({}, origTimeScale(), { height: () => 100 });
+
+  env.manager.activeTool = "trend_line";
+  drag(env, 50, 350, 150, 350, 0);
+  assert.strictEqual(env.manager.drawings.length, 0, "a drag entirely below the main pane must not create a drawing");
+  assert.strictEqual(env.manager.activeTool, "trend_line", "the tool should stay armed - the gesture was never claimed, not cancelled");
+
+  // A drag that starts inside the main pane still works normally.
+  drag(env, 50, 100, 150, 150, 0);
+  assert.strictEqual(env.manager.drawings.length, 1, "a drag inside the main pane must still create a drawing");
+}
+
 console.log("chart drawing runtime tests: PASS");
