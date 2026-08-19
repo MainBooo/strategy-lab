@@ -166,7 +166,7 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
-- **Продвинутые инструменты рисования**: Fib Channel/Spiral/Wedge,
+- **Продвинутые инструменты рисования**: Fib Spiral/Pitchfan,
   Volume Profile, Multiselect, Grouping — не реализованы (P2/P3 по ТЗ,
   самый крупный оставшийся кусок работы).
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
@@ -176,8 +176,16 @@ custom levels закрыты в этой же сессии:
   `fib_speed_resistance_fan` — веерные лучи к фракционным ценовым
   уровням (переиспользует render/hit-test gann_fan); `fib_circles` —
   концентрические кольца вокруг anchor0; `fib_arcs` — те же радиусы,
-  полукольца вокруг anchor1. Fib Channel/Spiral/Wedge/Trend-Based Fib
-  Time/Pitchfan (5 из 9 в этой строке ТЗ) остаются MISSING.
+  полукольца вокруг anchor1.
+- ~~**Fib Channel / Wedge / Trend-Based Fib Time**~~ — добавлены той же
+  сессией 2026-08-19 (см. matrix changelog «Продолжение 2026-08-19,
+  часть 4»): `fib_channel` — 3-анкорный parallel_channel-offset, одна
+  линия-уровень на долю Фибоначчи вместо двух границ; `fib_wedge` —
+  тот же вершинный 3-анкорный triangle/pitchfork-скелет, сужающиеся
+  соединительные линии от вершины наружу; `trend_based_fib_time` — та
+  же математика, что fib_time_zone, но зоны считаются от anchor1
+  (конец тренда). Fibonacci-строка ТЗ теперь 7 из 9 — только Fib
+  Spiral/Pitchfan (принципиально новая геометрия) остаются MISSING.
 - ~~**Rotated Rectangle / Arrow / Arrow Mark ×4 / Highlighter**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19»): `rotated_rectangle` — настоящий повёрнутый quad в

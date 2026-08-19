@@ -62,7 +62,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
-| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 4 из 9 (эта сессия): `fib_time_zone` (вертикальные линии на anchor0.time+интервал×F для чисел Фибоначчи F, тот же принцип живого пересчёта, что у `cyclic_lines`), `fib_speed_resistance_fan` (лучи от anchor0 к фракционным *ценовым* точкам на времени anchor1 — классическое определение Speed Resistance, не Gann-подобные угловые коэффициенты; переиспользует render/hit-test `gann_fan`), `fib_circles` (концентрические кольца вокруг anchor0, радиусы — коэффициенты Фибоначчи от пиксельного расстояния anchor0→anchor1), `fib_arcs` (те же радиусы, но полукольца вокруг anchor1, направленные в сторону от anchor0). Fib Channel/Spiral/Wedge/Trend-Based Fib Time/Pitchfan остаются MISSING — Channel/Wedge проще (расширения parallel_channel/triangle), Spiral/Pitchfan сложнее (новая геометрия) | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 4 типа нарисованы программно, верные render op kinds (`fib_time_zone`/`gann_fan`/`fib_circles`/`fib_arcs`), скриншот визуально подтвердил все 4 формы одновременно (подписанные вертикальные зоны 0/1/2/3, расходящийся веер, вложенные кольца, полукольца); hit-test подтверждён программно для всех четырёх (для fib_time_zone — изолированно, скрыв три другие плотно расположенные фигуры, чтобы исключить визуальное перекрытие в тестовых координатах); Object Tree — верные подписи; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
+| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 7 из 9. Часть 1 (`fib_time_zone`/`fib_speed_resistance_fan`/`fib_circles`/`fib_arcs`) — см. changelog «часть 3». Часть 2 (эта сессия): `fib_channel` (тот же 3-анкорный parallel_channel-offset, но одна линия-уровень на каждую долю Фибоначчи диапазона anchor0-anchor1↔offset-линии, вместо всего двух границ), `fib_wedge` (тот же 3-анкорный треугольник-вершина, что у triangle/pitchfork, но вместо замкнутой фигуры — сужающаяся серия соединительных линий от вершины наружу на каждую долю Фибоначчи), `trend_based_fib_time` (та же математика чисел Фибоначчи, что Time Zone, но зоны считаются от anchor1 — конца тренда, а не anchor0 — начала; переиспользует render/hit-test `fib_time_zone` без изменений). Fib Spiral/Pitchfan остаются MISSING — оба требуют принципиально новой геометрии (логарифмическая спираль / веер медиан), не drop-in расширение уже написанного | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 3 типа нарисованы программно, верные render op kinds (`fib_channel`/`fib_wedge`/`fib_time_zone`), скриншот визуально подтвердил все 3 формы одновременно (подписанные уровни канала 0-100%, сужающийся клин, зоны 0/1); hit-test подтверждён программно для всех трёх, включая обе граничные стороны клина отдельно от уровневых линий; Object Tree — верные подписи; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
 | Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 8 из 8 категорий ТЗ покрыты (10 конкретных tool-типов): XABCD `xabcd_pattern`/ABCD `abcd_pattern`/Three Drives `three_drives_pattern`/Elliott Impulse `elliott_impulse_wave`/Elliott Correction `elliott_correction_wave` — общий размеченный-зигзаг+%-отношение рендер; Triangle Pattern `triangle_pattern`/Head & Shoulders `head_shoulders_pattern` — зигзаг + boundary-луч(и) (2 сходящихся/расходящихся для треугольника, 1 neckline для Г&П); Cyclic Lines `cyclic_lines` — серия равноотстоящих по времени вертикальных линий через весь видимый pane (Time Cycles отдельно не реализован — тот же TradingView-концепт); Sine Line `sine_line` — одна синусоида между двумя анкорами, перпендикулярно базовой линии в pane-pixel space (амплитуда — эвристика, не сверялась пиксель-в-пиксель с живым TradingView). Ни один паттерн без авто-классификации по имени (Gartley/Bat/Butterfly/Crab для XABCD, волновые правила для Elliott) — отдельный, более крупный кусок работы | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех новых (drag+2×tap для Elliott Correction, drag+4×tap для Elliott Impulse, drag-release для Cyclic Lines/Sine Line), метки/%-отношения (Elliott), 16 равноотстоящих вертикальных линий подтверждены программно после pan (Cyclic Lines), 65-точечная синусоида подтверждена программно (Sine Line), hit-test/Object Tree подтверждены для всех четырёх новых типов; живьём найден и исправлен реальный краш (`cyclicLineTimes` читал `d.points[1].time` без guard на draft-preview с 1 точкой) |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
@@ -567,6 +567,68 @@ Cyclic-инфраструктуру, как и предполагалось.
   радиусы колец Fib Circles (не просто «какие-то кольца»), и что каждая
   дуга Fib Arcs — реально разомкнутая половина (оба конца на одном
   радиусе от anchor1, но не совпадают друг с другом).
+
+### Продолжение 2026-08-19, часть 4 — Fibonacci family, часть 2 (Channel, Wedge, Trend-Based Fib Time)
+
+Закрывает 7 из 9 в Fibonacci-строке ТЗ (остаются только Fib Spiral и Fib
+Pitchfan — новая геометрия, отдельный будущий кусок). Все три выбраны
+именно как «дешёвые довески» — прямые расширения уже написанной
+геометрии parallel_channel/triangle/fib_time_zone, как и предполагалось
+в плане предыдущей части.
+
+- **Fib Channel** (`fib_channel`) — из MISSING в PARTIAL. Та же
+  3-анкорная постановка, что у `parallel_channel` (anchor2's
+  перпендикулярное ценовое смещение от линии anchor0-anchor1 через уже
+  существующую `lerpPriceAtTime()`), но вместо двух границ рисуется одна
+  линия-уровень на каждую долю `fibLevels()`/`FIB_RETRACEMENT_LEVELS` —
+  новая `fibChannelSegments()`. Уровень 0 совпадает с линией
+  anchor0-anchor1 буквально, уровень 1 — с offset-линией
+  parallel_channel; всё остальное линейно интерполируется между ними.
+  Сегменты ограничены anchor0.time..anchor1.time (не продлеваются до
+  края pane), как и у самого `parallel_channel`.
+- **Fib Wedge** (`fib_wedge`) — из MISSING в PARTIAL. Та же 3-анкорная
+  постановка, что у `triangle`/`pitchfork` (anchor0 — общая вершина,
+  anchor1/anchor2 — два расходящихся ребра), но вместо замкнутой фигуры
+  или зубьев — новая `fibWedgeSegments()`, для каждой доли Фибоначчи L
+  (кроме 0 — вырождается в саму вершину, пропускается) соединяет точку
+  на доле L вдоль ребра anchor0→anchor1 с точкой на той же доле вдоль
+  ребра anchor0→anchor2: сужающийся веер соединительных линий от вершины
+  наружу, силуэт клина. На доле L=1 линия буквально совпадает с
+  anchor1↔anchor2.
+- **Trend-Based Fib Time** (`trend_based_fib_time`) — из MISSING в
+  PARTIAL. Та же математика чисел Фибоначчи, что уже написана для
+  `fib_time_zone` (`FIB_TIME_ZONE_SEQUENCE`), но зоны отсчитываются от
+  anchor1 (конец тренда), а не anchor0 (начало) — новая
+  `trendBasedFibTimeMarks()`, отличается от `fibTimeZoneMarks()` только
+  тем, от какого анкора считается интервал; собственный TradingView-шный
+  смысл двух похожих инструментов ("Time Zone" считает от точки старта,
+  "Trend-Based Fib Time" — от точки окончания движения). Полностью
+  переиспользует render/hit-test-опу `fib_time_zone` без изменений.
+- Все три не потребовали нового кода в Properties panel/Object Tree/
+  undo-redo/автосохранении/whole-object drag. Кнопки: `chart-analysis.js`
+  TOOL_BUTTONS (+3 записи) и существующая группа «Фибоначчи» в
+  `chart-editor-terminal-mobile-v2.js` (была 6 пунктов, стала 9).
+  **Верифицировано** вживую на проде (тот же QA-аккаунт): все 3 типа
+  созданы программно с ценами внутри видимого диапазона; верные render
+  op kinds (Trend-Based Fib Time подтверждённо реально делит
+  `kind:"fib_time_zone"`, не отдельный); скриншот визуально подтвердил
+  все 3 формы одновременно — подписанные уровни канала 0.0%..100.0%,
+  явно сужающийся клин, зоны 0/1; hit-test подтверждён программно для
+  всех трёх — для Fib Wedge отдельно проверены обе граничные стороны
+  (`edge1`/`edge2`), не только уровневые линии; Object Tree — верные
+  подписи; тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`. 198 pytest + JS runtime suite зелёные —
+  allTools +3 имени, плюс точная геометрическая проверка для всех трёх
+  (Fib Channel: уровень 0 буквально совпадает с anchor0→anchor1, уровень
+  1 проходит через anchor2; Fib Wedge: уровень 0 пропущен, уровень 1
+  буквально совпадает с anchor1↔anchor2; Trend-Based Fib Time: зона 0
+  сидит на anchor1, не anchor0). По пути найдена и исправлена
+  cross-realm-ловушка в самом тестовом харнессе (не в коде продукта):
+  `assert.deepStrictEqual` на объект, пришедший прямо из `vm`-песочницы
+  drawings.js, падал из-за разных `Object.prototype` между реалмами
+  (Node's `deepStrictEqual` сверяет и прототип) — исправлено извлечением
+  примитивных полей в новый объект перед сравнением, тот же приём, что
+  уже неявно использовался в паре существующих тестов этого файла.
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
