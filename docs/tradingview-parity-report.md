@@ -166,10 +166,19 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
-- **Продвинутые инструменты рисования**: Multiselect, Grouping — не
-  реализованы (самый крупный оставшийся кусок работы; Multiselect
-  особенно — требует рефакторинга `selectedId`→`selectedIds` по всему
-  `drawings.js`/`chart-tile.js`, самая инвазивная из оставшихся задач).
+- ~~**Multiselect (Ctrl/Cmd click), Grouping**~~ — реализовано сессией
+  2026-08-19 (см. matrix changelog): `selectedId`→`selectedIds` (Set),
+  `selectedId` остался compat-геттером/сеттером для каждого
+  доTHIS-сессионного call site. Ctrl/Cmd-click тогглит объект (или его
+  группу целиком) в/из выборки; plain-click/plain-drag на объекте,
+  который уже часть текущей мульти-выборки, её сохраняет (иначе whole-
+  group drag не мог бы начаться) — это была единственная найденная в
+  этой сессии реальная логическая ошибка, поймана JS-тестом ещё до
+  живой проверки, root-cause в `_onPointerDown` безусловно заменял
+  выборку на клик. `groupSelection()`/`ungroupSelection()`,
+  `duplicateSelection()` (дублированная группа получает новый groupId).
+  Floating toolbar и панель «Свойства» получили отдельный компактный
+  режим для мульти-выборки (счётчик + Дублировать/Группировать/Удалить).
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19, часть 3»): `fib_time_zone` — вертикальные линии на

@@ -88,8 +88,8 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Remove (selected/drawings/indicators/all) | family-меню с подтверждением | тот же попап, раздельные Удалить рисунки/позиции/индикаторы/всё, каждый со своим `confirm()` | да | **PARITY (испр. эта сессия)** | живой Playwright — «Удалить позиции» стёр только позицию, trend_line и SMA целы |
 | Undo/Redo | | `_undoStack`/`_redoStack`, 100 записей, один push на operation (не на pointermove) | да | PARITY | код, ТЗ §84 уже соблюдён |
 | Drawing persistence (reload/timeframe/symbol) | | `/api/chart-drawings`, привязка к symbol/pane, `loadDrawings()` при смене тикера | да | PARITY | код |
-| Multiselect (Ctrl/Cmd click) | | отсутствует | да (desktop) | MISSING | — |
-| Grouping | | отсутствует | да | MISSING | — |
+| Multiselect (Ctrl/Cmd click) | | `DrawingManager.selectedIds` (Set, заменил единичный `selectedId` — сохранён как compat-геттер/сеттер), Ctrl/Cmd-click в `_onPointerDown` тогглит объект/группу через `select(id,{additive})` | да (desktop) | **PARITY (испр. эта сессия)** | живой Playwright: реальные mouse-события (не programmatic API) — plain click выбирает один, Ctrl-click добавляет второй, plain mousedown-drag на объекте внутри мульти-выборки двигает оба на одинаковую дельту |
+| Grouping | | `groupSelection()`/`ungroupSelection()` пишут/чистят `properties.groupId`; клик по любому члену группы выбирает всю группу (`_selectionUnit`); групповой drag через `groupOrigPoints` в `_dragState`/`_applyDrag`; `duplicateSelection()` — дублированная группа получает новый groupId, не мержится с оригиналом | да | **PARITY (испр. эта сессия)** | живой Playwright: Group через floating toolbar назначил общий groupId обоим объектам; 198 pytest + 2 JS runtime suites зелёные (включая dedicated multiselect/group/duplicate блок) |
 | Per-tool style defaults | «сделать стилем по умолчанию» | реализовано (`saveToolStyleDefault`, `styleOverrides`) | да | PARITY | код |
 | Visibility by timeframe | | реализовано (`properties.visibleTimeframes`, фильтр в `_buildOp`) | да | PARITY | код |
 | Context menu (canvas + drawing) | right-click/long-press | `openContextMenu()` — настройки/дублировать/скрыть/блокировать/удалить на объекте; алерт/сброс масштаба/снимок на пустом месте | да | PARITY | код |
@@ -734,6 +734,85 @@ Closes the second half of the Anchored VWAP / Volume Profile ТЗ line item
   протекла в бакеты; отдельный тест на диапазон без свечей внутри (не
   падает, ничего не рисует) и на пустой `makeManager()`-фикстуру без свечей
   вовсе.
+- **Multiselect (Ctrl/Cmd click) + Grouping** — из MISSING в PARITY, самый
+  крупный оставшийся кусок ТЗ. `DrawingManager.selectedId` (единичный
+  string) заменён на `selectedIds` (Set, insertion-ordered) —
+  `selectedId` остался compat-геттером/сеттером (читает/пишет первый
+  элемент множества), так что все довавторные call sites
+  (addDrawing/removeDrawing/undo/redo/loadDrawings/hitTest) продолжают
+  работать без изменений в single-selection режиме. `select(id,
+  {additive})`: Ctrl/Cmd-click (`_onPointerDown`) передаёт
+  `additive:true` — тогглит `_selectionUnit(id)` (сам объект, либо, если
+  он в группе, все члены группы разом — клик по любому одному члену
+  группы выбирает её всю целиком, поведение реального TradingView) в/из
+  текущей выборки; plain click заменяет выборку целиком. `hitTest`
+  отдаёт resize-handles только при ровно одном выбранном объекте — при
+  мульти-выборке любой drag всегда whole-object (не resize), совпадает с
+  тем, что рисуется (`showHandles` в `_buildOp` той же логикой).
+  Whole-object drag на объекте, который уже часть текущей мульти-
+  выборки, двигает все выбранные объекты на одну и ту же
+  logical/price-дельту (`groupOrigPoints` в `_dragState`, применяется в
+  `_applyDrag` через editAxis каждого объекта отдельно — так
+  сгруппированный horizontal_line остаётся горизонтальным, даже когда
+  trend_line-сосед по группе двигается свободно); persistence отправляет
+  `updated` как массив id (не один id) для группового drag, каждый член
+  сохраняется отдельной строкой. `groupSelection()`/`ungroupSelection()`
+  пишут/чистят `properties.groupId` (тот же непрозрачный JSON-блоб,
+  которым уже пользуется каждый per-drawing style — новой backend-схемы
+  не потребовалось); `duplicateSelection()` копирует всю выборку и
+  выбирает копии — дублированная группа получает **новый** groupId
+  (remap на лету), не мержится с оригиналом. Floating toolbar
+  (`ChartTile._renderMultiFloatToolbar`) и панель «Свойства»
+  (`_renderMultiProps`) получили отдельный компактный режим для N>1
+  выбранных объектов — счётчик + Дублировать/Группировать
+  (Ungroup, если выборка уже целая группа)/Удалить; per-object
+  цвет/толщина/стиль не показываются — не обобщаются на разнородную
+  выборку. Хоткеи: Ctrl/Cmd+G группирует (N>1), Ctrl/Cmd+Shift+G
+  разгруппировывает, Ctrl/Cmd+D дублирует выборку, Delete/Backspace
+  удаляет всю выборку (по одному `removeDrawing()` на id — N объектов
+  дают N записей в undo-стеке, не общий rewrite контракта одиночного
+  удаления).
+  **Реальный баг найден и исправлен** (не в реализации мультивыборки
+  саму по себе, а в уже существовавшем `_onPointerDown`): plain
+  (non-Ctrl) mousedown на объекте, уже входящем в текущую мульти-
+  выборку, безусловно вызывал `select(hit.id, {additive:false})` —
+  заменял выборку одним этим объектом ДО того, как начинался drag, из-за
+  чего `isGroupDrag`-проверка в `_onPointerMove` (`selectedIds.size > 1`)
+  всегда видела уже схлопнутую до одного объекта выборку и никогда не
+  запускала групповой drag. Поймано JS runtime suite'ом (написанным этой
+  же сессией) на синтетическом сценарии до какой-либо живой проверки —
+  второй выбранный объект оставался на месте после drag первого. Исправлено:
+  `_onPointerDown` теперь пропускает `select()` (сохраняет текущую
+  мульти-выборку как есть), когда клик non-additive и попадает в объект,
+  уже входящий в выборку из >1 элемента — именно тот жест, которым
+  начинается групповой drag.
+  Отдельно найден и исправлен баг в самом тесте (не в продакшен-коде):
+  тестовый файл выполняет `drawings.js` внутри `vm`-песочницы; массивы,
+  построенные ВНУТРИ этой песочницы (например, `duplicateSelection()`
+  возвращает копии, `[...groupOrigPoints.keys()]` в `_finishEditPointer`)
+  относятся к другому JS-realm, чем массивы, построенные в самом
+  тест-файле — `assert.deepStrictEqual` на них падает с «not
+  reference-equal» даже при побайтово идентичном содержимом (прототип
+  `Array.prototype` из другого realm). Исправлено оборачиванием через
+  `Array.from()`, вызванный из внешнего realm-идентификатора — тот же
+  трюк уже неявно работал у остальных ассертов файла, потому что их
+  правая часть строилась через `[...selectedIds]` (spread выполняется в
+  внешнем коде) или через литерал `[d1.id, d2.id]`, а не через `.map()`/
+  `.slice()` на объекте, пришедшем из vm.
+  **Верифицировано** вживую на проде (тот же QA-аккаунт, реальные mouse-
+  события через Playwright, не programmatic `dm.select()`-вызовы): plain
+  click выбрал один trend_line, Ctrl-click добавил второй (`selectedIds`
+  подтверждён программно); plain mousedown+drag на первом объекте
+  сохранил мульти-выборку и подтверждённо сдвинул ОБА объекта на
+  идентичную time/price-дельту; floating toolbar показал пилюлю «2
+  объектов» с Дублировать/Группировать/Удалить, панель «Свойства» —
+  тот же счётчик и кнопки; Group через пилюлю назначил обоим общий
+  `properties.groupId`. Скриншот подтвердил визуально (пилюля + панель
+  синхронны). Тестовые drawings удалены, reload с прода подтвердил
+  `drawings.length === 0`, консоль чистая на всех шагах. 198 pytest + оба
+  JS runtime suite зелёные (расширены dedicated-блоком на select/additive/
+  group-selection-unit/duplicateSelection/group-drag/multi-delete-
+  duplicate-group-ungroup-via-keyboard).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
