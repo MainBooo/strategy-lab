@@ -102,6 +102,8 @@
     { id: "fib_channel", label: "Канал Фибоначчи", icon: "F═" },
     { id: "fib_wedge", label: "Клин Фибоначчи", icon: "F◺" },
     { id: "trend_based_fib_time", label: "Временные зоны по тренду", icon: "F|" },
+    { id: "fib_pitchfan", label: "Веер Фибоначчи (Pitchfan)", icon: "F⋕" },
+    { id: "fib_spiral", label: "Спираль Фибоначчи", icon: "F@" },
   ];
 
   const LAYOUTS = [

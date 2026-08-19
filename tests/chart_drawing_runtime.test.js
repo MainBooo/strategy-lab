@@ -258,7 +258,7 @@ const allTools = [
   "arrow_mark_left", "arrow_mark_right", "rotated_rectangle",
   "path", "curve", "arc", "double_curve",
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
-  "fib_channel", "fib_wedge", "trend_based_fib_time",
+  "fib_channel", "fib_wedge", "trend_based_fib_time", "fib_pitchfan", "fib_spiral",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -620,6 +620,47 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   const zone1 = op.marks.find((m) => m.label === "1");
   assert.ok(zone1, "trend_based_fib_time: expected a zone-1 mark");
   assert.strictEqual(zone1.x, 280, "trend_based_fib_time: zone 1 should be one interval past anchor1");
+}
+
+// Fib Pitchfan: every ray must originate exactly at anchor0 (the handle),
+// and the 50% ray must be collinear with midpoint(anchor1, anchor2) - the
+// same point the standard pitchfork's own median aims at - and marked
+// major, exactly like gann_fan's own 1x1 ray convention it reuses.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_pitchfan", [{ time: 0, price: 0 }, { time: 100, price: 0 }, { time: 100, price: 200 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.strictEqual(op.kind, "gann_fan", "fib_pitchfan: should reuse gann_fan's render op kind");
+  assert.strictEqual(op.segments.length, 7, "fib_pitchfan: expected one segment per FIB_PITCHFAN_RATIOS entry");
+  op.segments.forEach((seg) => {
+    assert.strictEqual(seg.x1, 0, "fib_pitchfan: every ray should originate at anchor0 (x)");
+    assert.strictEqual(seg.y1, 0, "fib_pitchfan: every ray should originate at anchor0 (y)");
+  });
+  const midSeg = op.segments.find((s) => s.label === "50.0%");
+  assert.ok(midSeg, "fib_pitchfan: expected a 50.0% ray");
+  assert.ok(midSeg.major, "fib_pitchfan: the 50.0% ray should be marked major (matches the standard pitchfork's median)");
+  const cross = (midSeg.x2 - midSeg.x1) * (100 - midSeg.y1) - (midSeg.y2 - midSeg.y1) * (100 - midSeg.x1);
+  assert.ok(Math.abs(cross) < 1e-6, "fib_pitchfan: 50.0% ray should pass through midpoint(anchor1, anchor2)");
+}
+
+// Fib Spiral: the first sample must land exactly on anchor1 (the starting
+// radius/angle), and after exactly one quarter turn the radius must have
+// grown by precisely the golden ratio - the defining property of a golden
+// spiral, not just "some curve that looks spiral-ish".
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_spiral", [{ time: 200, price: 200 }, { time: 300, price: 200 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.strictEqual(op.kind, "fib_spiral", "fib_spiral: unexpected render op kind");
+  const samplesPerTurn = 48, turns = 3;
+  assert.strictEqual(op.samples.length, turns * samplesPerTurn + 1, "fib_spiral: unexpected sample count");
+  assert.ok(Math.abs(op.samples[0].x - 300) < 1e-9 && Math.abs(op.samples[0].y - 200) < 1e-9, "fib_spiral: first sample should land exactly on anchor1");
+  const quarterTurn = op.samples[samplesPerTurn / 4];
+  const goldenRatio = (1 + Math.sqrt(5)) / 2;
+  assert.ok(Math.abs(quarterTurn.x - 200) < 1e-9, "fib_spiral: after a quarter turn, x should return to the center");
+  assert.ok(Math.abs(quarterTurn.y - (200 + 100 * goldenRatio)) < 1e-9, "fib_spiral: after a quarter turn, radius should have grown by exactly the golden ratio");
 }
 
 // Anchored VWAP: the one tool whose rendered body is a computed price

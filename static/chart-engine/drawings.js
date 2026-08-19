@@ -255,6 +255,18 @@
     // See trendBasedFibTimeMarks() below; reuses fib_time_zone's own
     // render/hit-test op shape unchanged.
     trend_based_fib_time: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Временные зоны по тренду" },
+    // Fibonacci family, part 3 - the last two, genuinely new geometry
+    // rather than a drop-in extension of anything already written (this
+    // closes the family 9/9). Fib Pitchfan: same 3-anchor placement as
+    // pitchfork (anchor0 = handle, anchor1/anchor2 = prongs), but instead
+    // of a single median + 2 parallel teeth, fans a ray from anchor0
+    // through each FIB_PITCHFAN_RATIOS fraction of the anchor1->anchor2
+    // segment - see fibPitchfanSegments() below.
+    fib_pitchfan: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Веер Фибоначчи (Pitchfan)" },
+    // Fib Spiral: a logarithmic "golden spiral" centered at anchor0;
+    // anchor1 sets the starting radius/angle. See fibSpiralSamples()
+    // below.
+    fib_spiral: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Спираль Фибоначчи" },
   };
 
   /** Unit direction each Arrow Mark glyph points in pane-pixel space -
@@ -441,6 +453,39 @@
     return [median, tooth1, tooth2].filter(Boolean);
   }
 
+  // Fib Pitchfan's ratio set - like FIB_CIRCLE_LEVELS/FIB_EXTENSION_LEVELS,
+  // goes past both 0 and 1 (the fan keeps projecting beyond the
+  // anchor1-anchor2 range, not just between the two prongs). 0.5 is
+  // included deliberately - see fibPitchfanSegments() below for why it's
+  // not an arbitrary choice.
+  const FIB_PITCHFAN_RATIOS = [0, 0.382, 0.5, 0.618, 1, 1.618, 2.618];
+
+  /** Fib Pitchfan's fan-ray segments (pane-pixel space): from anchor0
+   * through the point at each FIB_PITCHFAN_RATIOS fraction along
+   * anchor1->anchor2 (interpolated in real time+price, so a ratio outside
+   * [0,1] correctly extrapolates past whichever prong), extended to the
+   * pane edge - reuses gann_fan's exact ray-clipping + render op shape
+   * (fib_speed_resistance_fan already reuses the same op for its own,
+   * differently-sourced fan). At ratio 0.5 the target point is literally
+   * midpoint(anchor1, anchor2) - the same point the standard pitchfork's
+   * own median aims at (see pitchforkMedianModelPoints' "standard" case
+   * above) - not a coincidence, both tools share that definition in
+   * TradingView. Shared by _hitDrawing and _buildOp. [] if any anchor is
+   * off-screen. */
+  function fibPitchfanSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return [];
+    const [p1, p2] = [d.points[1], d.points[2]];
+    const segs = [];
+    for (const level of FIB_PITCHFAN_RATIOS) {
+      const target = { time: p1.time + (p2.time - p1.time) * level, price: p1.price + (p2.price - p1.price) * level };
+      const targetPix = toPixels(core, [target])[0];
+      if (!targetPix || targetPix.x == null) continue;
+      const clipped = clipParametricLineToRect(pix[0], targetPix, paneWidth(core), paneHeight(core), "ray");
+      if (clipped) segs.push(Object.assign({ label: `${(level * 100).toFixed(1)}%`, major: level === 0.5 }, clipped));
+    }
+    return segs;
+  }
+
   /** Vertex labels for the labeled-zigzag pattern tools (xabcd_pattern/
    * abcd_pattern/three_drives_pattern/elliott_impulse_wave/
    * elliott_correction_wave) - the render/hit-test code itself is
@@ -610,6 +655,41 @@
       const t = i / SINE_LINE_SAMPLES;
       const offset = amplitude * Math.sin(2 * Math.PI * t);
       points.push({ x: pix[0].x + dx * t + nx * offset, y: pix[0].y + dy * t + ny * offset });
+    }
+    return points;
+  }
+
+  // Fib Spiral's growth: a "golden spiral" multiplies its radius by the
+  // golden ratio (~1.618) every quarter turn (90 degrees) - the standard
+  // logarithmic-spiral definition tied to Fibonacci. FIB_SPIRAL_TURNS caps
+  // how many full turns get sampled/drawn (an unbounded log spiral has no
+  // natural stopping point) - not verified pixel-for-pixel against a live
+  // TradingView instance, same caveat as sine_line's amplitude above.
+  const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2;
+  const FIB_SPIRAL_TURNS = 3;
+  const FIB_SPIRAL_SAMPLES_PER_TURN = 48;
+
+  /** Fib Spiral's sampled polyline (pane-pixel space): a logarithmic
+   * spiral centered at anchor0. anchor1 sets both the starting radius
+   * (its pixel distance from anchor0) and starting angle; the spiral
+   * always winds in the direction of increasing angle from there, for
+   * FIB_SPIRAL_TURNS full turns, radius growing by GOLDEN_RATIO every
+   * quarter turn. Shared by _hitDrawing and _buildOp. null for a
+   * degenerate zero-distance anchor pair. */
+  function fibSpiralSamples(pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null) return null;
+    const r0 = Math.hypot(pix[1].x - pix[0].x, pix[1].y - pix[0].y);
+    if (!r0) return null;
+    const angle0 = Math.atan2(pix[1].y - pix[0].y, pix[1].x - pix[0].x);
+    const b = Math.log(GOLDEN_RATIO) / (Math.PI / 2); // r *= GOLDEN_RATIO every quarter turn
+    const totalAngle = FIB_SPIRAL_TURNS * 2 * Math.PI;
+    const steps = FIB_SPIRAL_TURNS * FIB_SPIRAL_SAMPLES_PER_TURN;
+    const points = [];
+    for (let i = 0; i <= steps; i++) {
+      const theta = (totalAngle * i) / steps;
+      const r = r0 * Math.exp(b * theta);
+      const a = angle0 + theta;
+      points.push({ x: pix[0].x + r * Math.cos(a), y: pix[0].y + r * Math.sin(a) });
     }
     return points;
   }
@@ -1705,6 +1785,27 @@
           }
           return null;
         }
+        case "fib_pitchfan": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          for (const seg of fibPitchfanSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_spiral": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const samples = fibSpiralSamples(pix);
+          if (!samples) return null;
+          for (let i = 0; i < samples.length - 1; i++) {
+            if (pointToSegmentDist(px, py, samples[i].x, samples[i].y, samples[i + 1].x, samples[i + 1].y) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
         case "anchored_vwap": {
           if (pix[0] == null || pix[0].x == null) return null;
           if (handleAt(0)) return { id: d.id, handle: 0 };
@@ -2786,6 +2887,16 @@
           if (samples) ops.push({ kind: "sine_line", samples, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         }
+        case "fib_pitchfan": {
+          const segs = fibPitchfanSegments(this.manager.core, d, pix);
+          if (segs.length) ops.push({ kind: "gann_fan", segments: segs, color, width, alpha, handles: [pix[0], pix[1], pix[2]] });
+          break;
+        }
+        case "fib_spiral": {
+          const samples = fibSpiralSamples(pix);
+          if (samples) ops.push({ kind: "fib_spiral", samples, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
         case "anchored_vwap": {
           const vwapPix = anchoredVwapPixels(this.manager.core, d);
           if (pix[0]?.x != null && vwapPix.length >= 2) {
@@ -3163,6 +3274,13 @@
           break;
         }
         case "sine_line": {
+          ctx.beginPath();
+          op.samples.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
+          ctx.stroke();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "fib_spiral": {
           ctx.beginPath();
           op.samples.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
