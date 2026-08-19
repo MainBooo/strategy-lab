@@ -75,7 +75,7 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync("static/chart-engine/drawings.js", "utf8"), context);
 
-const { DrawingManager, TOOL_DEFS, INTERACTION_STATES, TEXT_ANNOTATION_TYPES } = windowTarget.ChartEngine.Drawings;
+const { DrawingManager, TOOL_DEFS, INTERACTION_STATES, TEXT_ANNOTATION_TYPES, classifyXabcdPattern } = windowTarget.ChartEngine.Drawings;
 
 function makeManager() {
   const container = new FakeTarget();
@@ -910,6 +910,66 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   drag(env, 40, 100, 160, 180, 1000);
   assert.strictEqual(env.manager.drawings.length, 1);
   assert.doesNotThrow(() => renderOps(env), "regression_trend: render must not throw with zero candles");
+}
+
+// XABCD harmonic-pattern auto-classification (classifyXabcdPattern) - pure
+// ratio math, no DrawingManager/candles needed. Points are picked to land
+// exactly on hand-computed ratios inside each pattern's canonical band
+// (see XABCD_HARMONIC_PATTERNS in drawings.js), not approximate/plausible
+// numbers - each is solved algebraically for abRatio=ab/xa, cdRatio=cd/bc
+// and adRatio=|D-X|/xa to hit specific target values.
+{
+  // Gartley: ab=0.618 (target, within [0.55,0.70]), cd/bc=1.4 (within
+  // [1.05,1.75]), ad=0.79 (within [0.72,0.86]). X=0,A=100 -> B=38.2,
+  // C=55.2 (bc=17), D=79 (cd=|79-55.2|=23.8, 23.8/17=1.4 exactly).
+  const gartley = [
+    { time: 0, price: 0 }, { time: 1, price: 100 }, { time: 2, price: 38.2 },
+    { time: 3, price: 55.2 }, { time: 4, price: 79 },
+  ];
+  const gartleyResult = classifyXabcdPattern(gartley);
+  assert.ok(gartleyResult, "classifyXabcdPattern: Gartley ratios must classify");
+  assert.strictEqual(gartleyResult.name, "Гартли");
+  assert.strictEqual(gartleyResult.bullish, true, "classifyXabcdPattern: A > X must read as bullish");
+
+  // Same shape, mirrored around a falling XA leg (X=100,A=0) - same
+  // |ratios|, opposite direction, must still classify as Gartley but
+  // bearish.
+  const gartleyBear = [
+    { time: 0, price: 100 }, { time: 1, price: 0 }, { time: 2, price: 61.8 },
+    { time: 3, price: 44.8 }, { time: 4, price: 21 },
+  ];
+  const gartleyBearResult = classifyXabcdPattern(gartleyBear);
+  assert.ok(gartleyBearResult, "classifyXabcdPattern: mirrored Gartley ratios must still classify");
+  assert.strictEqual(gartleyBearResult.name, "Гартли");
+  assert.strictEqual(gartleyBearResult.bullish, false, "classifyXabcdPattern: A < X must read as bearish");
+
+  // Bat: ab=0.45 (within [0.35,0.55]), cd/bc=2.0 (within [1.50,2.75]),
+  // ad=0.875 (within [0.82,0.93]). X=0,A=100 -> B=55, C=65.8333(bc=10.8333),
+  // D=87.5 (cd=|87.5-65.8333|=21.6667, /10.8333=2.0 exactly).
+  const bat = [
+    { time: 0, price: 0 }, { time: 1, price: 100 }, { time: 2, price: 55 },
+    { time: 3, price: 65 + 5 / 6 }, { time: 4, price: 87.5 },
+  ];
+  const batResult = classifyXabcdPattern(bat);
+  assert.ok(batResult, "classifyXabcdPattern: Bat ratios must classify");
+  assert.strictEqual(batResult.name, "Летучая мышь");
+
+  // Ratios that land in none of the four bands (ab=0.618 alone is a
+  // Gartley/Crab-range value, but cd=0.5 and ad=0.5 sit outside every
+  // pattern's cd/ad band) must return null, not force the closest match.
+  const noMatch = [
+    { time: 0, price: 0 }, { time: 1, price: 100 }, { time: 2, price: 38.2 },
+    { time: 3, price: 58.2 }, { time: 4, price: 48.2 },
+  ];
+  assert.strictEqual(classifyXabcdPattern(noMatch), null, "classifyXabcdPattern: ratios outside every band must return null, not a forced guess");
+
+  // Malformed input (wrong point count, or a degenerate XA leg of zero
+  // length) must not throw.
+  assert.strictEqual(classifyXabcdPattern([{ time: 0, price: 0 }]), null);
+  assert.strictEqual(classifyXabcdPattern([
+    { time: 0, price: 50 }, { time: 1, price: 50 }, { time: 2, price: 60 },
+    { time: 3, price: 55 }, { time: 4, price: 65 },
+  ]), null, "classifyXabcdPattern: zero-length XA leg must not divide-by-zero into a false match");
 }
 
 // Volume Profile: like anchored_vwap, a computed histogram rather than

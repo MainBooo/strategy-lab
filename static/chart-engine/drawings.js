@@ -553,7 +553,9 @@
    * and point count differ. Three Drives' 0/1/A/2/B/3 is the classic
    * labeling (drives 0->1->2->3, corrective retracements A/B between
    * them) - same "labeled zigzag + per-leg ratio" reading as XABCD/ABCD,
-   * just without the harmonic-pattern auto-classification either. Elliott
+   * just without xabcd_pattern's harmonic-pattern auto-classification
+   * (see classifyXabcdPattern below - the only tool of this family with
+   * an X anchor, so the only one with enough legs to test). Elliott
    * impulse (0-1-2-3-4-5) and correction (0-A-B-C) are the same reading
    * again, just Elliott's own numbering/lettering convention - no wave-
    * rule validation (alternation, Wave 3 never shortest, etc.), just the
@@ -565,6 +567,48 @@
     elliott_impulse_wave: ["0", "1", "2", "3", "4", "5"],
     elliott_correction_wave: ["0", "A", "B", "C"],
   };
+
+  /** Harmonic-pattern auto-classification for xabcd_pattern (the one
+   * pattern tool of this family with an X anchor, so the only one with
+   * enough legs - XA/AB/BC/CD/AD - to test against a named pattern's
+   * canonical ratios). Every other tool sharing the "xabcd" render code
+   * (abcd_pattern/three_drives_pattern/elliott_*) stays unclassified, as
+   * documented above.
+   *
+   * Ranges are Scott Carney's widely-published canonical harmonic ratios
+   * (Gartley/Bat/Butterfly/Crab - the same four names TradingView's own
+   * XABCD tool recognizes), each widened into a tolerance band since a
+   * real market swing essentially never lands on the exact Fibonacci
+   * number - this is inherently an approximate classifier, the same way
+   * every harmonic-pattern scanner is, not a precise measurement. AD/XA
+   * is the primary discriminator (the four patterns' bands barely
+   * overlap there: ~0.72-0.86 / 0.82-0.93 / 1.15-1.75 / 1.50-1.75), AB/XA
+   * and CD/BC narrow it further. */
+  const XABCD_HARMONIC_PATTERNS = [
+    { name: "Гартли", ab: [0.55, 0.70], cd: [1.05, 1.75], ad: [0.72, 0.86] },
+    { name: "Летучая мышь", ab: [0.35, 0.55], cd: [1.50, 2.75], ad: [0.82, 0.93] },
+    { name: "Бабочка", ab: [0.70, 0.87], cd: [1.50, 2.35], ad: [1.15, 1.75] },
+    { name: "Краб", ab: [0.35, 0.68], cd: [2.10, 3.75], ad: [1.50, 1.75] },
+  ];
+  function classifyXabcdPattern(points) {
+    if (!points || points.length !== 5) return null;
+    const [x, a, b, c, d] = points;
+    const xa = Math.abs(a.price - x.price);
+    const ab = Math.abs(b.price - a.price);
+    const bc = Math.abs(c.price - b.price);
+    const cd = Math.abs(d.price - c.price);
+    if (!xa || !ab || !bc) return null;
+    const abRatio = ab / xa, cdRatio = cd / bc, adRatio = Math.abs(d.price - x.price) / xa;
+    // XA rising -> the classic pattern anticipates a reversal *up* at D
+    // (D sits below/near X); XA falling -> the mirror, a reversal down.
+    const bullish = a.price > x.price;
+    for (const pat of XABCD_HARMONIC_PATTERNS) {
+      if (abRatio >= pat.ab[0] && abRatio <= pat.ab[1] && cdRatio >= pat.cd[0] && cdRatio <= pat.cd[1] && adRatio >= pat.ad[0] && adRatio <= pat.ad[1]) {
+        return { name: pat.name, bullish };
+      }
+    }
+    return null;
+  }
 
   /** Vertex labels + boundary-line anchor pairs for the "zigzag plus
    * extended trendline(s)" pattern tools - triangle_pattern's two
@@ -3494,7 +3538,10 @@
         case "elliott_impulse_wave":
         case "elliott_correction_wave":
           if (pix.length >= TOOL_DEFS[d.type].anchorCount && pix.every((p) => p.x != null && p.y != null)) {
-            ops.push({ kind: "xabcd", points: pix, dpoints: d.points, labels: PATTERN_LABELS[d.type], color, width, alpha, handles: pix });
+            ops.push({
+              kind: "xabcd", points: pix, dpoints: d.points, labels: PATTERN_LABELS[d.type], color, width, alpha, handles: pix,
+              classification: d.type === "xabcd_pattern" ? classifyXabcdPattern(d.points) : null,
+            });
           }
           break;
         case "triangle_pattern":
@@ -4105,9 +4152,7 @@
           // Per-leg retracement/extension ratio (curLeg / prevLeg, by price
           // distance) at each interior vertex's outgoing leg - the same
           // "how does this leg relate to the one before it" reading
-          // TradingView's XABCD/ABCD shows, without the full Gartley/Bat/
-          // Butterfly/Crab pattern-name auto-classification (separate,
-          // larger piece of work).
+          // TradingView's XABCD/ABCD shows.
           for (let i = 1; i < op.dpoints.length - 1; i++) {
             const prevLen = Math.abs(op.dpoints[i].price - op.dpoints[i - 1].price);
             const curLen = Math.abs(op.dpoints[i + 1].price - op.dpoints[i].price);
@@ -4116,6 +4161,16 @@
             const mx = (op.points[i].x + op.points[i + 1].x) / 2 * r;
             const my = (op.points[i].y + op.points[i + 1].y) / 2 * rv;
             this._text(ctx, pct, mx, my, op.color);
+          }
+          // XABCD-only: the Gartley/Bat/Butterfly/Crab name (see
+          // classifyXabcdPattern above), when this specific drawing's
+          // ratios fall inside one of the four canonical bands - offset
+          // further above D than its own "D" vertex label so the two
+          // don't overlap.
+          if (op.classification) {
+            const last = op.points[op.points.length - 1];
+            const label = `${op.classification.name} (${op.classification.bullish ? "бычий" : "медвежий"})`;
+            this._text(ctx, label, last.x * r + 6 * r, last.y * rv - 22 * rv, op.color);
           }
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
@@ -4224,6 +4279,7 @@
     INTERACTION_STATES,
     defaultProperties,
     TEXT_ANNOTATION_TYPES,
+    classifyXabcdPattern,
     positionStopPrice,
     positionTakePrice,
     FIB_RETRACEMENT_LEVELS,
