@@ -232,6 +232,29 @@
     // half-circles facing away from anchor0, not full rings - see
     // fibArcSamples() below.
     fib_arcs: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Дуги Фибоначчи" },
+    // Fibonacci family, part 2 (Fib Spiral/Pitchfan - genuinely new
+    // geometry, not a drop-in extension of anything already written - are
+    // left for a future session, see the parity matrix "Дальше"). Fib
+    // Channel: same 3-anchor placement as parallel_channel (anchor2's
+    // perpendicular price offset from the anchor0-anchor1 line), but draws
+    // one level line per FIB_RETRACEMENT_LEVELS fraction of that offset
+    // instead of just the two boundary lines - see fibChannelSegments()
+    // below.
+    fib_channel: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Канал Фибоначчи" },
+    // Fib Wedge: same 3-anchor placement as triangle/pitchfork - anchor0 is
+    // the wedge's shared vertex, anchor1/anchor2 its two diverging edges.
+    // Draws a narrowing series of connecting lines from the vertex outward
+    // at each FIB_RETRACEMENT_LEVELS fraction - see fibWedgeSegments()
+    // below.
+    fib_wedge: { pointsNeeded: 3, anchorCount: 3, creationGesture: "staged-tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Клин Фибоначчи" },
+    // Trend-Based Fib Time: identical Fibonacci-number math to
+    // fib_time_zone above, but zones project forward from anchor1 (the
+    // end of the trend leg) rather than anchor0 - TradingView's own
+    // distinction between the two tools ("Time Zone" counts from where you
+    // started, "Trend-Based Fib Time" counts from where the move ended).
+    // See trendBasedFibTimeMarks() below; reuses fib_time_zone's own
+    // render/hit-test op shape unchanged.
+    trend_based_fib_time: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Временные зоны по тренду" },
   };
 
   /** Unit direction each Arrow Mark glyph points in pane-pixel space -
@@ -542,6 +565,25 @@
     return marks;
   }
 
+  /** Trend-Based Fib Time's vertical-line marks: identical math to
+   * fibTimeZoneMarks() above, but zones project forward from anchor1 (the
+   * end of the trend leg) rather than anchor0 - see TOOL_DEFS.
+   * trend_based_fib_time's own comment for why. Shared by _hitDrawing and
+   * _buildOp; reuses fib_time_zone's own render/hit-test op shape
+   * unchanged. */
+  function trendBasedFibTimeMarks(core, d) {
+    if (!d.points[0] || !d.points[1]) return [];
+    const interval = d.points[1].time - d.points[0].time;
+    if (!interval) return [];
+    const w = paneWidth(core);
+    const marks = [];
+    for (const f of FIB_TIME_ZONE_SEQUENCE) {
+      const x = timeToCoordinateSafe(core, d.points[1].time + interval * f);
+      if (finite(x) && x >= 0 && x <= w) marks.push({ x, label: String(f) });
+    }
+    return marks;
+  }
+
   // Sine Line's amplitude as a fraction of the anchor0->anchor1 baseline's
   // own pixel length, so the wave scales with how far apart the two
   // anchors are placed rather than a fixed pixel constant that would look
@@ -775,6 +817,50 @@
     if (!span) return p0.price;
     const t = (time - p0.time) / span;
     return p0.price + (p1.price - p0.price) * t;
+  }
+
+  /** Fib Channel's level-line endpoints (pane-pixel space): same 3-anchor
+   * geometry parallel_channel already uses (anchor2's perpendicular price
+   * offset from the anchor0-anchor1 line via lerpPriceAtTime), but instead
+   * of just the two boundary lines, draws one segment per
+   * fibLevels()/FIB_RETRACEMENT_LEVELS fraction of that offset -
+   * anchor0-anchor1 itself is level 0, the parallel offset line is level
+   * 1, every other level lerps between them. Segments span only
+   * anchor0.time to anchor1.time (not extended to the pane edge),
+   * matching parallel_channel's own scope. Shared by _hitDrawing and
+   * _buildOp. [] if any anchor is off-screen. */
+  function fibChannelSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return [];
+    const offsetPrice = d.points[2].price - lerpPriceAtTime(d.points[0], d.points[1], d.points[2].time);
+    const segs = [];
+    for (const level of fibLevels(d, FIB_RETRACEMENT_LEVELS)) {
+      const q0 = { time: d.points[0].time, price: d.points[0].price + offsetPrice * level };
+      const q1 = { time: d.points[1].time, price: d.points[1].price + offsetPrice * level };
+      const [p0, p1] = toPixels(core, [q0, q1]);
+      if (p0?.x != null && p1?.x != null) segs.push({ x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y, label: `${(level * 100).toFixed(1)}%`, level });
+    }
+    return segs;
+  }
+
+  /** Fib Wedge's level-line endpoints (pane-pixel space): anchor0 is the
+   * wedge's shared vertex, anchor1/anchor2 its two diverging edges (same
+   * 3-anchor placement as triangle/pitchfork). For each fibLevels()/
+   * FIB_RETRACEMENT_LEVELS fraction L (L=0 skipped - it degenerates to a
+   * single point at the vertex, nothing to draw), connects the point at
+   * fraction L along anchor0->anchor1 to the point at fraction L along
+   * anchor0->anchor2 - a narrowing series of connecting lines from the
+   * vertex outward, the wedge's own Fibonacci silhouette. Shared by
+   * _hitDrawing and _buildOp. [] if any anchor is off-screen. */
+  function fibWedgeSegments(core, d, pix) {
+    if (!pix[0] || pix[0].x == null || !pix[1] || pix[1].x == null || !pix[2] || pix[2].x == null) return [];
+    const segs = [];
+    for (const level of fibLevels(d, FIB_RETRACEMENT_LEVELS)) {
+      if (!level) continue;
+      const ax = pix[0].x + (pix[1].x - pix[0].x) * level, ay = pix[0].y + (pix[1].y - pix[0].y) * level;
+      const bx = pix[0].x + (pix[2].x - pix[0].x) * level, by = pix[0].y + (pix[2].y - pix[0].y) * level;
+      segs.push({ x1: ax, y1: ay, x2: bx, y2: by, label: `${(level * 100).toFixed(1)}%`, level });
+    }
+    return segs;
   }
 
   function uid() {
@@ -1573,6 +1659,38 @@
             for (let i = 0; i < arc.points.length - 1; i++) {
               if (pointToSegmentDist(px, py, arc.points[i].x, arc.points[i].y, arc.points[i + 1].x, arc.points[i + 1].y) <= tol) return { id: d.id, handle: null };
             }
+          }
+          return null;
+        }
+        case "trend_based_fib_time": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const h = paneHeight(this.core);
+          for (const m of trendBasedFibTimeMarks(this.core, d)) {
+            if (Math.abs(px - m.x) <= tol && py >= 0 && py <= h) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_channel": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          for (const seg of fibChannelSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
+          }
+          return null;
+        }
+        case "fib_wedge": {
+          if (pix.length < 3 || pix[0].x == null || pix[1].x == null || pix[2].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          if (handleAt(2)) return { id: d.id, handle: 2 };
+          if (pointToSegmentDist(px, py, pix[0].x, pix[0].y, pix[1].x, pix[1].y) <= tol) return { id: d.id, handle: null };
+          if (pointToSegmentDist(px, py, pix[0].x, pix[0].y, pix[2].x, pix[2].y) <= tol) return { id: d.id, handle: null };
+          for (const seg of fibWedgeSegments(this.core, d, pix)) {
+            if (pointToSegmentDist(px, py, seg.x1, seg.y1, seg.x2, seg.y2) <= tol) return { id: d.id, handle: null };
           }
           return null;
         }
@@ -2641,6 +2759,28 @@
           if (arcs.length) ops.push({ kind: "fib_arcs", arcs, color, width, alpha, handles: [pix[0], pix[1]] });
           break;
         }
+        case "trend_based_fib_time": {
+          const marks = trendBasedFibTimeMarks(this.manager.core, d);
+          if (marks.length) ops.push({ kind: "fib_time_zone", marks, color, width, alpha, handles: [pix[0], pix[1]] });
+          break;
+        }
+        case "fib_channel": {
+          const segs = fibChannelSegments(this.manager.core, d, pix);
+          if (segs.length) ops.push({ kind: "fib_channel", segments: segs, color, width, alpha, handles: [pix[0], pix[1], pix[2]] });
+          break;
+        }
+        case "fib_wedge": {
+          const segs = fibWedgeSegments(this.manager.core, d, pix);
+          if (segs.length) {
+            ops.push({
+              kind: "fib_wedge",
+              edge1: { x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y },
+              edge2: { x1: pix[0].x, y1: pix[0].y, x2: pix[2].x, y2: pix[2].y },
+              segments: segs, color, width, alpha, handles: [pix[0], pix[1], pix[2]],
+            });
+          }
+          break;
+        }
         case "sine_line": {
           const samples = sineLineSamples(pix);
           if (samples) ops.push({ kind: "sine_line", samples, color, width, alpha, handles: [pix[0], pix[1]] });
@@ -3001,6 +3141,23 @@
             ctx.stroke();
             const mid = arc.points[Math.floor(arc.points.length / 2)];
             this._text(ctx, `${(arc.level * 100).toFixed(1)}%`, mid.x * r + 4 * r, mid.y * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        }
+        case "fib_channel":
+          op.segments.forEach((seg) => {
+            ctx.beginPath(); ctx.moveTo(seg.x1 * r, seg.y1 * rv); ctx.lineTo(seg.x2 * r, seg.y2 * rv); ctx.stroke();
+            this._text(ctx, seg.label, seg.x2 * r + 4 * r, seg.y2 * rv, op.color);
+          });
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
+          break;
+        case "fib_wedge": {
+          ctx.beginPath(); ctx.moveTo(op.edge1.x1 * r, op.edge1.y1 * rv); ctx.lineTo(op.edge1.x2 * r, op.edge1.y2 * rv); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(op.edge2.x1 * r, op.edge2.y1 * rv); ctx.lineTo(op.edge2.x2 * r, op.edge2.y2 * rv); ctx.stroke();
+          op.segments.forEach((seg) => {
+            ctx.beginPath(); ctx.moveTo(seg.x1 * r, seg.y1 * rv); ctx.lineTo(seg.x2 * r, seg.y2 * rv); ctx.stroke();
+            this._text(ctx, seg.label, seg.x2 * r + 4 * r, seg.y2 * rv, op.color);
           });
           op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;

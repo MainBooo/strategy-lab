@@ -258,6 +258,7 @@ const allTools = [
   "arrow_mark_left", "arrow_mark_right", "rotated_rectangle",
   "path", "curve", "arc", "double_curve",
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
+  "fib_channel", "fib_wedge", "trend_based_fib_time",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
@@ -567,6 +568,58 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
     const rEnd = Math.hypot(end.x - center.x, end.y - center.y);
     assert.ok(Math.abs(rStart - rEnd) < 1e-6, "fib_arcs: both ends should sit on the same radius from anchor1");
   }
+}
+
+// Fib Channel: level 0 must coincide with anchor0->anchor1 exactly, and
+// level 1's line must pass through anchor2 at anchor2's own time - not
+// just "some segments", the actual channel geometry parallel_channel's
+// own offset math promises.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_channel", [{ time: 40, price: 100 }, { time: 160, price: 180 }, { time: 100, price: 230 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.strictEqual(op.kind, "fib_channel", "fib_channel: unexpected render op kind");
+  assert.strictEqual(op.segments.length, 7, "fib_channel: expected one segment per FIB_RETRACEMENT_LEVELS entry");
+  const level0 = op.segments.find((s) => s.level === 0);
+  assert.deepStrictEqual({ x1: level0.x1, y1: level0.y1, x2: level0.x2, y2: level0.y2 }, { x1: 40, y1: 100, x2: 160, y2: 180 }, "fib_channel: level 0 should coincide with anchor0->anchor1");
+  const level1 = op.segments.find((s) => s.level === 1);
+  const frac = (100 - level1.x1) / (level1.x2 - level1.x1);
+  const priceAtAnchor2Time = level1.y1 + (level1.y2 - level1.y1) * frac;
+  assert.ok(Math.abs(priceAtAnchor2Time - 230) < 1e-9, "fib_channel: level 1 line should pass through anchor2");
+}
+
+// Fib Wedge: level 0 is skipped (degenerates to the vertex point), and
+// level 1's connecting segment must land exactly on anchor1/anchor2 - the
+// wedge closes to the full anchor1->anchor2 span at its outermost level.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("fib_wedge", [{ time: 40, price: 100 }, { time: 160, price: 180 }, { time: 100, price: 230 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.strictEqual(op.kind, "fib_wedge", "fib_wedge: unexpected render op kind");
+  assert.strictEqual(op.segments.length, 6, "fib_wedge: level 0 should be skipped (degenerates to the vertex point)");
+  const level1 = op.segments.find((s) => s.level === 1);
+  assert.deepStrictEqual({ x1: level1.x1, y1: level1.y1, x2: level1.x2, y2: level1.y2 }, { x1: 160, y1: 180, x2: 100, y2: 230 }, "fib_wedge: level 1 segment should connect anchor1 to anchor2 exactly");
+  assert.deepStrictEqual({ x1: op.edge1.x1, y1: op.edge1.y1, x2: op.edge1.x2, y2: op.edge1.y2 }, { x1: 40, y1: 100, x2: 160, y2: 180 }, "fib_wedge: edge1 should be anchor0->anchor1");
+  assert.deepStrictEqual({ x1: op.edge2.x1, y1: op.edge2.y1, x2: op.edge2.x2, y2: op.edge2.y2 }, { x1: 40, y1: 100, x2: 100, y2: 230 }, "fib_wedge: edge2 should be anchor0->anchor2");
+}
+
+// Trend-Based Fib Time: zones must project from anchor1 (the trend's end),
+// not anchor0 - the one thing distinguishing it from fib_time_zone, whose
+// render op kind it otherwise reuses unchanged.
+{
+  const env = makeManager();
+  const d = env.manager.addDrawing("trend_based_fib_time", [{ time: 40, price: 100 }, { time: 160, price: 180 }]);
+  const ops = renderOps(env);
+  const op = ops.find((o) => o.d && o.d.id === d.id);
+  assert.strictEqual(op.kind, "fib_time_zone", "trend_based_fib_time: should reuse fib_time_zone's render op kind");
+  const zone0 = op.marks.find((m) => m.label === "0");
+  assert.ok(zone0, "trend_based_fib_time: expected a zone-0 mark");
+  assert.strictEqual(zone0.x, 160, "trend_based_fib_time: zone 0 should sit at anchor1 (the trend's end), not anchor0");
+  const zone1 = op.marks.find((m) => m.label === "1");
+  assert.ok(zone1, "trend_based_fib_time: expected a zone-1 mark");
+  assert.strictEqual(zone1.x, 280, "trend_based_fib_time: zone 1 should be one interval past anchor1");
 }
 
 // Anchored VWAP: the one tool whose rendered body is a computed price

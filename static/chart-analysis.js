@@ -99,6 +99,9 @@
     { id: "fib_speed_resistance_fan", label: "Веер скорости Фибоначчи", icon: "F⋔" },
     { id: "fib_circles", label: "Круги Фибоначчи", icon: "F◎" },
     { id: "fib_arcs", label: "Дуги Фибоначчи", icon: "F◠" },
+    { id: "fib_channel", label: "Канал Фибоначчи", icon: "F═" },
+    { id: "fib_wedge", label: "Клин Фибоначчи", icon: "F◺" },
+    { id: "trend_based_fib_time", label: "Временные зоны по тренду", icon: "F|" },
   ];
 
   const LAYOUTS = [
