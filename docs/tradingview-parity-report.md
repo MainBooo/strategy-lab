@@ -166,6 +166,16 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
+- ~~**Zoom tool (area-zoom)**~~ — реализовано сессией 2026-08-19 (см.
+  matrix changelog): новый `zoom_area` tool, тот же ephemeral-паттерн, что
+  `measure` — драг рисует дашед-бокс-превью, на отпускании зумит временную
+  ось ровно на диапазон бокса без паджинга и переармирует тот же tool;
+  ценовая ось сознательно оставлена на текущем autoScale (не заводили
+  второе "закреплённое" состояние, конфликтующее с кнопкой
+  «Автомасштаб»). Верифицировано реальными `page.mouse`-событиями на
+  проде, не программными вызовами — единственный оставшийся крупный
+  MISSING-пункт линейки инструментов теперь Compare/add symbol (нужен
+  multi-symbol overlay backend, другой характер работы).
 - ~~**Multiselect (Ctrl/Cmd click), Grouping**~~ — реализовано сессией
   2026-08-19 (см. matrix changelog): `selectedId`→`selectedIds` (Set),
   `selectedId` остался compat-геттером/сеттером для каждого
