@@ -62,7 +62,7 @@ PARITY там, где нет хотя бы одного из этих подтв
 | Text, Anchored Text, Note, Price Note, Callout, Comment, Price Label, Signpost | | text, note есть; остальные аннотации отсутствуют как отдельные типы | да | PARTIAL | код |
 | Fibonacci Retracement | anchors/levels/labels/style/extend/custom levels | anchors/levels/labels/style + **custom levels/Reverse/Extend-left** (эта сессия, Properties panel) | да, high priority | **PARITY (испр. эта сессия)** | живой Playwright — reverse/extendLeft/add/remove/edit level все подтверждены на реальном drawing |
 | Fib Extension | | то же + custom levels/reverse (общий код с Retracement) | да | **PARITY (испр. эта сессия)** | код (общие хелперы с Retracement, отдельно не переигрывался вживую) |
-| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | отсутствуют | да | MISSING | — |
+| Fib Channel, Time Zone, Speed Resistance Fan/Arcs, Circles, Spiral, Wedge, Trend-Based Fib Time, Pitchfan | | 4 из 9 (эта сессия): `fib_time_zone` (вертикальные линии на anchor0.time+интервал×F для чисел Фибоначчи F, тот же принцип живого пересчёта, что у `cyclic_lines`), `fib_speed_resistance_fan` (лучи от anchor0 к фракционным *ценовым* точкам на времени anchor1 — классическое определение Speed Resistance, не Gann-подобные угловые коэффициенты; переиспользует render/hit-test `gann_fan`), `fib_circles` (концентрические кольца вокруг anchor0, радиусы — коэффициенты Фибоначчи от пиксельного расстояния anchor0→anchor1), `fib_arcs` (те же радиусы, но полукольца вокруг anchor1, направленные в сторону от anchor0). Fib Channel/Spiral/Wedge/Trend-Based Fib Time/Pitchfan остаются MISSING — Channel/Wedge проще (расширения parallel_channel/triangle), Spiral/Pitchfan сложнее (новая геометрия) | да | **PARTIAL (испр. эта сессия)** | живой Playwright на проде — все 4 типа нарисованы программно, верные render op kinds (`fib_time_zone`/`gann_fan`/`fib_circles`/`fib_arcs`), скриншот визуально подтвердил все 4 формы одновременно (подписанные вертикальные зоны 0/1/2/3, расходящийся веер, вложенные кольца, полукольца); hit-test подтверждён программно для всех четырёх (для fib_time_zone — изолированно, скрыв три другие плотно расположенные фигуры, чтобы исключить визуальное перекрытие в тестовых координатах); Object Tree — верные подписи; `drawings.length===0` после удаления+reload — не осталось мусора в БД прода |
 | Gann Fan/Square/Box | | Gann Fan `gann_fan` — классические 9 лучей (1×8..8×1), наклон в реальных барах (logical, не raw pixels) от базовой 1×1 линии; Square/Box отсутствуют | да | **PARTIAL (испр. эта сессия)** | живой Playwright — все 9 лучей отрисованы, подписаны, клипованы по границе pane, порядок наклона верный (1×8 самый пологий → 8×1 самый крутой) |
 | Patterns (XABCD, ABCD, Triangle Pattern, Three Drives, H&S, Elliott Wave, Cyclic/Time Cycles, Sine) | | 8 из 8 категорий ТЗ покрыты (10 конкретных tool-типов): XABCD `xabcd_pattern`/ABCD `abcd_pattern`/Three Drives `three_drives_pattern`/Elliott Impulse `elliott_impulse_wave`/Elliott Correction `elliott_correction_wave` — общий размеченный-зигзаг+%-отношение рендер; Triangle Pattern `triangle_pattern`/Head & Shoulders `head_shoulders_pattern` — зигзаг + boundary-луч(и) (2 сходящихся/расходящихся для треугольника, 1 neckline для Г&П); Cyclic Lines `cyclic_lines` — серия равноотстоящих по времени вертикальных линий через весь видимый pane (Time Cycles отдельно не реализован — тот же TradingView-концепт); Sine Line `sine_line` — одна синусоида между двумя анкорами, перпендикулярно базовой линии в pane-pixel space (амплитуда — эвристика, не сверялась пиксель-в-пиксель с живым TradingView). Ни один паттерн без авто-классификации по имени (Gartley/Bat/Butterfly/Crab для XABCD, волновые правила для Elliott) — отдельный, более крупный кусок работы | да | **PARTIAL (испр. эта сессия)** | живой Playwright — staged-постановка всех новых (drag+2×tap для Elliott Correction, drag+4×tap для Elliott Impulse, drag-release для Cyclic Lines/Sine Line), метки/%-отношения (Elliott), 16 равноотстоящих вертикальных линий подтверждены программно после pan (Cyclic Lines), 65-точечная синусоида подтверждена программно (Sine Line), hit-test/Object Tree подтверждены для всех четырёх новых типов; живьём найден и исправлен реальный краш (`cyclicLineTimes` читал `d.points[1].time` без guard на draft-preview с 1 точкой) |
 | Forecast, Bars Pattern, Ghost Feed | | отсутствуют | опционально после core engine | MISSING | — |
@@ -502,6 +502,71 @@ Rotated Rectangle/Arrow/Arrow Mark/Highlighter выше в этом же changel
   добавлены op-kind проверки для всех четырёх новых типов плюс отдельный
   regression-тест на откат Arc к прямому отрезку при коллинеарных
   анкорах (было бы `NaN`/крашем без guard на `circumcircle()`).
+
+### Продолжение 2026-08-19, часть 3 — Fibonacci family, часть 1 (Time Zone, Speed Resistance Fan, Circles, Arcs)
+
+Переключение на следующий крупный кандидат из плана части 12 после
+закрытия строки Path/Arc/Curve/DoubleCurve выше — Fibonacci-семья, где
+часть инструментов действительно переиспользует уже написанную Gann/
+Cyclic-инфраструктуру, как и предполагалось.
+
+- **Fib Time Zone** (`fib_time_zone`) — из MISSING в PARTIAL. anchor0→
+  anchor1's время задаёт базовый интервал; вертикальные линии рисуются на
+  `anchor0.time + интервал×F` для каждого числа Фибоначчи F (0,1,2,3,5,8,
+  13...) — новая `fibTimeZoneMarks()`, фиксированный (не per-frame
+  динамический, как у `cyclic_lines`) список из 25 членов ряда Фибоначчи
+  с лихвой покрывает любой реалистичный масштаб/расстояние между
+  анкорами без пересчёта количества членов на каждый кадр. Линии
+  подписаны самим числом зоны (как в реальном TradingView).
+- **Fib Speed Resistance Fan** (`fib_speed_resistance_fan`) — из MISSING
+  в PARTIAL. Та же 2-анкорная постановка, что у `gann_fan`, но лучи идут
+  от anchor0 к фракционным *ценовым* точкам на времени anchor1 (доли
+  Фибоначчи от ценового диапазона anchor0→anchor1) — новая
+  `fibFanSegments()`, классическое определение Speed Resistance Fan
+  (веерные линии к дробным уровням отката диапазона), а не Gann-подобные
+  угловые коэффициенты 1×8..8×1 от 45°-базовой линии. Полностью
+  переиспользует render/hit-test `gann_fan`-опа (`{segments, label,
+  major}`) без изменений — оба инструмента структурно идентичны, кроме
+  того, как считаются сегменты.
+- **Fib Circles** (`fib_circles`) — из MISSING в PARTIAL. Концентрические
+  кольца вокруг anchor0, радиусы — коэффициенты Фибоначчи (0.236..1.618,
+  включая расширения за 100%, а не только 0-100% как у retracement) от
+  пиксельного расстояния anchor0→anchor1 — новая `fibCircles()`.
+  Рендерится через `ctx.ellipse()` с независимым x/y масштабом (как уже
+  делает инструмент `circle`), не `ctx.arc()` — на случай разных
+  horizontal/vertical pixel ratio холста. Hit-test — «кольцевая полоса»
+  (`|dist-radius| <= tol`), не заливка внутренности.
+- **Fib Arcs** (`fib_arcs`) — из MISSING в PARTIAL. Те же радиусы, что у
+  Fib Circles, но центр — anchor1 (конец движения, отдельное от Fib
+  Circles соглашение TradingView), и рисуется только половина окружности,
+  обращённая в сторону от anchor0 — новая `fibArcSamples()`, делит
+  переиспользуемый `circleArcSamples()` с полным кольцом Circles (тот же
+  сэмплер, разный диапазон углов). Hit-test — расстояние до сэмплированной
+  полилинии (как у Curve/Arc/Sine Line), не кольцевая полоса, поскольку
+  полукольцо — не замкнутая кривая.
+- Все четыре не потребовали нового кода в Properties panel/Object Tree/
+  undo-redo/автосохранении/whole-object drag. Кнопки: `chart-analysis.js`
+  TOOL_BUTTONS (+4 записи) и существующая группа «Фибоначчи» в
+  `chart-editor-terminal-mobile-v2.js` (была 2 пункта, стала 6).
+  **Верифицировано** вживую на проде (тот же QA-аккаунт): все 4 типа
+  созданы программно с ценами внутри видимого диапазона; верные render
+  op kinds для каждого (`fib_speed_resistance_fan` подтверждённо реально
+  делит `kind:"gann_fan"`, не отдельный); скриншот визуально подтвердил
+  все 4 формы одновременно, включая подписанные зоны «0 1 2 3» и явно
+  различимые вложенные кольца vs полукольца; hit-test подтверждён
+  программно для всех четырёх — для `fib_time_zone` пришлось отдельно
+  скрыть остальные 3 плотно расположенные тестовые фигуры и повторить
+  hit-test изолированно (у первой попытки пробная точка совпала с
+  визуальным перекрытием соседних фигур в тесных тестовых координатах,
+  не с багом самого hit-test — после изоляции совпадение подтвердилось);
+  Object Tree — верные подписи; тестовые drawings удалены, reload с
+  прода подтвердил `drawings.length === 0`. 198 pytest + JS runtime
+  suite зелёные — allTools +4 имени (generic persistentTools/pointsFor/
+  boundaryPointsFor уже покрывали anchorCount 2 без изменений), плюс
+  отдельные проверки: op kind для всех четырёх, строго возрастающие
+  радиусы колец Fib Circles (не просто «какие-то кольца»), и что каждая
+  дуга Fib Arcs — реально разомкнутая половина (оба конца на одном
+  радиусе от anchor1, но не совпадают друг с другом).
 
 ## Известные пробелы этой сессии (честно, не проверялось)
 
