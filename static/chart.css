@@ -554,6 +554,10 @@ body.ca-resizing { cursor: grabbing; user-select: none; }
   background: none; cursor: pointer;
 }
 .ca-ft-sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+/* Multi-object selection pill (DrawingManager._renderMultiFloatToolbar) -
+ * "N объектов" label in place of the single-object color/width/style
+ * controls, which don't make sense across a heterogeneous selection. */
+.ca-ft-count { padding: 0 6px; font-size: 11px; color: var(--text-dim, #9ca8bd); white-space: nowrap; }
 .ca-ft-select {
   height: 26px; padding: 0 3px; font-size: 11px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel-2); color: var(--text);

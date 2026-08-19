@@ -1479,4 +1479,189 @@ for (const tool of ["polyline", "fib_retracement", "fib_extension", "text", "not
   assert.strictEqual(a.manager.interactionState, INTERACTION_STATES.SELECTED);
 }
 
+// Multiselect (ТЗ "Multiselect (Ctrl/Cmd click), Grouping объектов"):
+// select(id, {additive}) toggles a whole-set membership in/out instead of
+// replacing it, and selectedId (the pre-multiselect single-selection
+// compatibility accessor - see the DrawingManager constructor's own
+// comment) keeps reading "the" id correctly whenever exactly one is
+// selected, null when none are.
+{
+  const env = makeManager();
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  const d2 = env.manager.addDrawing("trend_line", [{ time: 100, price: 100 }, { time: 150, price: 150 }]);
+  env.manager.select(d1.id);
+  assert.deepStrictEqual([...env.manager.selectedIds], [d1.id]);
+  assert.strictEqual(env.manager.selectedId, d1.id);
+
+  env.manager.select(d2.id, { additive: true });
+  assert.deepStrictEqual([...env.manager.selectedIds].sort(), [d1.id, d2.id].sort(), "additive select should add, not replace");
+
+  env.manager.select(d1.id, { additive: true });
+  assert.deepStrictEqual([...env.manager.selectedIds], [d2.id], "additive select on an already-selected id should toggle it off");
+
+  env.manager.select(d1.id);
+  assert.deepStrictEqual([...env.manager.selectedIds], [d1.id], "a non-additive select should replace the whole selection");
+
+  env.manager.select(null);
+  assert.strictEqual(env.manager.selectedIds.size, 0);
+  assert.strictEqual(env.manager.selectedId, null);
+}
+
+// Ctrl/Cmd-click through the real pointer pipeline (not calling select()
+// directly) also adds to the selection instead of replacing it.
+{
+  const env = makeManager();
+  const d1 = env.manager.addDrawing("horizontal_line", [{ time: 0, price: 40 }]);
+  const d2 = env.manager.addDrawing("horizontal_line", [{ time: 0, price: 80 }]);
+  env.manager.select(d1.id);
+  env.container.dispatch("pointerdown", { clientX: 5, clientY: 80, timeStamp: 2000, pointerType: "mouse", pointerId: 1, ctrlKey: true });
+  send(windowTarget, "pointerup", 5, 80, 2040, "mouse", 1);
+  assert.deepStrictEqual([...env.manager.selectedIds].sort(), [d1.id, d2.id].sort(), "ctrl-click should add the clicked drawing to the existing selection");
+}
+
+// Grouping: groupSelection()/ungroupSelection(), and clicking any one
+// member of a group selects the whole group (_selectionUnit) - the same
+// TradingView behavior a plain click and an additive click both route
+// through.
+{
+  const env = makeManager();
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  const d2 = env.manager.addDrawing("trend_line", [{ time: 100, price: 100 }, { time: 150, price: 150 }]);
+  const d3 = env.manager.addDrawing("trend_line", [{ time: 200, price: 200 }, { time: 250, price: 250 }]);
+
+  env.manager.select(d3.id);
+  env.manager.groupSelection();
+  assert.strictEqual(d3.properties.groupId, undefined, "groupSelection with fewer than 2 selected must be a no-op");
+
+  env.manager.select(null);
+  env.manager.select(d1.id, { additive: true });
+  env.manager.select(d2.id, { additive: true });
+  env.manager.groupSelection();
+  assert.ok(d1.properties.groupId, "groupSelection should assign a groupId to every selected drawing");
+  assert.strictEqual(d1.properties.groupId, d2.properties.groupId, "grouped drawings should share one groupId");
+  assert.ok(!d3.properties.groupId, "an ungrouped drawing outside the selection must not get a groupId");
+
+  env.manager.select(d1.id);
+  assert.deepStrictEqual([...env.manager.selectedIds].sort(), [d1.id, d2.id].sort(), "a plain click on one grouped member should select the whole group");
+
+  env.manager.select(d2.id, { additive: true });
+  assert.strictEqual(env.manager.selectedIds.size, 0, "additive-clicking a grouped member should toggle the whole group off together");
+
+  env.manager.select(d1.id);
+  env.manager.ungroupSelection();
+  assert.ok(!d1.properties.groupId && !d2.properties.groupId, "ungroupSelection should clear groupId on every selected member");
+  env.manager.select(d1.id);
+  assert.deepStrictEqual([...env.manager.selectedIds], [d1.id], "an ungrouped drawing's click no longer pulls in its former group-mate");
+}
+
+// duplicateSelection(): copies every selected drawing, selects the new
+// copies, and a duplicated group becomes its own new group rather than
+// merging into the original (properties, groupId included, are copied
+// verbatim by duplicateDrawing() - a naive loop would leave both the
+// originals and the copies sharing one groupId).
+{
+  const env = makeManager();
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  const d2 = env.manager.addDrawing("trend_line", [{ time: 100, price: 100 }, { time: 150, price: 150 }]);
+  // addDrawing() auto-selects each new drawing as it's created (single-
+  // select, replacing) - reset to no selection before building a fresh
+  // multi-selection with additive calls, same as every other block here.
+  env.manager.select(null);
+  env.manager.select(d1.id, { additive: true });
+  env.manager.select(d2.id, { additive: true });
+  env.manager.groupSelection();
+  const gidBefore = d1.properties.groupId;
+  const countBefore = env.manager.drawings.length;
+
+  const copies = env.manager.duplicateSelection();
+  assert.strictEqual(copies.length, 2, "duplicateSelection should copy every selected drawing");
+  assert.strictEqual(env.manager.drawings.length, countBefore + 2);
+  // Array.from(), not copies.map() - copies is an array built inside the vm
+  // sandbox (drawings.js runs there), so .map() on it returns another
+  // vm-realm array via ArraySpeciesCreate; deepStrictEqual treats that as
+  // unequal to an outer-realm array of the same content (different
+  // Array.prototype). Array.from(copies, ...), called on the outer
+  // identifier, always builds an outer-realm array regardless of the
+  // input's realm.
+  assert.deepStrictEqual([...env.manager.selectedIds].sort(), Array.from(copies, (c) => c.id).sort(), "duplicateSelection should select the new copies");
+  const copyGid = copies[0].properties.groupId;
+  assert.ok(copyGid, "duplicated group members should still be grouped");
+  assert.notStrictEqual(copyGid, gidBefore, "a duplicated group must become its own new group");
+  assert.strictEqual(copies[1].properties.groupId, copyGid, "both copies should share the new group id");
+  assert.strictEqual(d1.properties.groupId, gidBefore, "the original group must be untouched by duplication");
+  assert.strictEqual(d2.properties.groupId, gidBefore);
+}
+
+// Multi-object whole-drag moves every selected drawing together by the
+// same delta; handle-drag (resize) stays single-object, and hitTest
+// exposes no resize handles at all while more than one thing is selected
+// (a multi-selection is whole-object-drag-only).
+{
+  const env = makeManager();
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  const d2 = env.manager.addDrawing("trend_line", [{ time: 100, price: 100 }, { time: 150, price: 150 }]);
+  env.manager.select(null);
+  env.manager.select(d1.id, { additive: true });
+  env.manager.select(d2.id, { additive: true });
+
+  const handleHit = env.manager.hitTest(10, 10, { pointerType: "mouse" });
+  assert.ok(handleHit && handleHit.id === d1.id && handleHit.handle == null, "no drawing should expose a resize handle while multiple are selected");
+
+  const updates = [];
+  env.manager.onChange((mgr, detail) => { if (detail.updated && detail.pointerDrag) updates.push(detail.updated); });
+  const before1 = JSON.parse(JSON.stringify(d1.points));
+  const before2 = JSON.parse(JSON.stringify(d2.points));
+  const body = findBodyPoint(env, d1, "mouse");
+  drag(env, body.x, body.y, body.x + 20, body.y + 15, 3000, "mouse");
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(d1.points)),
+    before1.map((p) => ({ time: p.time + 20, price: p.price + 15 })),
+    "the dragged drawing itself should move by the drag delta",
+  );
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(d2.points)),
+    before2.map((p) => ({ time: p.time + 20, price: p.price + 15 })),
+    "every other selected drawing should move by the exact same delta",
+  );
+  assert.strictEqual(updates.length, 1, "group drag should persist once on pointerup, not per drawing");
+  // Array.from(), not .slice() - same cross-realm reason as duplicateSelection's
+  // assertion above: updates[0] (detail.updated) is `[...groupOrigPoints.keys()]`
+  // built inside the vm sandbox, so .slice() on it stays vm-realm.
+  assert.deepStrictEqual(Array.from(updates[0]).sort(), [d1.id, d2.id].sort(), "the persisted update should carry every moved drawing's id");
+}
+
+// Multi-delete/multi-duplicate/group/ungroup via keyboard (Delete,
+// Ctrl+D, Ctrl+G, Ctrl+Shift+G) all operate on the whole selection, not
+// just one drawing.
+{
+  const env = makeManager();
+  env.manager._pointerInside = true;
+  const d1 = env.manager.addDrawing("trend_line", [{ time: 10, price: 10 }, { time: 50, price: 50 }]);
+  const d2 = env.manager.addDrawing("trend_line", [{ time: 100, price: 100 }, { time: 150, price: 150 }]);
+  env.manager.select(null);
+  env.manager.select(d1.id, { additive: true });
+  env.manager.select(d2.id, { additive: true });
+
+  env.container.dispatch("keydown", { key: "g", ctrlKey: true });
+  assert.strictEqual(d1.properties.groupId, d2.properties.groupId, "Ctrl+G should group the selection");
+  assert.ok(d1.properties.groupId);
+
+  env.container.dispatch("keydown", { key: "d", ctrlKey: true });
+  assert.strictEqual(env.manager.drawings.length, 4, "Ctrl+D should duplicate the whole selection");
+  assert.strictEqual(env.manager.selectedIds.size, 2, "Ctrl+D should select the new copies");
+  const copyIds = [...env.manager.selectedIds];
+  assert.notStrictEqual(copyIds[0], d1.id);
+  assert.notStrictEqual(copyIds[1], d2.id);
+
+  env.container.dispatch("keydown", { key: "G", ctrlKey: true, shiftKey: true });
+  for (const id of copyIds) {
+    const d = env.manager.drawings.find((x) => x.id === id);
+    assert.ok(!d.properties.groupId, "Ctrl+Shift+G should ungroup every selected drawing");
+  }
+
+  env.container.dispatch("keydown", { key: "Delete" });
+  assert.strictEqual(env.manager.drawings.length, 2, "Delete should remove every selected drawing, not just one");
+  assert.strictEqual(env.manager.selectedIds.size, 0);
+}
+
 console.log("chart drawing runtime tests: PASS");

@@ -1470,6 +1470,7 @@
     _renderProps() {
       const panel = this.root.querySelector("#caProps");
       const dm = this.drawingMgr;
+      if (dm && dm.selectedIds.size > 1) { this._renderMultiProps(panel, dm); return; }
       const d = dm ? dm.drawings.find((x) => x.id === dm.selectedId) : null;
       if (!d) { panel.innerHTML = `<div class="muted-note">Выберите объект на графике, чтобы изменить его свойства.</div>`; return; }
       const isPosition = d.type === "long_position" || d.type === "short_position";
@@ -1605,6 +1606,31 @@
       panel.querySelector("#propDelete").onclick = () => dm.removeDrawing(d.id);
     },
 
+    /** Properties panel for a multi-object selection (ТЗ "Multiselect
+     * (Ctrl/Cmd click), Grouping объектов") - per-type property editing
+     * (color/width/fib levels/...) doesn't generalize across a
+     * heterogeneous selection, so this shows just the count plus the same
+     * bulk actions the multi-select floating toolbar offers (duplicate/
+     * group/ungroup/delete), reachable here too for anyone working from
+     * the side panel instead of the pill on the chart. */
+    _renderMultiProps(panel, dm) {
+      const ids = [...dm.selectedIds];
+      const selected = ids.map((id) => dm.drawings.find((x) => x.id === id)).filter(Boolean);
+      const groupIds = new Set(selected.map((d) => d.properties.groupId).filter(Boolean));
+      const wholeGroupId = groupIds.size === 1 ? [...groupIds][0] : null;
+      const isWholeGroup = !!wholeGroupId && dm.drawings.filter((d) => d.properties.groupId === wholeGroupId).length === selected.length;
+      panel.innerHTML = `
+        <h4>Выбрано объектов: ${selected.length}</h4>
+        <div class="muted-note">Действия ниже применяются ко всем выбранным объектам.</div>
+        <button class="secondary" id="propMultiDuplicate">Дублировать (Ctrl+D)</button>
+        <button class="secondary" id="propMultiGroup">${isWholeGroup ? "Разгруппировать (Ctrl+Shift+G)" : "Группировать (Ctrl+G)"}</button>
+        <button class="secondary" id="propMultiDelete">Удалить</button>
+      `;
+      panel.querySelector("#propMultiDuplicate").onclick = () => dm.duplicateSelection();
+      panel.querySelector("#propMultiGroup").onclick = () => { if (isWholeGroup) dm.ungroupSelection(); else dm.groupSelection(); };
+      panel.querySelector("#propMultiDelete").onclick = () => { for (const id of [...dm.selectedIds]) dm.removeDrawing(id); };
+    },
+
     _renderObjects() {
       const panel = this.root.querySelector("#caObjects");
       const dm = this.drawingMgr;
@@ -1612,7 +1638,7 @@
       this.root.querySelector('.ca-side-tab[data-side="objects"]').textContent = `Объекты (${drawings.length})`;
       panel.innerHTML = drawings.length
         ? drawings.map((d) => `
-            <div class="ca-object-row ${d.id === dm.selectedId ? "active" : ""}" data-obj="${d.id}">
+            <div class="ca-object-row ${dm.selectedIds.has(d.id) ? "active" : ""}" data-obj="${d.id}">
               <span>${d.properties.label ? escapeAttr(d.properties.label) : CE.Drawings.TOOL_DEFS[d.type].label}</span>
               <span class="ca-object-actions">
                 <button data-toggle-hidden="${d.id}" title="Показать/скрыть">${d.hidden ? "🙈" : "👁"}</button>
@@ -1622,7 +1648,7 @@
               </span>
             </div>`).join("")
         : `<div class="muted-note">Пока нет объектов разметки.</div>`;
-      panel.querySelectorAll("[data-obj]").forEach((row) => (row.onclick = (e) => { if (!e.target.closest("button")) dm.select(row.dataset.obj); }));
+      panel.querySelectorAll("[data-obj]").forEach((row) => (row.onclick = (e) => { if (!e.target.closest("button")) dm.select(row.dataset.obj, { additive: e.ctrlKey || e.metaKey }); }));
       panel.querySelectorAll("[data-toggle-hidden]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const d = dm.drawings.find((x) => x.id === b.dataset.toggleHidden); dm.updateDrawing(d.id, { hidden: !d.hidden }); }));
       panel.querySelectorAll("[data-toggle-locked]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const d = dm.drawings.find((x) => x.id === b.dataset.toggleLocked); dm.updateDrawing(d.id, { locked: !d.locked }); }));
       panel.querySelectorAll("[data-rename]").forEach((b) => (b.onclick = (e) => {

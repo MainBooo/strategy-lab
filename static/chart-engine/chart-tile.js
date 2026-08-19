@@ -75,6 +75,7 @@
     more: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
     trash: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>',
     edittext: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2 2 0 000-2.8l-1.2-1.2a2 2 0 00-2.8 0L4 15.5V20z"/><path d="M12.5 6.5l3 3"/></svg>',
+    group: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="11" height="11" rx="2"/><rect x="10" y="10" width="11" height="11" rx="2"/></svg>',
   };
   // Same conversion as chart-analysis.js's toHex() (Properties panel's own
   // color input) - duplicated rather than shared because that file is a
@@ -415,6 +416,7 @@
     _renderFloatToolbar(el) {
       if (!el) return;
       const dm = this.drawingMgr;
+      if (dm && dm.selectedIds.size > 1) { this._renderMultiFloatToolbar(el, dm); return; }
       const d = dm && dm.drawings.find((x) => x.id === dm.selectedId);
       if (!d) { el.classList.add("hidden"); el.innerHTML = ""; return; }
       el.classList.remove("hidden");
@@ -472,6 +474,35 @@
       el.querySelector('[data-act="dup"]').onclick = () => dm.duplicateDrawing(d.id);
       el.querySelector('[data-act="trash"]').onclick = () => dm.removeDrawing(d.id);
       el.querySelector('[data-act="more"]').onclick = () => { if (this._onFloatToolbarMore) this._onFloatToolbarMore(this); };
+      this._positionFloatToolbar(el);
+    }
+
+    /** Floating toolbar for a multi-object selection (ТЗ "Multiselect
+     * (Ctrl/Cmd click), Grouping объектов"): a reduced pill - per-object
+     * color/width/style editing doesn't make sense across heterogeneous
+     * drawings - with just the actions that apply to the whole selection
+     * at once. The group button reads as Group when the selection isn't
+     * already a single complete group, Ungroup when it already is (so
+     * re-selecting a grouped set and clicking it toggles cleanly instead
+     * of needing two different buttons). */
+    _renderMultiFloatToolbar(el, dm) {
+      el.classList.remove("hidden");
+      const selected = [...dm.selectedIds].map((id) => dm.drawings.find((x) => x.id === id)).filter(Boolean);
+      const groupIds = new Set(selected.map((d) => d.properties.groupId).filter(Boolean));
+      const wholeGroupId = groupIds.size === 1 ? [...groupIds][0] : null;
+      const isWholeGroup = !!wholeGroupId && dm.drawings.filter((d) => d.properties.groupId === wholeGroupId).length === selected.length;
+      el.innerHTML = `
+        <span class="ca-ft-count">${selected.length} объектов</span>
+        <span class="ca-ft-sep"></span>
+        <button type="button" class="ca-ft-btn" data-act="dup" title="Дублировать (Ctrl+D)" aria-label="Дублировать">${FT_ICONS.duplicate}</button>
+        <button type="button" class="ca-ft-btn ${isWholeGroup ? "active" : ""}" data-act="group" title="${isWholeGroup ? "Разгруппировать (Ctrl+Shift+G)" : "Группировать (Ctrl+G)"}" aria-label="Группировать">${FT_ICONS.group}</button>
+        <span class="ca-ft-sep"></span>
+        <button type="button" class="ca-ft-btn ca-ft-danger" data-act="trash" title="Удалить" aria-label="Удалить">${FT_ICONS.trash}</button>
+      `;
+      el.onpointerdown = (e) => e.stopPropagation();
+      el.querySelector('[data-act="dup"]').onclick = () => dm.duplicateSelection();
+      el.querySelector('[data-act="group"]').onclick = () => { if (isWholeGroup) dm.ungroupSelection(); else dm.groupSelection(); };
+      el.querySelector('[data-act="trash"]').onclick = () => { for (const id of [...dm.selectedIds]) dm.removeDrawing(id); };
       this._positionFloatToolbar(el);
     }
 
@@ -806,6 +837,10 @@
         return;
       }
       const id = detail.created || detail.updated;
+      // A multi-object operation (group drag, group/ungroup, duplicate
+      // selection - see DrawingManager) carries an array of ids instead of
+      // one, since every member's own row needs its own save.
+      if (Array.isArray(id)) { id.forEach((x) => this._queueSave(x)); return; }
       if (id) this._queueSave(id);
     }
 

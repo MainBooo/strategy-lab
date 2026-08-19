@@ -386,7 +386,11 @@ def test_drag_preview_has_no_per_move_persistence_or_history_work():
     finish_start = js.index("    _finishEditPointer(session) {")
     finish = js[finish_start:js.index("    _onPointerUp(e)", finish_start)]
     assert "this._pushHistory(before)" in finish
-    assert 'this._emit({ updated: id, pointerDrag: true })' in finish
+    # `updated` is `id` for a single-object drag, or every group member's
+    # id for a multi-object group drag (ТЗ "Multiselect (Ctrl/Cmd click),
+    # Grouping объектов") - each needs its own persistence save.
+    assert 'this._emit({ updated, pointerDrag: true })' in finish
+    assert "groupOrigPoints" in finish
 
 
 def test_runtime_suite_covers_boundary_matrix_and_multi_tile_isolation():

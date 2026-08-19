@@ -1364,7 +1364,17 @@
       this.chart = chartCore.chart;
       this.series = chartCore.candleSeries;
       this.drawings = [];
-      this.selectedId = null;
+      // Multiselect (ТЗ "Multiselect (Ctrl/Cmd click), Grouping объектов"):
+      // selectedIds is the real state now, insertion-ordered. selectedId
+      // below is a compatibility accessor - every pre-multiselect call site
+      // (addDrawing/removeDrawing/undo/redo/loadDrawings/hitTest/
+      // selectionAnchor and both chart-analysis.js/chart-tile.js) keeps
+      // reading/assigning `this.selectedId`/`dm.selectedId` exactly as
+      // before and gets single-selection behavior unchanged; only the new
+      // multiselect-aware call sites (select()'s additive option, the
+      // group-drag branch in _applyDrag, the *Selection() methods below)
+      // touch selectedIds directly.
+      this.selectedIds = new Set();
       this.hoverId = null;
       this.activeTool = null;
       this.draft = null;
@@ -1408,6 +1418,17 @@
       this.series.attachPrimitive(this.primitive);
       this._bindDom();
       this.onChange(() => this.primitive.requestUpdate());
+    }
+
+    /** Compatibility accessor - see the constructor's comment on
+     * selectedIds. Reads the first (oldest-added) id in the set, which for
+     * every single-selection call site is simply "the selected id" since
+     * the set only ever holds one member there. */
+    get selectedId() {
+      return this.selectedIds.size ? this.selectedIds.values().next().value : null;
+    }
+    set selectedId(id) {
+      this.selectedIds = new Set(id ? [id] : []);
     }
 
     // ---- tool lifecycle ----
@@ -1479,7 +1500,10 @@
       const before = this._snapshot();
       const removedDrawing = this.drawings.find((d) => d.id === id);
       this.drawings = this.drawings.filter((d) => d.id !== id);
-      if (this.selectedId === id) this.selectedId = null;
+      // .delete(), not the old "if it was THE selection, clear it" check -
+      // with multiselect this id may be one of several selected, and the
+      // others must stay selected.
+      this.selectedIds.delete(id);
       this._syncInteractionMode();
       this._pushHistory(before);
       // The removed drawing's _backendId travels in the event because it's
@@ -1498,10 +1522,113 @@
       return copy;
     }
 
-    select(id) {
-      this.selectedId = id || null;
+    /** What clicking `id` should actually select: just itself if
+     * ungrouped, or every drawing sharing its properties.groupId if
+     * grouped - TradingView's own behavior (clicking any one member of a
+     * group selects the whole group). Shared by select() below and
+     * duplicateSelection()'s remap logic doesn't need this - it works from
+     * the already-resolved selectedIds instead. */
+    _selectionUnit(id) {
+      const d = this.drawings.find((x) => x.id === id);
+      const gid = d && d.properties && d.properties.groupId;
+      if (!gid) return [id];
+      return this.drawings.filter((x) => x.properties && x.properties.groupId === gid).map((x) => x.id);
+    }
+
+    /** additive (Ctrl/Cmd-click, see _onPointerDown) toggles this id's
+     * selection unit in/out of the existing selection instead of replacing
+     * it; a non-additive click always replaces. A grouped id's "unit" is
+     * every member of its group (_selectionUnit above), so both the toggle
+     * and the replace operate on the whole group at once, never a lone
+     * member. */
+    select(id, { additive = false } = {}) {
+      if (!id) {
+        this.selectedIds = new Set();
+      } else {
+        const unit = this._selectionUnit(id);
+        if (additive) {
+          const next = new Set(this.selectedIds);
+          const allPresent = unit.every((uid_) => next.has(uid_));
+          unit.forEach((uid_) => (allPresent ? next.delete(uid_) : next.add(uid_)));
+          this.selectedIds = next;
+        } else {
+          this.selectedIds = new Set(unit);
+        }
+      }
       if (!this.activeTool && !this._pointerSession) this._syncInteractionMode();
       this._emit();
+    }
+
+    /** Duplicates every currently selected drawing (Ctrl/Cmd+D with
+     * multiselect - see _onKeyDown) and selects the new copies, mirroring
+     * TradingView's own "duplicate selection" result. A duplicated group
+     * becomes its own new group (remapped to a fresh id per distinct
+     * source groupId) rather than merging into the original group - a
+     * plain per-id duplicateDrawing() loop would silently do the latter,
+     * since properties (groupId included) are copied verbatim. */
+    duplicateSelection() {
+      const ids = [...this.selectedIds];
+      if (!ids.length) return [];
+      const groupRemap = new Map();
+      const copies = [];
+      for (const id of ids) {
+        const src = this.drawings.find((x) => x.id === id);
+        if (!src) continue;
+        const copy = this.duplicateDrawing(id);
+        if (!copy) continue;
+        const gid = src.properties && src.properties.groupId;
+        if (gid) {
+          if (!groupRemap.has(gid)) groupRemap.set(gid, uid());
+          copy.properties = Object.assign({}, copy.properties, { groupId: groupRemap.get(gid) });
+        }
+        copies.push(copy);
+      }
+      this.selectedIds = new Set(copies.map((c) => c.id));
+      this._emit({ updated: copies.map((c) => c.id) });
+      return copies;
+    }
+
+    /** Assigns a fresh groupId (stored in properties, same opaque JSON blob
+     * every other per-drawing style already persists through - no backend
+     * schema change needed) to every currently selected drawing, so a
+     * later click on any one of them selects them all (_selectionUnit
+     * above) and a whole-object drag on any one moves them all together
+     * (_applyDrag's group-drag branch). No-op under 2 selected - grouping
+     * a single object isn't meaningful. One history entry for the whole
+     * operation, not one per drawing. */
+    groupSelection() {
+      const ids = [...this.selectedIds];
+      if (ids.length < 2) return;
+      const before = this._snapshot();
+      const gid = uid();
+      for (const id of ids) {
+        const d = this.drawings.find((x) => x.id === id);
+        if (d) d.properties = Object.assign({}, d.properties, { groupId: gid });
+      }
+      this._pushHistory(before);
+      this._emit({ updated: ids });
+    }
+
+    /** Clears groupId from every currently selected drawing that has one -
+     * a selection spanning several different groups (or a mix of grouped
+     * and ungrouped) ungroups all of them at once, not just the "primary"
+     * one. No history entry (and no re-render trigger) if nothing in the
+     * selection was actually grouped. */
+    ungroupSelection() {
+      const ids = [...this.selectedIds];
+      if (!ids.length) return;
+      const before = this._snapshot();
+      let changed = false;
+      for (const id of ids) {
+        const d = this.drawings.find((x) => x.id === id);
+        if (d && d.properties && d.properties.groupId) {
+          const props = Object.assign({}, d.properties);
+          delete props.groupId;
+          d.properties = props;
+          changed = true;
+        }
+      }
+      if (changed) { this._pushHistory(before); this._emit({ updated: ids }); }
     }
 
     undo() {
@@ -1575,15 +1702,20 @@
       // TradingView semantics: resize/edit handles belong only to the selected
       // object. An unselected object is first grabbed as a whole, even if the
       // initial finger-down happens exactly over one of its hidden anchors.
-      if (this.selectedId) {
-        const sel = sorted.find((d) => d.id === this.selectedId);
+      // With multiselect, that only applies while exactly one object is
+      // selected - a multi-object selection is whole-object-drag-only (see
+      // _applyDrag's group-drag branch), so no member exposes resize
+      // handles then, same as if nothing were selected.
+      const singleSelected = this.selectedIds.size === 1 ? this.selectedId : null;
+      if (singleSelected) {
+        const sel = sorted.find((d) => d.id === singleSelected);
         if (sel) {
           const hit = this._hitDrawing(sel, px, py, Object.assign({ allowHandles: true }, hitOptions));
           if (hit) return hit;
         }
       }
       for (const d of sorted) {
-        if (d.id === this.selectedId) continue;
+        if (d.id === singleSelected) continue;
         const hit = this._hitDrawing(d, px, py, Object.assign({ allowHandles: false }, hitOptions));
         if (hit) return hit;
       }
@@ -2022,7 +2154,8 @@
     }
 
     /** Screen-pixel anchor for the floating toolbar (ТЗ "Floating toolbar
-     * при выборе"): the topmost model point of the selected drawing,
+     * при выборе"): the topmost model point across every selected drawing
+     * (a single selection is just the n=1 case of the same reduction),
      * converted the same way the pane view converts every drawing's points
      * for painting (toPixels). Good enough for every tool type without
      * needing per-type bounding-box math - lines/rectangles/ranges/channels
@@ -2032,15 +2165,31 @@
      * price respectively) - falls back to pane-center-x / near-top-y so the
      * toolbar still lands somewhere sane instead of null. */
     selectionAnchor() {
-      const d = this.drawings.find((x) => x.id === this.selectedId);
-      if (!d) return null;
-      const pix = toPixels(this.core, d.points);
-      const both = pix.filter((p) => p && p.x != null && p.y != null);
-      if (both.length) return both.reduce((top, p) => (p.y < top.y ? p : top));
-      const withY = pix.find((p) => p && p.y != null);
-      if (withY) return { x: paneWidth(this.core) / 2, y: withY.y };
-      const withX = pix.find((p) => p && p.x != null);
-      if (withX) return { x: withX.x, y: 40 };
+      const ids = [...this.selectedIds];
+      if (!ids.length) return null;
+      let top = null;
+      for (const id of ids) {
+        const d = this.drawings.find((x) => x.id === id);
+        if (!d) continue;
+        const both = toPixels(this.core, d.points).filter((p) => p && p.x != null && p.y != null);
+        if (!both.length) continue;
+        const candidate = both.reduce((t, p) => (p.y < t.y ? p : t));
+        if (!top || candidate.y < top.y) top = candidate;
+      }
+      if (top) return top;
+      // Every selected drawing's points are all one-axis-only
+      // (horizontal_line/vertical_line) - same graceful degradation the
+      // single-selection path always used, just against the first one that
+      // has anything at all to fall back on.
+      for (const id of ids) {
+        const d = this.drawings.find((x) => x.id === id);
+        if (!d) continue;
+        const pix = toPixels(this.core, d.points);
+        const withY = pix.find((p) => p && p.y != null);
+        if (withY) return { x: paneWidth(this.core) / 2, y: withY.y };
+        const withX = pix.find((p) => p && p.x != null);
+        if (withX) return { x: withX.x, y: 40 };
+      }
       return null;
     }
 
@@ -2319,7 +2468,18 @@
       const hit = this.hitTest(pos.x, pos.y, { pointerType: e.pointerType || "mouse" });
       if (hit) {
         const d = this.drawings.find((item) => item.id === hit.id);
-        this.select(hit.id);
+        // Ctrl/Cmd-click toggles this object (or its whole group - see
+        // _selectionUnit) in/out of the existing selection instead of
+        // replacing it (ТЗ "Multiselect (Ctrl/Cmd click)"). A plain
+        // (non-additive) mousedown on an object that's already part of the
+        // current multi-selection must NOT collapse it down to just that
+        // one - that's the gesture that starts a whole-group drag (see the
+        // isGroupDrag check in _onPointerMove), and replacing the
+        // selection here would zero out selectedIds.size before the drag
+        // even begins, silently degrading it to a single-object drag.
+        const additive = !!(e.ctrlKey || e.metaKey);
+        const preserveMultiSelection = !additive && this.selectedIds.size > 1 && this.selectedIds.has(hit.id);
+        if (!preserveMultiSelection) this.select(hit.id, { additive });
         this._claimPointer(e, {
           kind: d && !d.locked ? "edit" : "select",
           hit,
@@ -2394,6 +2554,14 @@
           if (!this._dragState) {
             const d = this.drawings.find((item) => item.id === session.hit.id);
             if (!d) return;
+            // Whole-object drag (no handle) on a member of a multi-object
+            // selection moves every selected drawing together, not just
+            // the one under the pointer - captures each member's own
+            // pre-drag points here so _applyDrag can translate all of them
+            // by the same delta. Handle-drag (resize) is always
+            // single-object - hitTest never exposes handles while more
+            // than one thing is selected (see its own comment).
+            const isGroupDrag = session.hit.handle == null && this.selectedIds.size > 1 && this.selectedIds.has(session.hit.id);
             this._dragState = {
               id: session.hit.id,
               handle: session.hit.handle,
@@ -2403,6 +2571,10 @@
               origPoints: JSON.parse(JSON.stringify(session.drawingBefore.points)),
               origProps: JSON.parse(JSON.stringify(session.drawingBefore.properties)),
               beforeSnapshot: session.historyBefore,
+              groupOrigPoints: isGroupDrag ? new Map([...this.selectedIds].map((sid) => {
+                const sd = this.drawings.find((x) => x.id === sid);
+                return [sid, sd ? JSON.parse(JSON.stringify(sd.points)) : null];
+              })) : null,
             };
             this._setInteractionState(session.hit.handle == null
               ? INTERACTION_STATES.DRAG_OBJECT
@@ -2468,11 +2640,16 @@
 
     _finishEditPointer(session) {
       if (!this._dragState) return;
-      const id = this._dragState.id;
+      const { id, groupOrigPoints } = this._dragState;
       const before = this._dragState.beforeSnapshot;
+      // A group drag moved every member's points, not just id's - every
+      // one of them needs its own persistence save (chart-tile.js's
+      // _onDrawingsChanged), so `updated` carries the whole list instead
+      // of the single id every other drag still uses.
+      const updated = groupOrigPoints && groupOrigPoints.size > 1 ? [...groupOrigPoints.keys()] : id;
       this._dragState = null;
       if (before != null) this._pushHistory(before);
-      this._emit({ updated: id, pointerDrag: true });
+      this._emit({ updated, pointerDrag: true });
     }
 
     _onPointerUp(e) {
@@ -2595,7 +2772,7 @@
     }
 
     _applyDrag(x, y) {
-      const { id, handle, origPoints, origProps, startCoordinate } = this._dragState || {};
+      const { id, handle, origPoints, origProps, startCoordinate, groupOrigPoints } = this._dragState || {};
       if (!id) return;
       const d = this.drawings.find((dd) => dd.id === id);
       if (!d) return;
@@ -2638,6 +2815,20 @@
         const editAxis = TOOL_DEFS[d.type] && TOOL_DEFS[d.type].editAxis;
         const pts = this._translatePoints(origPoints, deltaLogical, deltaPrice, editAxis);
         if (pts) d.points = pts;
+        // Multi-object whole-drag: every other selected drawing (not the
+        // one already handled above) rides the same delta, each through
+        // its own editAxis so e.g. a grouped horizontal_line stays
+        // horizontal even while a trend_line member moves freely.
+        if (groupOrigPoints) {
+          for (const [gid, gPoints] of groupOrigPoints) {
+            if (gid === id || !gPoints) continue;
+            const gd = this.drawings.find((x) => x.id === gid);
+            if (!gd) continue;
+            const gEditAxis = TOOL_DEFS[gd.type] && TOOL_DEFS[gd.type].editAxis;
+            const gpts = this._translatePoints(gPoints, deltaLogical, deltaPrice, gEditAxis);
+            if (gpts) gd.points = gpts;
+          }
+        }
       }
       // Preview-only notification. Persistence receives one {updated:id} on
       // pointerup, never one network save trigger per pointermove. UI panels
@@ -2681,12 +2872,20 @@
         e.preventDefault(); this._finishDraft(); return;
       }
       if (e.key === "Escape") { e.preventDefault(); this.handleEscape(); return; }
-      if ((e.key === "Delete" || e.key === "Backspace") && this.selectedId) {
-        e.preventDefault(); this.removeDrawing(this.selectedId); return;
+      if ((e.key === "Delete" || e.key === "Backspace") && this.selectedIds.size) {
+        e.preventDefault();
+        // Loop over removeDrawing(), not a batch method - one undo-stack
+        // entry per drawing (an N-object delete takes N undos to fully
+        // revert) rather than rewriting removeDrawing's own well-tested
+        // single-id snapshot/backend-delete contract for the multi case.
+        for (const id of [...this.selectedIds]) this.removeDrawing(id);
+        return;
       }
       if (meta && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
       if (meta && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { e.preventDefault(); this.redo(); return; }
-      if (meta && e.key.toLowerCase() === "d" && this.selectedId) { e.preventDefault(); this.duplicateDrawing(this.selectedId); }
+      if (meta && e.key.toLowerCase() === "g" && e.shiftKey && this.selectedIds.size) { e.preventDefault(); this.ungroupSelection(); return; }
+      if (meta && e.key.toLowerCase() === "g" && this.selectedIds.size > 1) { e.preventDefault(); this.groupSelection(); return; }
+      if (meta && e.key.toLowerCase() === "d" && this.selectedIds.size) { e.preventDefault(); this.duplicateSelection(); }
     }
 
     destroy() {
@@ -2762,7 +2961,7 @@
       const ops = [];
       for (const d of m.drawings) {
         if (d.hidden) continue;
-        this._buildOp(d, ops, d.id === m.selectedId, d.id === m.hoverId);
+        this._buildOp(d, ops, m.selectedIds.has(d.id), d.id === m.hoverId);
       }
       if (m.draft && m.draft.points.length) {
         const preview = m._draftPreviewPoint ? m.pixelToPoint(m._draftPreviewPoint.x, m._draftPreviewPoint.y) : null;
@@ -3050,7 +3249,14 @@
       for (let i = startLen; i < ops.length; i++) {
         ops[i].dash = dash;
         ops[i].d = ops[i].d || d;
-        ops[i].showHandles = !!(selected || isDraft);
+        // Every selected drawing gets the highlight outline (selected
+        // width/color above already applies to all of them too), but
+        // resize/edit handles are drawn only while exactly one thing is
+        // selected - matches hitTest's own "handles belong only to a lone
+        // selection" rule (a multi-object selection is whole-object-drag-
+        // only), so a drawn handle is never one the pointer can't actually
+        // grab.
+        ops[i].showHandles = !!(isDraft || (selected && this.manager.selectedIds.size === 1));
         if (selected) ops[i].selected = true;
         if (hovered) ops[i].hovered = true;
       }
