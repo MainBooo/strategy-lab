@@ -74,6 +74,7 @@
     { id: "price_label", label: "Ценовая метка", icon: "▮T" },
     { id: "signpost", label: "Сигнальный флаг", icon: "🚩" },
     { id: "measure", label: "Измерение (временное, потяните — исчезает при отпускании)", icon: "📏" },
+    { id: "zoom_area", label: "Увеличение области (потяните, чтобы масштабировать)", icon: "🔍" },
     { id: "price_range", label: "Диапазон цены", icon: "↕" },
     { id: "time_range", label: "Диапазон времени", icon: "↔" },
     { id: "long_position", label: "Long позиция", icon: "↑" },

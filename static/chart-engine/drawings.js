@@ -308,6 +308,19 @@
     // anchor1 sets the starting radius/angle. See fibSpiralSamples()
     // below.
     fib_spiral: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Спираль Фибоначчи" },
+    // TradingView's "Zoom In" (magnifier) tool: drag a box over the chart,
+    // release to zoom the time axis to exactly that box's time span - same
+    // ephemeral pattern as `measure` above (see `def.ephemeral` in
+    // _finishDraft): never becomes a persistent drawing, re-arms itself so
+    // repeated drags keep zooming. Only the time axis is set explicitly
+    // (see _applyAreaZoom below - exact fit, no margin, unlike
+    // core.setVisibleRange's 15% padding); the price axis is left on
+    // whatever autoScale state it already had, so it fits the candles that
+    // land in the new time window the same way panning/zooming already
+    // does - deliberately not introducing a second "locked price range"
+    // state that would need its own reset path alongside the existing
+    // "Автомасштаб" toggle/scaleAuto action (chart-analysis.js).
+    zoom_area: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", ephemeral: true, label: "Увеличение области" },
   };
 
   // Every 1-anchor tool whose whole point is user-entered text - shares
@@ -2888,11 +2901,13 @@
       // so the next drag can measure again without reselecting it.
       if (def.ephemeral) {
         const type = this.draft.type;
+        const points = this.draft.points;
+        if (type === "zoom_area") this._applyAreaZoom(points);
         this.draft = null;
         this._draftPreviewPoint = null;
         this.activeTool = type;
         this._syncInteractionMode();
-        this._emit({ measured: true });
+        this._emit(type === "zoom_area" ? { zoomed: true } : { measured: true });
         return null;
       }
 
@@ -2916,6 +2931,25 @@
       this._lastDrawingTap = null;
       this._syncInteractionMode();
       return drawing;
+    }
+
+    /** Zoom-tool release: set the visible time range to exactly [t1,t2]
+     * from the dragged box's two anchors (order-independent), no padding -
+     * see the zoom_area TOOL_DEFS entry above for why the price axis is
+     * left alone. Silently no-ops on a degenerate box (tap without drag,
+     * or both anchors landing on the same bar) rather than asking
+     * lightweight-charts to zoom to a zero-width range. */
+    _applyAreaZoom(points) {
+      if (!points || points.length < 2) return;
+      const t1 = points[0].time, t2 = points[1].time;
+      if (!finite(t1) || !finite(t2) || t1 === t2) return;
+      const from = Math.min(t1, t2), to = Math.max(t1, t2);
+      try {
+        this.core.chart.timeScale().setVisibleRange({ from, to });
+      } catch (_) {
+        // lightweight-charts throws if the range falls entirely outside
+        // the loaded data - not user-visible, just skip the zoom.
+      }
     }
 
     _translatePoints(origPoints, deltaLogical, deltaPrice, editAxis) {
@@ -3281,6 +3315,13 @@
         // anchor; skip the op rather than draw a zero-size box.
         case "measure":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "measure_tool", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha });
+          break;
+        // Ephemeral zoom-box preview (TOOL_DEFS.zoom_area) - same
+        // draft-only lifecycle as "measure" above, just a plain dashed
+        // rectangle with no price/date labels (it's a navigation gesture,
+        // not a measurement).
+        case "zoom_area":
+          if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "zoom_area", x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, alpha });
           break;
         case "price_date_range":
           if (pix[0]?.x != null && pix[1]?.x != null) ops.push({ kind: "price_date_range", d, x1: pix[0].x, y1: pix[0].y, x2: pix[1].x, y2: pix[1].y, color, width, alpha, handles: [pix[0], pix[1]] });
@@ -3895,6 +3936,25 @@
           const midX = (x1 + x2) / 2 - 44 * r, midY = (y1 + y2) / 2;
           this._text(ctx, priceLabel, midX, midY - 8 * rv, col);
           this._text(ctx, timeLabel, midX, midY + 10 * rv, col);
+          break;
+        }
+        // Ephemeral zoom-box preview (TOOL_DEFS.zoom_area, see
+        // _applyAreaZoom above) - a plain dashed rectangle, no
+        // price/date labels: this is a navigation gesture (drag to pick
+        // the next time range), not a measurement, so it stays visually
+        // distinct from "measure_tool" above despite the similar shape.
+        case "zoom_area": {
+          const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
+          const y1 = Math.min(op.y1, op.y2) * rv, y2 = Math.max(op.y1, op.y2) * rv;
+          ctx.save();
+          ctx.setLineDash([5 * r, 4 * r]);
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.12;
+          ctx.fillStyle = op.color;
+          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.globalAlpha = op.alpha ?? 1;
+          ctx.strokeStyle = op.color;
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.restore();
           break;
         }
         case "text":

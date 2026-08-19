@@ -80,9 +80,11 @@ const { DrawingManager, TOOL_DEFS, INTERACTION_STATES, TEXT_ANNOTATION_TYPES } =
 function makeManager() {
   const container = new FakeTarget();
   const navigationOptions = [];
+  const visibleRangeCalls = [];
   const timeScale = {
     coordinateToTime: (x) => x,
     timeToCoordinate: (time) => time,
+    setVisibleRange: (range) => visibleRangeCalls.push(range),
   };
   const chart = {
     timeScale: () => timeScale,
@@ -96,7 +98,7 @@ function makeManager() {
   };
   const core = { container, chart, candleSeries: series, candles: [] };
   const manager = new DrawingManager(core);
-  return { manager, container, chart, navigationOptions };
+  return { manager, container, chart, navigationOptions, visibleRangeCalls };
 }
 
 // This fake deliberately reproduces the Lightweight Charts boundary failure
@@ -260,21 +262,21 @@ const allTools = [
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
   "fib_channel", "fib_wedge", "trend_based_fib_time", "fib_pitchfan", "fib_spiral",
   "volume_profile", "trend_angle", "regression_trend", "flat_top_bottom", "disjoint_channel",
-  "anchored_text", "price_note", "callout", "comment", "price_label", "signpost",
+  "anchored_text", "price_note", "callout", "comment", "price_label", "signpost", "zoom_area",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
-// "measure" is the one ephemeral tool - it never becomes a real entry in
-// env.manager.drawings (see its own dedicated test below), so every loop
-// below that does env.manager.addDrawing(tool, ...) to exercise persisted-
-// object editing/hit-testing/boundary behavior must skip it. "anchored_vwap"
-// "volume_profile" and "regression_trend" are skipped for a different
-// reason: all three are computed from core.candles (empty in makeManager's
-// identity-conversion fake environment) rather than fixed geometry, so
-// they have no hittable "body" distinct from their handles the way every
-// other tool's fixed geometry does - findBodyPoint() would spin forever
-// looking for one. All three get their own dedicated test with real candle
-// data below instead.
-const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap" && tool !== "volume_profile" && tool !== "regression_trend");
+// "measure" and "zoom_area" are the two ephemeral tools - neither ever
+// becomes a real entry in env.manager.drawings (see their own dedicated
+// tests below), so every loop below that does env.manager.addDrawing(tool,
+// ...) to exercise persisted-object editing/hit-testing/boundary behavior
+// must skip both. "anchored_vwap" "volume_profile" and "regression_trend"
+// are skipped for a different reason: all three are computed from
+// core.candles (empty in makeManager's identity-conversion fake
+// environment) rather than fixed geometry, so they have no hittable "body"
+// distinct from their handles the way every other tool's fixed geometry
+// does - findBodyPoint() would spin forever looking for one. All three get
+// their own dedicated test with real candle data below instead.
+const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "zoom_area" && tool !== "anchored_vwap" && tool !== "volume_profile" && tool !== "regression_trend");
 for (const tool of allTools) {
   assert.ok(TOOL_DEFS[tool].creationGesture, `${tool} missing creationGesture`);
   assert.ok(TOOL_DEFS[tool].completion, `${tool} missing completion`);
@@ -283,6 +285,7 @@ for (const tool of allTools) {
 assert.strictEqual(TOOL_DEFS.circle.semanticShape, "ellipse");
 assert.strictEqual(TOOL_DEFS.circle.label, "Эллипс");
 assert.strictEqual(TOOL_DEFS.measure.ephemeral, true);
+assert.strictEqual(TOOL_DEFS.zoom_area.ephemeral, true);
 
 // Fixed two-point tools: first touch-drag-release is a complete object.
 for (const pointerType of ["touch", "mouse", "pen"]) {
@@ -1053,6 +1056,52 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   drag(env, 200, 60, 260, 200, 2000);
   assert.strictEqual(env.manager.drawings.length, 0, "measure: second drag must also stay ephemeral");
   assert.strictEqual(env.manager.activeTool, "measure");
+}
+
+// Zoom tool (area-zoom): TradingView-style ephemeral "magnifier" -
+// TOOL_DEFS.zoom_area. Same ephemeral lifecycle as measure above (no
+// persistent drawing, re-arms itself), but release must additionally call
+// chart.timeScale().setVisibleRange() with the exact (unpadded) time span
+// of the dragged box - the fake timeScale's coordinateToTime is identity,
+// so drag x-coordinates equal the resulting times one-to-one.
+{
+  const env = makeManager();
+  env.manager.setTool("zoom_area");
+  assert.strictEqual(env.manager.interactionState, INTERACTION_STATES.TOOL_ARMED);
+
+  const down = send(env.container, "pointerdown", 40, 40, 1000);
+  assert.ok(down.defaultPrevented, "zoom_area: drawing did not own pointerdown");
+  send(windowTarget, "pointermove", 140, 120, 1040);
+  const liveOp = renderOps(env).find((op) => op.kind === "zoom_area");
+  assert.ok(liveOp, "zoom_area: no live preview box while dragging");
+  assert.strictEqual(env.manager.drawings.length, 0, "zoom_area: must not persist mid-drag");
+  assert.strictEqual(env.visibleRangeCalls.length, 0, "zoom_area: must not zoom before release");
+
+  send(windowTarget, "pointerup", 140, 120, 1080);
+  assert.strictEqual(env.manager.drawings.length, 0, "zoom_area: drag-release must not create a drawing");
+  assert.strictEqual(env.manager.draft, null, "zoom_area: stale draft after release");
+  assert.strictEqual(env.manager.activeTool, "zoom_area", "zoom_area: tool must re-arm itself for the next zoom");
+  assert.strictEqual(renderOps(env).some((op) => op.kind === "zoom_area"), false, "zoom_area: overlay must disappear on release");
+  assert.strictEqual(env.visibleRangeCalls.length, 1, "zoom_area: must call setVisibleRange exactly once on release");
+  // The {from,to} object is built inside the vm sandbox running
+  // drawings.js, a different JS realm than this test file's own object
+  // literals - deepStrictEqual would fail on prototype identity alone even
+  // with matching content (see [[feedback-...]] cross-realm lesson from a
+  // prior session), so compare the two fields directly instead.
+  assert.strictEqual(env.visibleRangeCalls[0].from, 40, "zoom_area: must zoom to exactly the dragged box's start time, no padding");
+  assert.strictEqual(env.visibleRangeCalls[0].to, 140, "zoom_area: must zoom to exactly the dragged box's end time, no padding");
+
+  // Reversed drag (right-to-left) still normalizes from < to.
+  drag(env, 260, 200, 200, 60, 2000);
+  assert.strictEqual(env.visibleRangeCalls[1].from, 200, "zoom_area: reversed drag must still normalize from<to (from)");
+  assert.strictEqual(env.visibleRangeCalls[1].to, 260, "zoom_area: reversed drag must still normalize from<to (to)");
+  assert.strictEqual(env.manager.activeTool, "zoom_area", "zoom_area: second drag must also stay ephemeral");
+
+  // Degenerate box (both anchors land on the same time, e.g. a drag that
+  // never actually moved) must not call setVisibleRange with a zero-width
+  // range at all.
+  drag(env, 400, 40, 400, 40, 3000);
+  assert.strictEqual(env.visibleRangeCalls.length, 2, "zoom_area: degenerate zero-span box must not trigger a zoom");
 }
 
 // Tool A -> Tool B cancels an unfinished draft rather than inheriting anchors.
