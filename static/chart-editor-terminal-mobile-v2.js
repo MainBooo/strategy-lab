@@ -44,7 +44,7 @@
     ["gann","Ганн и вилы",icon("gann"),[["pitchfork","Вилы Эндрюса"],["pitchfork_schiff","Вилы Шиффа"],["pitchfork_modified_schiff","Модиф. вилы Шиффа"],["gann_fan","Веер Ганна"]]],
     ["pattern","Паттерны",icon("pattern"),[["xabcd_pattern","Паттерн XABCD"],["abcd_pattern","Паттерн ABCD"],["triangle_pattern","Паттерн треугольник"],["three_drives_pattern","Три драйва"],["head_shoulders_pattern","Голова и плечи"],["elliott_impulse_wave","Волна Эллиотта (импульс)"],["elliott_correction_wave","Волна Эллиотта (коррекция)"]]],
     ["cycles","Циклы",icon("cycles"),[["cyclic_lines","Циклические линии"],["sine_line","Синусоида"]]],
-    ["vwap","VWAP",icon("vwap"),[["anchored_vwap","Привязанный VWAP"]]],
+    ["vwap","VWAP / Профиль",icon("vwap"),[["anchored_vwap","Привязанный VWAP"],["volume_profile","Профиль объёма (диапазон)"]]],
     ["shape","Фигуры",icon("shape"),[["rectangle","Прямоугольник"],["rotated_rectangle","Повёрнутый прямоугольник"],["circle","Эллипс"],["triangle","Треугольник"]]],
     ["arrow","Стрелки",icon("arrow"),[["arrow","Стрелка"],["arrow_mark_up","Стрелка вверх"],["arrow_mark_down","Стрелка вниз"],["arrow_mark_left","Стрелка влево"],["arrow_mark_right","Стрелка вправо"]]],
     ["curves","Кривые",icon("curve"),[["path","Путь"],["curve","Кривая"],["arc","Дуга"],["double_curve","Двойная кривая"]]],

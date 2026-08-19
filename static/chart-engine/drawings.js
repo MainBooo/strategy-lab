@@ -135,9 +135,18 @@
     // core.candles every frame exactly like cyclic_lines recomputes from
     // the live visible range - so it stays live as new candles/ticks
     // arrive with no separate update wiring of its own. Volume Profile
-    // (the other half of this ТЗ line item) is a full histogram sidebar,
-    // a much larger separate piece of work, and isn't implemented.
+    // (the other half of this ТЗ line item) is implemented separately
+    // below as volume_profile - see its own comment there.
     anchored_vwap: { pointsNeeded: 1, anchorCount: 1, creationGesture: "tap", dragStagePoints: 0, completion: "anchor-count", preview: "none", label: "Привязанный VWAP" },
+    // Fixed Range Volume Profile - 2 anchors define a *time* range (their
+    // own price component is ignored, same simplification real TradingView
+    // makes: the profile's price axis always spans the full high/low of
+    // whatever candles fall inside that time window, not whatever price the
+    // user happened to click at). Computed histogram, not fixed geometry -
+    // see volumeProfileBuckets() below - so like anchored_vwap it needs
+    // real core.candles data and gets its own dedicated test rather than
+    // running through the generic identity-conversion fixture loops.
+    volume_profile: { pointsNeeded: 2, anchorCount: 2, creationGesture: "tap-or-drag", dragStagePoints: 2, completion: "anchor-count", preview: "next-anchor", label: "Профиль объёма (диапазон)" },
     // TradingView's real "Measure" (Alt+drag, or its own rail tool): a
     // temporary ruler overlay showing the same price-delta/%/bars/duration
     // math as price_date_range, but which never becomes a persistent drawing
@@ -849,6 +858,85 @@
    * can currently resolve) dropped rather than breaking the polyline. */
   function anchoredVwapPixels(core, d) {
     return toPixels(core, anchoredVwapSeries(core, d)).filter((p) => p.x != null && p.y != null);
+  }
+
+  // Fixed Range Volume Profile's row count - TradingView's own default for
+  // this tool. A fixed count (not a fixed price-height) means the
+  // histogram always has the same visual density regardless of how wide a
+  // price range the selected time window happens to span.
+  const VOLUME_PROFILE_ROWS = 24;
+
+  /** Fixed Range Volume Profile's bucketed volume-by-price histogram: rows
+   * are equal price-height buckets spanning the full high/low range of
+   * every candle whose time falls within [anchor0.time, anchor1.time]
+   * (order-independent - which anchor was placed first doesn't matter).
+   * Each candle's volume is split across every bucket its own [low,high]
+   * range overlaps, weighted by the fraction of that candle's range inside
+   * the bucket - a real bar is rarely a single price, so naively dumping
+   * its whole volume onto whichever row contains its close would bunch
+   * volume unrealistically; TradingView's own algorithm spreads it across
+   * the bar's actual range the same way. A zero-range candle (high===low)
+   * goes entirely to the single bucket containing that price. Recomputed
+   * live from core.candles every call - never cached - same "always
+   * current, no separate update wiring" principle anchoredVwapSeries/
+   * cyclic_lines already use. Returns buckets=[] if the time range
+   * contains no candles. */
+  function volumeProfileBuckets(core, d) {
+    const candles = core.candles || [];
+    if (!candles.length) return { buckets: [], maxVolume: 0 };
+    const t0 = Math.min(d.points[0].time, d.points[1].time);
+    const t1 = Math.max(d.points[0].time, d.points[1].time);
+    const inRange = candles.filter((c) => c.time >= t0 && c.time <= t1);
+    if (!inRange.length) return { buckets: [], maxVolume: 0 };
+    let lo = Infinity, hi = -Infinity;
+    for (const c of inRange) {
+      if (c.low < lo) lo = c.low;
+      if (c.high > hi) hi = c.high;
+    }
+    if (!(hi > lo)) hi = lo + Math.max(Math.abs(lo) * 0.001, 0.01); // degenerate flat range - avoid a divide-by-zero
+    const step = (hi - lo) / VOLUME_PROFILE_ROWS;
+    const volumes = new Array(VOLUME_PROFILE_ROWS).fill(0);
+    for (const c of inRange) {
+      const vol = c.volume || 0;
+      if (!vol) continue;
+      if (c.high <= c.low) {
+        const idx = Math.min(VOLUME_PROFILE_ROWS - 1, Math.max(0, Math.floor((c.low - lo) / step)));
+        volumes[idx] += vol;
+        continue;
+      }
+      const range = c.high - c.low;
+      for (let i = 0; i < VOLUME_PROFILE_ROWS; i++) {
+        const bLo = lo + i * step, bHi = bLo + step;
+        const overlap = Math.min(c.high, bHi) - Math.max(c.low, bLo);
+        if (overlap > 0) volumes[i] += vol * (overlap / range);
+      }
+    }
+    let maxVolume = 0;
+    const buckets = volumes.map((volume, i) => {
+      if (volume > maxVolume) maxVolume = volume;
+      return { price0: lo + i * step, price1: lo + (i + 1) * step, volume };
+    });
+    return { buckets, maxVolume };
+  }
+
+  /** Volume Profile's buckets projected to pane-pixel space (y only - the
+   * bars themselves are drawn relative to the drawing's own x1/x2 handles,
+   * not a price coordinate). isPoc marks the Point of Control - the single
+   * highest-volume row, TradingView's own name for it, conventionally
+   * drawn distinct from the rest of the histogram. null if there's nothing
+   * to draw (no candles in range, or every bucket landed off-screen). */
+  function volumeProfilePixels(core, d) {
+    const { buckets, maxVolume } = volumeProfileBuckets(core, d);
+    if (!buckets.length || !maxVolume) return null;
+    const pix = buckets
+      .map((b) => ({
+        y0: priceToCoordinateSafe(core, b.price0),
+        y1: priceToCoordinateSafe(core, b.price1),
+        volume: b.volume,
+        isPoc: b.volume === maxVolume,
+      }))
+      .filter((b) => b.y0 != null && b.y1 != null);
+    return pix.length ? { buckets: pix, maxVolume } : null;
   }
 
   /** A drawing's own properties.levels (edited via the Properties panel)
@@ -1814,6 +1902,20 @@
             if (pointToSegmentDist(px, py, vwapPix[i].x, vwapPix[i].y, vwapPix[i + 1].x, vwapPix[i + 1].y) <= tol) return { id: d.id, handle: null };
           }
           return null;
+        }
+        case "volume_profile": {
+          if (pix.length < 2 || pix[0].x == null || pix[1].x == null) return null;
+          if (handleAt(0)) return { id: d.id, handle: 0 };
+          if (handleAt(1)) return { id: d.id, handle: 1 };
+          const profile = volumeProfilePixels(this.core, d);
+          if (!profile) return null;
+          const x1 = Math.min(pix[0].x, pix[1].x), x2 = Math.max(pix[0].x, pix[1].x);
+          let yTop = Infinity, yBottom = -Infinity;
+          for (const b of profile.buckets) {
+            yTop = Math.min(yTop, b.y0, b.y1);
+            yBottom = Math.max(yBottom, b.y0, b.y1);
+          }
+          return px >= x1 - tol && px <= x2 + tol && py >= yTop - tol && py <= yBottom + tol ? { id: d.id, handle: null } : null;
         }
         case "text":
         case "note": {
@@ -2904,6 +3006,24 @@
           }
           break;
         }
+        case "volume_profile": {
+          if (pix[0]?.x == null || pix[1]?.x == null) break;
+          const profile = volumeProfilePixels(this.manager.core, d);
+          if (profile) {
+            let yTop = Infinity, yBottom = -Infinity;
+            for (const b of profile.buckets) {
+              yTop = Math.min(yTop, b.y0, b.y1);
+              yBottom = Math.max(yBottom, b.y0, b.y1);
+            }
+            ops.push({
+              kind: "volume_profile", d,
+              x1: pix[0].x, x2: pix[1].x, yTop, yBottom,
+              buckets: profile.buckets, maxVolume: profile.maxVolume,
+              color, alpha, handles: [pix[0], pix[1]],
+            });
+          }
+          break;
+        }
         case "xabcd_pattern":
         case "abcd_pattern":
         case "three_drives_pattern":
@@ -3292,6 +3412,44 @@
           op.points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x * r, p.y * rv); else ctx.lineTo(p.x * r, p.y * rv); });
           ctx.stroke();
           if (op.handle) drawHandle(ctx, op.handle.x * r, op.handle.y * rv, r);
+          break;
+        }
+        // Bars grow rightward from the box's own left edge (x1), each row's
+        // width a fraction of MAX_BAR_FRACTION of the box width scaled by
+        // that row's volume relative to the Point of Control (the
+        // highest-volume row, TradingView's own name for it) - the POC row
+        // is drawn at full opacity with its own border, every other row at
+        // a dimmer fill, and the dashed outline marks the profile's own
+        // time-range/price-range box.
+        case "volume_profile": {
+          const x1 = Math.min(op.x1, op.x2) * r, x2 = Math.max(op.x1, op.x2) * r;
+          const yTop = op.yTop * rv, yBottom = op.yBottom * rv;
+          const boxWidth = x2 - x1;
+          const MAX_BAR_FRACTION = 0.9;
+          const maxBarWidth = boxWidth * MAX_BAR_FRACTION;
+          ctx.save();
+          ctx.setLineDash([5 * r, 4 * r]);
+          ctx.globalAlpha = (op.alpha ?? 1) * 0.35;
+          ctx.strokeStyle = op.color;
+          ctx.strokeRect(x1, yTop, boxWidth, yBottom - yTop);
+          ctx.setLineDash([]);
+          for (const b of op.buckets) {
+            const by0 = Math.min(b.y0, b.y1) * rv, by1 = Math.max(b.y0, b.y1) * rv;
+            const barH = Math.max(1, by1 - by0 - 1 * r);
+            const barW = maxBarWidth * (b.volume / op.maxVolume);
+            ctx.globalAlpha = (op.alpha ?? 1) * (b.isPoc ? 0.85 : 0.35);
+            ctx.fillStyle = op.color;
+            ctx.fillRect(x1, by0, barW, barH);
+            if (b.isPoc) {
+              ctx.globalAlpha = op.alpha ?? 1;
+              ctx.strokeStyle = op.color;
+              ctx.lineWidth = 1.5 * r;
+              ctx.strokeRect(x1, by0, barW, barH);
+              this._text(ctx, "POC", x1 + barW + 4 * r, (by0 + by1) / 2, op.color);
+            }
+          }
+          ctx.restore();
+          op.handles.forEach((p) => p && drawHandle(ctx, p.x * r, p.y * rv, r));
           break;
         }
         case "xabcd": {

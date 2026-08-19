@@ -259,19 +259,20 @@ const allTools = [
   "path", "curve", "arc", "double_curve",
   "fib_time_zone", "fib_speed_resistance_fan", "fib_circles", "fib_arcs",
   "fib_channel", "fib_wedge", "trend_based_fib_time", "fib_pitchfan", "fib_spiral",
+  "volume_profile",
 ];
 assert.deepStrictEqual(Object.keys(TOOL_DEFS).sort(), allTools.slice().sort());
 // "measure" is the one ephemeral tool - it never becomes a real entry in
 // env.manager.drawings (see its own dedicated test below), so every loop
 // below that does env.manager.addDrawing(tool, ...) to exercise persisted-
 // object editing/hit-testing/boundary behavior must skip it. "anchored_vwap"
-// is skipped for a different reason: its rendered body is a computed price
-// series from core.candles (empty in makeManager's identity-conversion fake
-// environment), so it has no hittable "body" distinct from its handle the
-// way every other tool's fixed geometry does - findBodyPoint() would spin
-// forever looking for one. It gets its own dedicated test with real candle
-// data below instead.
-const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap");
+// and "volume_profile" are skipped for a different reason: both are
+// computed from core.candles (empty in makeManager's identity-conversion
+// fake environment) rather than fixed geometry, so they have no hittable
+// "body" distinct from their handles the way every other tool's fixed
+// geometry does - findBodyPoint() would spin forever looking for one. Both
+// get their own dedicated test with real candle data below instead.
+const persistentTools = allTools.filter((tool) => tool !== "measure" && tool !== "anchored_vwap" && tool !== "volume_profile");
 for (const tool of allTools) {
   assert.ok(TOOL_DEFS[tool].creationGesture, `${tool} missing creationGesture`);
   assert.ok(TOOL_DEFS[tool].completion, `${tool} missing completion`);
@@ -287,6 +288,7 @@ for (const pointerType of ["touch", "mouse", "pen"]) {
     "trend_line", "ray", "extended_line", "fib_retracement", "rectangle",
     "circle", "price_range", "time_range", "long_position", "short_position",
     "price_date_range", "gann_fan", "cyclic_lines", "sine_line", "arrow",
+    "volume_profile",
   ]) {
     const env = makeManager();
     env.manager.setTool(tool);
@@ -731,6 +733,93 @@ for (const tool of ["horizontal_line", "vertical_line", "text", "note", "anchore
   tap(env, 70, 90, 1000);
   assert.strictEqual(env.manager.drawings.length, 1);
   assert.doesNotThrow(() => renderOps(env), "anchored_vwap: render must not throw with zero candles");
+}
+
+// Volume Profile: like anchored_vwap, a computed histogram rather than
+// fixed geometry - needs real candle+volume data. Candle price ranges are
+// deliberately chosen to land exactly on VOLUME_PROFILE_ROWS(24) bucket
+// boundaries (each candle spans exactly 8 of the 24 buckets) so every
+// bucket's volume is hand-computable, not just "some plausible number".
+{
+  const container = new FakeTarget();
+  const timeScale = { coordinateToTime: (x) => x, timeToCoordinate: (time) => time };
+  const chart = { timeScale: () => timeScale, applyOptions: () => {} };
+  const series = {
+    attachPrimitive(p) { p.attached({ requestUpdate() {} }); },
+    detachPrimitive() {},
+    coordinateToPrice: (y) => y,
+    priceToCoordinate: (price) => price,
+  };
+  const candles = [
+    { time: 100, open: 10, high: 11, low: 10, close: 10.5, volume: 100 },
+    { time: 160, open: 11, high: 12, low: 11, close: 11.5, volume: 200 },
+    { time: 220, open: 12, high: 13, low: 12, close: 12.5, volume: 300 },
+    // Decoy: way outside both the time range used below and the price
+    // range of the other three - must not affect a single bucket.
+    { time: 1000, open: 1000, high: 1001, low: 1000, close: 1000.5, volume: 99999 },
+  ];
+  const core = { container, chart, candleSeries: series, candles };
+  const manager = new DrawingManager(core);
+  const env = { manager, container };
+
+  manager.setTool("volume_profile");
+  const events = drag(env, 100, 10, 220, 13, 1000, "mouse");
+  assert.ok(events.down.defaultPrevented, "volume_profile: drawing did not own pointerdown");
+  assert.strictEqual(manager.drawings.length, 1, "volume_profile did not commit");
+  const drawing = manager.drawings[0];
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(drawing.points)),
+    [{ time: 100, price: 10 }, { time: 220, price: 13 }],
+  );
+
+  const op = renderOps(env).find((o) => o.kind === "volume_profile");
+  assert.ok(op, "volume_profile: no render op produced");
+  assert.strictEqual(op.buckets.length, 24, "volume_profile: expected all 24 rows to project");
+  const totalVolume = op.buckets.reduce((sum, b) => sum + b.volume, 0);
+  assert.ok(Math.abs(totalVolume - 600) < 1e-6, `volume_profile: bucket volumes should sum to the 3 in-range candles' 600 total, got ${totalVolume}`);
+
+  // candles[0] (10-11) owns buckets 0-7 at 100/8=12.5 each; candles[1]
+  // (11-12) owns buckets 8-15 at 200/8=25 each; candles[2] (12-13) owns
+  // buckets 16-23 at 300/8=37.5 each - the POC (max-volume row).
+  assert.ok(Math.abs(op.buckets[0].volume - 12.5) < 1e-6, `volume_profile: bucket 0 should be 12.5, got ${op.buckets[0].volume}`);
+  assert.ok(Math.abs(op.buckets[8].volume - 25) < 1e-6, `volume_profile: bucket 8 should be 25, got ${op.buckets[8].volume}`);
+  assert.ok(Math.abs(op.buckets[23].volume - 37.5) < 1e-6, `volume_profile: bucket 23 should be 37.5, got ${op.buckets[23].volume}`);
+  assert.strictEqual(op.buckets[23].isPoc, true, "volume_profile: bucket 23 (highest volume) should be the POC");
+  assert.strictEqual(op.buckets[0].isPoc, false, "volume_profile: bucket 0 should not be the POC");
+  assert.ok(Math.abs(op.maxVolume - 37.5) < 1e-6, `volume_profile: maxVolume should be 37.5, got ${op.maxVolume}`);
+  // The decoy candle's [1000,1001] range must not have stretched the
+  // profile's own price axis - the top bucket still ends at price 13.
+  assert.ok(Math.abs(op.buckets[23].y1 - 13) < 1e-6, `volume_profile: top bucket edge should stay at 13, decoy candle leaked in (${op.buckets[23].y1})`);
+
+  // Hit-testing: both anchor handles, and a point inside the box (bounding
+  // box, not per-bar - any point between the anchors and within the
+  // computed price range hits the drawing) resolve to this drawing.
+  const handle0 = manager.hitTest(100, 10, { pointerType: "mouse" });
+  assert.strictEqual(handle0 && handle0.handle, 0, "volume_profile: handle 0 hit-test failed");
+  const handle1 = manager.hitTest(220, 13, { pointerType: "mouse" });
+  assert.strictEqual(handle1 && handle1.handle, 1, "volume_profile: handle 1 hit-test failed");
+  manager.select(drawing.id);
+  const bodyHit = manager.hitTest(160, 12.5, { pointerType: "mouse" });
+  assert.ok(bodyHit && bodyHit.id === drawing.id && bodyHit.handle == null, "volume_profile: body (box) hit-test failed");
+
+  // A time range with no candles inside at all must not crash and must not
+  // render a body - only the two handles remain hittable.
+  const emptyEnv = { manager, container };
+  manager.removeDrawing(drawing.id);
+  manager.setTool("volume_profile");
+  drag(emptyEnv, 500, 10, 600, 13, 2000, "mouse");
+  assert.doesNotThrow(() => renderOps(emptyEnv), "volume_profile: render must not throw for a candle-less time range");
+  assert.strictEqual(renderOps(emptyEnv).some((o) => o.kind === "volume_profile"), false, "volume_profile: no body should render for a candle-less time range");
+}
+
+// Volume Profile with zero candles (every other tool's makeManager() fake
+// environment) must not throw either - just render nothing.
+{
+  const env = makeManager();
+  env.manager.setTool("volume_profile");
+  drag(env, 40, 50, 180, 160, 1000, "mouse");
+  assert.strictEqual(env.manager.drawings.length, 1);
+  assert.doesNotThrow(() => renderOps(env), "volume_profile: render must not throw with zero candles");
 }
 
 // Cyclic Lines regression: unlike every other 2-anchor tool, its render

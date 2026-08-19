@@ -84,6 +84,7 @@
     { id: "cyclic_lines", label: "Циклические линии", icon: "❘❘❘" },
     { id: "sine_line", label: "Синусоида", icon: "∿" },
     { id: "anchored_vwap", label: "Привязанный VWAP", icon: "V" },
+    { id: "volume_profile", label: "Профиль объёма (диапазон)", icon: "▤" },
     { id: "rotated_rectangle", label: "Повёрнутый прямоугольник", icon: "▱" },
     { id: "arrow", label: "Стрелка", icon: "↗" },
     { id: "arrow_mark_up", label: "Стрелка вверх", icon: "↑" },
