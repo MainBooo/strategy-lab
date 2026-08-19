@@ -166,9 +166,10 @@ Reverse и Extend-left — `properties.levels/reverse/extendLeft` содержа
 после того как price-scale «+», alert lines, Horizontal Ray и Fibonacci
 custom levels закрыты в этой же сессии:
 
-- **Продвинутые инструменты рисования**: Volume Profile, Multiselect,
-  Grouping — не реализованы (P2/P3 по ТЗ, самый крупный оставшийся
-  кусок работы).
+- **Продвинутые инструменты рисования**: Multiselect, Grouping — не
+  реализованы (самый крупный оставшийся кусок работы; Multiselect
+  особенно — требует рефакторинга `selectedId`→`selectedIds` по всему
+  `drawings.js`/`chart-tile.js`, самая инвазивная из оставшихся задач).
 - ~~**Fib Time Zone / Speed Resistance Fan / Circles / Arcs**~~ —
   добавлены сессией 2026-08-19 (см. matrix changelog «Продолжение
   2026-08-19, часть 3»): `fib_time_zone` — вертикальные линии на
@@ -243,9 +244,16 @@ custom levels закрыты в этой же сессии:
   диминишинг-ретёрнс на остатках пункта Gann/Pitchfork/паттерны):
   кумулятивный volume-weighted typical price от анкора до последней
   свечи, живой пересчёт каждый кадр из `core.candles` — см. matrix
-  changelog. Volume Profile (вторая половина этого пункта ТЗ) остаётся
-  MISSING — значительно больший отдельный кусок работы (гистограмма
-  объёма по ценовым уровням).
+  changelog.
+- ~~**Volume Profile**~~ — добавлен сессией 2026-08-19 (`volume_profile`,
+  см. matrix changelog «Продолжение 2026-08-19, часть 6»): Fixed Range —
+  2 анкора задают только временной диапазон (цена анкоров игнорируется),
+  внутри него гистограмма из 24 равных ценовых бакетов по полному
+  high/low диапазону попавших свечей, объём каждой свечи распределён по
+  бакетам пропорционально перекрытию диапазонов, POC (Point of Control)
+  выделен отдельно. Первый инструмент этой серии сессий с полностью
+  новым `_drawOp`-кейсом (не переиспользует чужой render op). **Anchored
+  VWAP / Volume Profile строка ТЗ теперь закрыта полностью.**
 - ~~**Measure tool** в TradingView-смысле (временный оверлей с
   ценой/%/барами/временем без создания персистентного объекта)~~ —
   закрыто коммитом `58dcc8d` (см. matrix changelog); Price Range/Time
